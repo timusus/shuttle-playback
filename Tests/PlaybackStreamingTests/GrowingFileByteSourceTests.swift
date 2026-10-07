@@ -29,16 +29,6 @@ final class GrowingFileByteSourceTests: XCTestCase {
 
     // MARK: - Helpers
 
-    /// The tests that close the origin's connection short of its `Content-Length` need the client to
-    /// still deliver the bytes it had read; the iOS URLSession does and macOS 27's drops them with
-    /// the error (`-1005`, nothing written), so the resume the test asserts never happens. They run
-    /// on iOS, where the app does, and are skipped on a macOS host.
-    private func skipWhereAShortBodyLosesItsBytes() throws {
-        #if os(macOS)
-        throw XCTSkip("macOS's URLSession drops the bytes of a body that ends short; the iOS run covers this")
-        #endif
-    }
-
     final class EventRecorder: @unchecked Sendable {
         private let lock = NSLock()
         private var _events: [GrowingFileEvent] = []
@@ -193,7 +183,6 @@ final class GrowingFileByteSourceTests: XCTestCase {
     /// A drop mid-body keeps the file: the retry asks for the frontier and appends to it, so
     /// nothing the download already had ahead of the decoder comes over the network twice.
     func testAMidBodyDropResumesFromTheFrontierIntoTheSameFile() throws {
-        try skipWhereAShortBodyLosesItsBytes()
         let body = makeBody(256 * 1024)
         let server = try startServer(body: body)
         server.closesAfterBodyBytes = 100_000
@@ -217,7 +206,6 @@ final class GrowingFileByteSourceTests: XCTestCase {
     /// The host answers the resume with the whole body: the range is ignored, so the retry
     /// restarts at the decoder's position as it always did, and the read waits for that position.
     func testAResumeAnsweredWithTheWholeBodyRestartsAtTheReadPosition() throws {
-        try skipWhereAShortBodyLosesItsBytes()
         let body = makeBody(256 * 1024)
         let server = try startServer(body: body)
         server.respondsWholeBodyIgnoringRange = true
@@ -235,7 +223,6 @@ final class GrowingFileByteSourceTests: XCTestCase {
     /// The host re-stitched between the drop and the resume (the total moved): its bytes are not
     /// this file's end, so the retry is a restart at the decoder's position into a new file.
     func testAResumeIntoADifferentStitchRestartsIntoANewFile() throws {
-        try skipWhereAShortBodyLosesItsBytes()
         let first = makeBody(160_000)
         let second = makeBody(200_000, seed: 42)
         let server = try startServer(body: first)
@@ -256,7 +243,6 @@ final class GrowingFileByteSourceTests: XCTestCase {
     /// The restart after a refused resume is a retry: it waits a retry's header time, not a first
     /// request's, so a link that dies under it is asked again inside the window.
     func testTheRestartAfterARefusedResumeWaitsARetrysHeaderTime() throws {
-        try skipWhereAShortBodyLosesItsBytes()
         let first = makeBody(64 * 1024)
         let second = makeBody(48 * 1024, seed: 42)
         let server = try startServer(body: first)
@@ -516,7 +502,6 @@ final class GrowingFileByteSourceTests: XCTestCase {
     /// episode. A connect nothing answered spends no attempt: the read waits out the outage, and the
     /// first request after it resumes the file from its frontier.
     func testAnOutageLongerThanTheRetriesIsWaitedOutAndResumesFromTheFrontier() throws {
-        try skipWhereAShortBodyLosesItsBytes()
         let body = makeBody(64 * 1024)
         let server = try startServer(body: body)
         server.closesAfterBodyBytes = 20_000
@@ -811,7 +796,6 @@ final class GrowingFileByteSourceTests: XCTestCase {
     /// The seek's transaction carries its generation; the resume after its body dropped is the same
     /// file, so it opens no transaction and pairs nothing again.
     func testAResumeAfterASeekOpensNoTransaction() throws {
-        try skipWhereAShortBodyLosesItsBytes()
         let body = makeBody(512 * 1024)
         let server = try startServer(body: body)
         server.bytesPerSecond = 64 * 1024
@@ -836,7 +820,6 @@ final class GrowingFileByteSourceTests: XCTestCase {
     /// The read after a seek to where it stopped (Play on the player's error) asks again there,
     /// with a fresh budget, and that request is no seek's.
     func testAFailedReadIsStickyUntilASeekWhoseReadAsksAgainAtItsPosition() throws {
-        try skipWhereAShortBodyLosesItsBytes()
         let body = makeBody(64 * 1024)
         let server = try startServer(body: body)
         server.closesAfterBodyBytes = 20_000
@@ -931,7 +914,6 @@ final class GrowingFileByteSourceTests: XCTestCase {
     /// that answers at once: the resume after a mid-body drop goes straight to the end instead of
     /// walking the chain again, so the slow chain never fails the read.
     func testAResumeAfterADropGoesStraightToTheChainsEndPastASlowChain() throws {
-        try skipWhereAShortBodyLosesItsBytes()
         let body = makeBody(64 * 1024)
         let server = try startServer(body: body)
         server.closesAfterBodyBytes = 20_000
@@ -953,7 +935,6 @@ final class GrowingFileByteSourceTests: XCTestCase {
     /// chain from the requested URL, once, with the generous header wait however slow the chain,
     /// and resumes the same file from wherever the chain ends now.
     func testAResumeTheChainsEndRefusesFallsBackToTheChainWithTheGenerousWait() throws {
-        try skipWhereAShortBodyLosesItsBytes()
         let body = makeBody(64 * 1024)
         let server = try startServer(body: body)
         server.redirectsToAlternateHost = true

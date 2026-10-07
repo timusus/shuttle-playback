@@ -499,10 +499,19 @@ public final class LoopbackMediaServer: @unchecked Sendable {
         // A stalled body is never finished and never closed: closing would look like a short read
         // the source retries, which is the recoverable failure, not this one. An outage starts
         // before the close, so the client's first reconnect is already refused.
-        let finish = { [weak self] in
+        // A body that ends short is closed a beat late. URLSession on macOS throws away the body
+        // it has buffered when the connection ends before the delegate has answered the response
+        // (the client's `didReceive response` completion), and on loopback that answer is not
+        // instant. Real networks leave that time; this server has to.
+        let endsShort = limit < slice.count
+        let finish = { [weak self, queue] in
             guard !holdsOpen else { return }
             if let outageOnClose { self?.refuseRequests(for: outageOnClose) }
-            connection.cancel()
+            if endsShort {
+                queue.asyncAfter(deadline: .now() + Self.shortBodyCloseDelay) { connection.cancel() }
+            } else {
+                connection.cancel()
+            }
         }
         let send = { [weak self] in
             guard let self else { return }
@@ -528,6 +537,9 @@ public final class LoopbackMediaServer: @unchecked Sendable {
             send()
         }
     }
+
+    /// How long a body that ends short stays open after its last byte; see `respond`.
+    private static let shortBodyCloseDelay: TimeInterval = 0.3
 
     /// The schedule a dripped body is written on: byte `n` is due at
     /// `started + pausedSeconds + n / bytesPerSecond`, where `pausedSeconds` sums the burst pauses
