@@ -29,7 +29,7 @@ struct StreamDecoder {
     /* What `swr` takes in; a frame that differs reconfigures it (see `push_through_swr`). */
     int              swr_in_rate;
     int              swr_in_fmt;
-    int              swr_in_channels;
+    AVChannelLayout  swr_in_layout;
     AVPacket        *pkt;
     AVFrame         *frame;
     /* A packet read during open (see `skip_unscanned_junk`) that the decoder has not had yet. */
@@ -314,7 +314,8 @@ static int init_swr_from(StreamDecoder *d, int in_rate, int in_fmt, const AVChan
                                  0, NULL);
     d->swr_in_rate = in_rate;
     d->swr_in_fmt = in_fmt;
-    d->swr_in_channels = in_layout.nb_channels;
+    av_channel_layout_uninit(&d->swr_in_layout);
+    av_channel_layout_copy(&d->swr_in_layout, &in_layout);
     av_channel_layout_uninit(&in_layout);
     av_channel_layout_uninit(&out_layout);
     if (rc < 0 || !d->swr) return STREAM_DECODE_ERR_RESAMPLE;
@@ -342,24 +343,23 @@ static int pending_reserve(StreamDecoder *d, int frames) {
  * failure, 1 otherwise; `pending_frames` says how much arrived. */
 static int convert_through_swr(StreamDecoder *d, AVFrame *frame);
 
-/* `lead` receives how many pending frames precede this frame's own output: what the resampler
- * flushed when the frame changed its input format. */
+/* `frame` through the resampler, reconfiguring it first when the frame's input format differs.
+ * `lead` receives how many pending frames precede this frame's own output: what the old resampler
+ * flushed. Returns a status. */
 static int push_through_swr(StreamDecoder *d, AVFrame *frame, int *lead) {
     *lead = 0;
     if (frame && (frame->sample_rate != d->swr_in_rate
                   || frame->format != d->swr_in_fmt
-                  || frame->ch_layout.nb_channels != d->swr_in_channels)
+                  || av_channel_layout_compare(&frame->ch_layout, &d->swr_in_layout) != 0)
         && frame->sample_rate > 0 && frame->ch_layout.nb_channels > 0) {
         /* The stream changed rate, layout or sample format mid-way (stitched audio): hand out
          * what the old resampler still holds, then take the new input to the unchanged output. */
-        if (!convert_through_swr(d, NULL)) return 0;
+        if (!convert_through_swr(d, NULL)) return STREAM_DECODE_ERR_ALLOC;
         *lead = d->pending_frames;
-        if (init_swr_from(d, frame->sample_rate, frame->format, &frame->ch_layout)
-                != STREAM_DECODE_OK) {
-            return 0;
-        }
+        int rc = init_swr_from(d, frame->sample_rate, frame->format, &frame->ch_layout);
+        if (rc != STREAM_DECODE_OK) return rc;
     }
-    return convert_through_swr(d, frame);
+    return convert_through_swr(d, frame) ? STREAM_DECODE_OK : STREAM_DECODE_ERR_ALLOC;
 }
 
 static int convert_through_swr(StreamDecoder *d, AVFrame *frame) {
@@ -388,6 +388,10 @@ static int is_sbr(enum AVCodecID codec_id, int profile) {
         && (profile == AV_PROFILE_AAC_HE || profile == AV_PROFILE_AAC_HE_V2);
 }
 
+static int is_mpeg_audio(enum AVCodecID codec_id) {
+    return codec_id == AV_CODEC_ID_MP3 || codec_id == AV_CODEC_ID_MP2 || codec_id == AV_CODEC_ID_MP1;
+}
+
 static void mp3_measure_preroll(StreamDecoder *d, const AVPacket *pkt);
 
 /* About 0.8 s of MP3 or 0.7 s of AAC: more than any real burst of damage, little enough that a
@@ -405,6 +409,9 @@ static void mp3_measure_preroll(StreamDecoder *d, const AVPacket *pkt);
 static int pump(StreamDecoder *d) {
     pending_reset(d);
     if (d->ended) return STREAM_DECODE_EOF;
+    /* Output frames still to drop before the seek target, when the frame it fell in came out of
+     * the resampler shorter than the cut (a resampler holds the last few samples back). */
+    int64_t skip = 0;
 
     for (;;) {
         if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
@@ -414,6 +421,13 @@ static int pump(StreamDecoder *d) {
         if (rc == 0) {
             d->decode_errors = 0;
             if (is_sbr(d->dec->codec_id, d->dec->profile)) d->sbr = 1;
+            if (is_mpeg_audio(d->dec->codec_id) && d->dec->sample_rate > 0) {
+                /* FFmpeg's MPEG audio decoder takes the frame's buffer, and with it the frame's
+                 * rate, before it updates the codec's rate from the frame it is decoding, so the
+                 * first frame after a rate change (stitched MP3s) is labelled with the old rate.
+                 * The codec's rate, read after the decode, is the frame's own. */
+                d->frame->sample_rate = d->dec->sample_rate;
+            }
             /* The rate this frame came out at: for HE-AAC that is the SBR rate, twice the core
              * rate an implicitly signalled stream's header gives. */
             int rate = d->frame->sample_rate > 0 ? d->frame->sample_rate : d->sample_rate;
@@ -437,6 +451,7 @@ static int pump(StreamDecoder *d) {
                 if (d->seek_first_pts == AV_NOPTS_VALUE) d->seek_first_pts = pts;
             }
             int64_t cut = 0;
+            int landing = 0;   /* this is the frame the seek target falls in */
             if (d->discard_until != AV_NOPTS_VALUE) {
                 if (pts == AV_NOPTS_VALUE) {
                     d->discard_until = AV_NOPTS_VALUE;   /* nothing to place it by: keep it all */
@@ -449,6 +464,7 @@ static int pump(StreamDecoder *d) {
                     }
                     if (cut < 0) cut = 0;
                     d->discard_until = AV_NOPTS_VALUE;
+                    landing = 1;
                 }
             }
             d->last_frame_pts = pts == AV_NOPTS_VALUE ? AV_NOPTS_VALUE
@@ -456,14 +472,17 @@ static int pump(StreamDecoder *d) {
             int lead = 0;
             int ok = push_through_swr(d, d->frame, &lead);
             av_frame_unref(d->frame);
-            if (!ok) return STREAM_DECODE_ERR_ALLOC;
+            if (ok != STREAM_DECODE_OK) return ok;
             /* Same rate in and out, so the resampler holds nothing back: frame sample N is
-             * pending frame N. After a rate change it is the same sample at the output rate,
-             * behind whatever the old resampler flushed. */
-            int64_t cut_out = rate == d->sample_rate ? cut
-                : av_rescale_q(cut, (AVRational){ 1, rate }, (AVRational){ 1, d->sample_rate });
-            int64_t offset = lead + cut_out;
-            d->pending_offset = offset < d->pending_frames ? (int)offset : d->pending_frames;
+             * pending frame N. At another rate it is the same instant at the output rate, behind
+             * whatever the old resampler flushed when the rate changed, which is kept: it is the
+             * end of the audio before this frame, unless the seek target is in this frame. */
+            if (landing) {
+                skip += lead + (rate == d->sample_rate ? cut
+                    : av_rescale_q(cut, (AVRational){ 1, rate }, (AVRational){ 1, d->sample_rate }));
+            }
+            d->pending_offset = skip < d->pending_frames ? (int)skip : d->pending_frames;
+            skip -= d->pending_offset;
             if (d->pending_frames > d->pending_offset) return STREAM_DECODE_OK;
             pending_reset(d);
             continue;   /* the resampler is still filling; ask for another frame */
@@ -991,6 +1010,32 @@ static int64_t mp3_exact_dts(const StreamDecoder *d, const AVPacket *pkt) {
                                            (AVRational){ 1, d->sample_rate }, d->time_base);
 }
 
+/*
+ * The timestamp of `pkt` when it is at another sample rate than the first frame but the same
+ * bitrate (an MP3 stitched from parts encoded at 44.1 and 48 kHz): there is no frame count to it,
+ * since the frames before it are of two sizes, but both parts spend the same bytes per second, so
+ * its offset from the end of the first frame gives its time to within a byte (1/8 ms at 64 kbps).
+ * mp3dec labels it with the time asked for, up to a frame from the frame it found. AV_NOPTS_VALUE
+ * otherwise, and in a VBR stream.
+ */
+static int64_t mp3_byte_rate_dts(const StreamDecoder *d, const AVPacket *pkt) {
+    if (!d->mp3_header_ok || d->mp3_tag == MP3_TAG_VBR) return AV_NOPTS_VALUE;
+    if (pkt->pos < 0 || pkt->size < 4) return AV_NOPTS_VALUE;
+    const uint8_t first[4] = { d->mp3_header >> 24, d->mp3_header >> 16, d->mp3_header >> 8,
+                               d->mp3_header };
+    int spf, br, sr, side, first_spf, first_br, first_sr;
+    if (!mp3_parse_header(pkt->data, &spf, &br, &sr, &side)
+        || !mp3_parse_header(first, &first_spf, &first_br, &first_sr, &side)
+        || sr == first_sr || br != first_br) {
+        return AV_NOPTS_VALUE;
+    }
+    int64_t second = d->first_pkt_pos + d->first_pkt_size;
+    if (pkt->pos < second) return AV_NOPTS_VALUE;
+    return d->first_pkt_dts
+        + av_rescale_q(first_spf, (AVRational){ 1, first_sr }, d->time_base)
+        + av_rescale_q(pkt->pos - second, (AVRational){ 8, br }, d->time_base);
+}
+
 /* What a Layer III frame header says about the frame. */
 typedef struct {
     int spf, bitrate, sample_rate, side_info_bytes, lsf;
@@ -1488,6 +1533,7 @@ static int land_exactly(StreamDecoder *d, int64_t target) {
         if (rc >= 0) d->has_held = 1;
         int64_t dts = rc >= 0 ? mp3_exact_dts(d, d->held) : AV_NOPTS_VALUE;
         d->landing_exact = dts != AV_NOPTS_VALUE;
+        if (dts == AV_NOPTS_VALUE && rc >= 0) dts = mp3_byte_rate_dts(d, d->held);
         if (dts != AV_NOPTS_VALUE && dts != d->held->dts) {
             /* The demuxer is told the frame's real time the one way it takes one: an index entry,
              * sought to exactly. Every timestamp after it, and the encoder padding it trims at the
@@ -1745,6 +1791,7 @@ void stream_decoder_close(StreamDecoder *decoder) {
     av_packet_free(&decoder->pkt);
     av_packet_free(&decoder->held);
     swr_free(&decoder->swr);
+    av_channel_layout_uninit(&decoder->swr_in_layout);
     avcodec_free_context(&decoder->dec);
     close_format(decoder);
     free(decoder->pending);
