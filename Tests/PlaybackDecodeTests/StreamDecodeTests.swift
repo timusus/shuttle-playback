@@ -50,35 +50,135 @@ final class StreamDecodeTests: XCTestCase {
 
     // MARK: - Mid-stream format change
 
-    /// `stitch_44k_48k_64k.mp3` is 4 s of tone at 44.1 kHz glued to 4 s of the same tone at 48 kHz.
-    /// The output stays at the rate it opened with, so the second half has to be resampled: its
-    /// length and its pitch come out right instead of the 48 kHz samples being played as if they
-    /// were 44.1 kHz ones.
-    func testSampleRateChangeMidStreamIsResampledToTheOpenRate() throws {
-        try skipUnlessAvailable()
-        let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: try Fixture.url("stitch_44k_48k_64k.mp3")))
-        let format = try decoder.open()
-        let rate = format.sampleRate
-        XCTAssertEqual(rate, 44100)
-        let channels = format.channelCount
-        let pcm = decodeAll(decoder)
-        XCTAssertEqual(decoder.endReason, .eof)
+    /// A stitched fixture: 4 s of 440 Hz left / 660 Hz right at one rate glued to 4 s of the same
+    /// tone at another, each half `frames` MP3 frames of 1,152 samples (no Xing tag, so nothing is
+    /// trimmed).
+    private struct Stitch {
+        let name: String
+        let rates: (Double, Double)
+        let frames: (Int, Int)
 
-        let frames = pcm.count / channels
-        XCTAssertEqual(Double(frames) / rate, 8.0, accuracy: 0.15, "two 4 s halves, whatever their rates")
+        /// The output stays at the first half's rate, so the second half is resampled to it.
+        var expectedFrames: Double {
+            Double(frames.0 * 1152) + Double(frames.1 * 1152) * rates.0 / rates.1
+        }
+        /// Where the first half ends in the output.
+        var switchFrame: Int { frames.0 * 1152 }
+    }
 
-        /* The left channel is 440 Hz in both halves: count its rising zero crossings over the last
-         * two seconds, well inside the second half. */
-        let window = Int(2 * rate)
-        let start = frames - Int(0.5 * rate) - window
+    private let stitches = [
+        Stitch(name: "stitch_44k_48k_64k.mp3", rates: (44100, 48000), frames: (155, 168)),
+        Stitch(name: "stitch_48k_44k_64k.mp3", rates: (48000, 44100), frames: (168, 155)),
+    ]
+
+    /// Rising zero crossings per second of `channel` over `range` (frames).
+    private func pitch(_ pcm: [Float], channels: Int, channel: Int, range: Range<Int>, rate: Double) -> Double {
         var crossings = 0
-        var previous = pcm[start * channels]
-        for i in (start + 1)..<(start + window) {
-            let sample = pcm[i * channels]
+        var previous = pcm[range.lowerBound * channels + channel]
+        for i in (range.lowerBound + 1)..<range.upperBound {
+            let sample = pcm[i * channels + channel]
             if previous <= 0, sample > 0 { crossings += 1 }
             previous = sample
         }
-        XCTAssertEqual(Double(crossings) / 2, 440, accuracy: 5, "the second half's pitch")
+        return Double(crossings) / (Double(range.count) / rate)
+    }
+
+    private func rms(_ pcm: [Float], channels: Int, range: Range<Int>) -> Double {
+        let slice = pcm[(range.lowerBound * channels)..<(range.upperBound * channels)]
+        return (slice.reduce(0) { $0 + Double($1) * Double($1) } / Double(slice.count)).squareRoot()
+    }
+
+    /// The output stays at the rate the stream opened with, so the second half of each stitched
+    /// fixture is resampled: its length and its pitch come out right instead of its samples being
+    /// played at the first half's rate, and nothing the resampler held at the switch is lost (the
+    /// length is exact to a few samples, which a dropped resampler tail is not).
+    func testSampleRateChangeMidStreamIsResampledToTheOpenRate() throws {
+        try skipUnlessAvailable()
+        for stitch in stitches {
+            let name = stitch.name
+            let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: try Fixture.url(name)))
+            let format = try decoder.open()
+            let rate = format.sampleRate
+            XCTAssertEqual(rate, stitch.rates.0, name)
+            let channels = format.channelCount
+            let pcm = decodeAll(decoder)
+            XCTAssertEqual(decoder.endReason, .eof, name)
+
+            let frames = pcm.count / channels
+            XCTAssertEqual(Double(frames), stitch.expectedFrames, accuracy: 4, "\(name): output length")
+
+            let first = Int(0.5 * rate)..<Int(2.5 * rate)
+            let second = (frames - Int(2.5 * rate))..<(frames - Int(0.5 * rate))
+            for (range, half) in [(first, "first"), (second, "second")] {
+                XCTAssertEqual(pitch(pcm, channels: channels, channel: 0, range: range, rate: rate), 440,
+                               accuracy: 2, "\(name): the \(half) half's left pitch")
+                XCTAssertEqual(pitch(pcm, channels: channels, channel: 1, range: range, rate: rate), 660,
+                               accuracy: 2, "\(name): the \(half) half's right pitch")
+            }
+
+            /* Around the switch: the tone's level in 10 ms windows on either side, outside the
+             * encoders' own padding and delay (each well under 60 ms). */
+            let tone = rms(pcm, channels: channels, range: first)
+            let window = Int(0.01 * rate)
+            let gap = Int(0.06 * rate)
+            for start in [stitch.switchFrame - gap - window, stitch.switchFrame + gap] {
+                XCTAssertEqual(rms(pcm, channels: channels, range: start..<(start + window)), tone,
+                               accuracy: 0.1 * tone, "\(name): level at frame \(start)")
+            }
+        }
+    }
+
+    /// A seek into the resampled half lands where it says: the audio after it is the clean decode's
+    /// at the reported time, once the resampler, started cold at the landing, has warmed up. The
+    /// resampler's output grid after a seek is anchored at the landing rather than at the switch,
+    /// so the two decodes agree to within a sample, not bit for bit. A frame past the switch is
+    /// timed by its byte offset (`mp3_byte_rate_dts`), true to within one byte: 1/8 ms at 64 kbps.
+    func testSeekIntoTheResampledHalfLandsWhereItSays() throws {
+        try skipUnlessAvailable()
+        for stitch in stitches {
+            let name = stitch.name
+            let url = try Fixture.url(name)
+            let clean = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
+            let format = try clean.open()
+            let reference = decodeAll(clean)
+            let channels = format.channelCount
+            let rate = format.sampleRate
+
+            for target in [4.5, 6.0, 7.25] {
+                let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
+                _ = try decoder.open()
+                let landed = try decoder.seek(toSeconds: target)
+                XCTAssertEqual(landed, target, accuracy: 1 / rate, "\(name): seek to \(target)s")
+                var after: [Float] = []
+                while after.count < 8192 * channels, let chunk = decoder.nextChunk() {
+                    after.append(contentsOf: chunk)
+                }
+                guard after.count >= 8192 * channels else {
+                    XCTFail("\(name): seek to \(target)s: only \(after.count / channels) frames after it")
+                    continue
+                }
+                /* Skip a few ms of resampler warm-up, then find the lag (within half the tone's
+                 * 1/220 s period) at which the audio best matches the clean decode. */
+                let warmup = Int(0.003 * rate)
+                let landedFrame = Int((landed * rate).rounded())
+                let span = 4096
+                var best = (lag: 0, error: Double.infinity)
+                for lag in -90...90 {
+                    let start = (landedFrame + warmup + lag) * channels
+                    guard start >= 0, start + span * channels <= reference.count else { continue }
+                    var sum = 0.0
+                    for i in 0..<(span * channels) {
+                        let d = Double(after[warmup * channels + i]) - Double(reference[start + i])
+                        sum += d * d
+                    }
+                    let error = (sum / Double(span * channels)).squareRoot()
+                    if error < best.error { best = (lag, error) }
+                }
+                let byte = Int((rate / 8000).rounded(.up))   // one byte at 64 kbps, in frames
+                XCTAssertLessThanOrEqual(abs(best.lag), byte, "\(name): seek to \(target)s: audio is \(best.lag) frames off")
+                XCTAssertLessThan(best.error, 0.05, "\(name): seek to \(target)s: RMS error \(best.error)")
+            }
+        }
     }
 
     // MARK: - Parity against AVAssetReader

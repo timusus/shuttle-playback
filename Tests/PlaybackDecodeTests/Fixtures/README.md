@@ -37,5 +37,18 @@ turn the bandwidth test into a test of nothing.
 
 4 s of 440 Hz left / 660 Hz right at 44.1 kHz, then 4 s of the same at 48 kHz, each a 64 kbps CBR
 libmp3lame encode (`-write_xing 0 -id3v2_version 0 -write_id3v1 0`), concatenated at the byte level:
-a sample-rate change mid-stream. Used by `testSampleRateChangeMidStreamIsResampledToTheOpenRate`; the
-conformance suite skips it.
+a sample-rate change mid-stream. Used by `testSampleRateChangeMidStreamIsResampledToTheOpenRate` and
+`testSeekIntoTheResampledHalfLandsWhereItSays`; the conformance suite skips it.
+
+## stitch_48k_44k_64k.mp3
+
+The same the other way round: 4 s at 48 kHz (168 frames), then 4 s at 44.1 kHz (155 frames), for the
+same two tests.
+
+```sh
+for r in 48000 44100; do
+  ffmpeg -y -f lavfi -i "aevalsrc=0.7*sin(2*PI*440*t)|0.7*sin(2*PI*660*t):s=$r:d=4" \
+      -c:a libmp3lame -b:a 64k -write_xing 0 -id3v2_version 0 -write_id3v1 0 h$r.mp3
+done
+cat h48000.mp3 h44100.mp3 > stitch_48k_44k_64k.mp3   # h44100.mp3 first gives stitch_44k_48k_64k.mp3
+```

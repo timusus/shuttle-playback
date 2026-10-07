@@ -71,8 +71,10 @@ macOS URLSession drops a body's buffered bytes if the connection ends before the
 answered the response.)
 
 **Conformance suite.** `swift test --filter PlaybackDecodeConformance` (about 30 s) decodes every
-fixture in `Tests/PlaybackDecodeConformanceTests/Fixtures` (plus the three in
-`PlaybackDecodeTests/Fixtures`) through `FaultyByteReader` under all 7 combinations of partial reads,
+fixture in `Tests/PlaybackDecodeConformanceTests/Fixtures` (plus the three tone fixtures in
+`PlaybackDecodeTests/Fixtures`; its two `stitch_*_64k.mp3` files are skipped, since a seek into
+their resampled half restarts the resampler on another output grid and is timed by byte offset,
+never bit-identical, and `testSeekIntoTheResampledHalfLandsWhereItSays` checks it instead) through `FaultyByteReader` under all 7 combinations of partial reads,
 one-shot I/O errors and unknown length, and requires each to be bit-identical to the clean decode in
 the same run. It then seeks to 0, 1/3, 2/3, 100 ms before the end and the end, and compares with
 `Goldens/<fixture>.json`

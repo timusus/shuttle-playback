@@ -74,9 +74,12 @@ enum GoldenStore {
     static var updating: Bool { ProcessInfo.processInfo.environment["GOLDEN_UPDATE"] == "1" }
 
     static func fixtureURLs() -> [URL] {
-        /* stitch_44k_48k_64k.mp3 belongs to StreamDecodeTests: its second half is resampled, and a
-         * seek into it starts the resampler cold, so it is not bit-identical to the clean decode. */
-        let skip: Set<String> = ["NOTICE", "make-fixtures.sh", "README.md", "stitch_44k_48k_64k.mp3"]
+        /* The stitch_*_64k.mp3 pair belongs to StreamDecodeTests: the second half is resampled, and
+         * a seek into it starts the resampler on another output grid (anchored at the landing, not
+         * at the switch) and lands to within a byte's time, so it is not bit-identical to the
+         * clean decode. */
+        let skip: Set<String> = ["NOTICE", "make-fixtures.sh", "README.md",
+                                 "stitch_44k_48k_64k.mp3", "stitch_48k_44k_64k.mp3"]
         return [fixturesDir, legacyFixturesDir].flatMap { dir -> [URL] in
             let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
             return names.filter { !skip.contains($0) && !$0.hasPrefix(".") }.sorted()
