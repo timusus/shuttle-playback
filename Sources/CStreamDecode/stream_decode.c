@@ -1210,7 +1210,10 @@ static int64_t seek_preroll_samples(const StreamDecoder *d) {
     uint32_t h = d->dec->codec_id == AV_CODEC_ID_MP3 ? mp3_cbr_header(d) : 0;
     MP3Frame f;
     if (h && mp3_frame_of(h, &f)) {
-        int main_bytes = f.bytes - 4 - f.side_info_bytes - (((h >> 16) & 1) ? 0 : 2);
+        /* Without the padding bit: the frames after a padded one are mostly unpadded, and counting
+         * the extra byte they do not carry sizes the pre-roll a frame or more too short at the
+         * lowest bitrates, where the reservoir spans dozens of frames. */
+        int main_bytes = f.bytes - (int)((h >> 9) & 1) - 4 - f.side_info_bytes - (((h >> 16) & 1) ? 0 : 2);
         int reservoir = f.lsf ? 255 : 511;
         if (main_bytes > 0) {
             int64_t samples = (int64_t)((reservoir + main_bytes - 1) / main_bytes + 2) * f.spf;
@@ -1317,6 +1320,11 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
         if (status == STREAM_DECODE_OK && !from_start && attempt < 3 && decoder->mp3_preroll_short) {
             continue;
         }
+        /* Past the fourth placement the landing stands even if `mp3_preroll_short` is still set:
+         * the frames from the target on then decode from a reservoir the pre-roll never fed, so
+         * this seek is not sample-exact. The engine has no diagnostic channel for it (libav's log
+         * is silenced and a seek's result has no field for it), and 64 times the first pre-roll
+         * reaches every stream the reservoir can span, so it is left unreported. */
         if (status == STREAM_DECODE_OK && decoder->last_frame_pts != AV_NOPTS_VALUE) {
             *landed_seconds = (double)(decoder->last_frame_pts - decoder->start_time) * tb;
         } else if (status == STREAM_DECODE_EOF && decoder->landing_exact

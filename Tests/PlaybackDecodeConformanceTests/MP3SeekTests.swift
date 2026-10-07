@@ -41,7 +41,9 @@ final class MP3SeekTests: XCTestCase {
     }
 
     private func fixture(_ name: String) -> URL {
-        GoldenStore.fixtureURLs().first { $0.lastPathComponent == name }!
+        let seekOnly = GoldenStore.root.appendingPathComponent("SeekFixtures/\(name)")
+        if FileManager.default.fileExists(atPath: seekOnly.path) { return seekOnly }
+        return GoldenStore.fixtureURLs().first { $0.lastPathComponent == name }!
     }
 
     private func decodeAll(_ url: URL) throws -> (StreamAudioFormat, [Float]) {
@@ -69,7 +71,7 @@ final class MP3SeekTests: XCTestCase {
         let cases = [("tone.mp3", 15.0, false), ("tone.mp3", 6.0, true),
                      ("cbr_no_table.mp3", 2.5, true), ("lame_info_delay_padding.mp3", 2.5, true),
                      ("cbr_32k_dense_reservoir.mp3", 5.0, true), ("cbr_info_64k.mp3", 4.0, true),
-                     ("mpeg25_8k_mono.mp3", 12.0, true)]
+                     ("mpeg25_8k_mono.mp3", 12.0, true), ("cbr_22k_8k_padded.mp3", 15.0, true)]
         for (name, target, fromTheEnd) in cases {
             let url = fixture(name)
             let reader = try TrickleReader(url)
@@ -95,8 +97,7 @@ final class MP3SeekTests: XCTestCase {
                                      "\(label): the seek read from \(targetByte - first) bytes before its target")
             XCTAssert(positions.allSatisfy { $0 >= first && $0 <= first + bytes },
                       "\(label): the seek went back before where it started reading: \(positions)")
-            XCTAssertLessThanOrEqual(bytes, 4096, "\(label): the seek read \(bytes) bytes before its first audio")
-        }
+            XCTAssertLessThanOrEqual(bytes, 4096, "\(label): the seek read \(bytes) bytes before its first audio")        }
     }
 
     /// **An MP3 seek decodes exactly what an unbroken decode does, from the requested sample on.**

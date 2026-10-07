@@ -87,6 +87,34 @@ noise 0.4 white 0.9 11 12 anull "$TMP/loud.wav"
 noise 14 brown 0.02 5 6 "lowpass=f=1500" "$TMP/quiet.wav"
 $FF -i "$TMP/loud.wav" -i "$TMP/quiet.wav" -filter_complex "[0][1]concat=n=2:v=0:a=1" -c:a pcm_s16le "$TMP/drop.wav"
 lame --quiet -t -V 9 "$TMP/drop.wav" ../SeekFixtures/vbr_no_xing_bitrate_drop.mp3
+# Also MP3SeekTests only: 8 kbps CBR MPEG-2 at 22.05 kHz, mono, no tag. Its frames are 26 bytes,
+# one in about nine padded to 27, and the file is cut to start on a padded one, the frame a seek
+# sizes its pre-roll from. Every main_data_begin is set to 255 (the most MPEG-2 allows), so the
+# frames after a seek need as much of the reservoir as a stream can ask for; the PCM is not
+# meaningful, the seek's reads are what the test measures.
+$FF -f lavfi -i "anoisesrc=d=20:c=pink:r=22050:a=0.3:seed=61" -ac 1 -c:a pcm_s16le "$TMP/m22.wav"
+lame --quiet -t --cbr -b 8 -m m --resample 22.05 "$TMP/m22.wav" "$TMP/m22.mp3"
+python3 -I - "$TMP/m22.mp3" ../SeekFixtures/cbr_22k_8k_padded.mp3 <<'PY'
+import sys
+b = open(sys.argv[1], 'rb').read()
+frames, i = [], 0
+while i < len(b) - 6:
+    if b[i] == 0xFF and (b[i+1] & 0xF0) == 0xF0 and (b[i+1] & 6) == 2:
+        pad = (b[i+2] >> 1) & 1
+        frames.append((i, pad))
+        i += 26 + pad
+    else:
+        i += 1
+out = bytearray(b[next(o for o, p in frames if p):])
+j = 0
+while j < len(out) - 6:
+    if out[j] == 0xFF and (out[j+1] & 0xF0) == 0xF0 and (out[j+1] & 6) == 2:
+        out[j + 4 + (0 if out[j+1] & 1 else 2)] = 255
+        j += 26 + ((out[j+2] >> 1) & 1)
+    else:
+        j += 1
+open(sys.argv[2], 'wb').write(out)
+PY
 
 # --- AAC / MP4 ---------------------------------------------------------------------------------
 # ffmpeg's AAC-in-MP4 carries an edit list for the encoder priming.
