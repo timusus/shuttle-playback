@@ -293,6 +293,28 @@ final class StreamDecodeTests: XCTestCase {
         XCTAssertGreaterThan(peak, 0.1, "the post-seek audio is silence, not the tone")
     }
 
+    /// **A seek past the end of an edit-listed file lands on the clipped end, not beyond it.**
+    ///
+    /// The frames wholly before a far seek's target are skipped, and the final ones overhang the
+    /// edit list's end: their timing must be clamped to it all the same.
+    func testSeekPastTheEndLandsOnTheClippedEnd() throws {
+        try skipUnlessAvailable()
+        for name in [Fixture.moovFirst, Fixture.moovLast] {
+            let url = try Fixture.url(name)
+            let clean = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
+            let format = try clean.open()
+            let end = Double(decodeAll(clean).count / format.channelCount) / format.sampleRate
+
+            for target in [end + 0.5, 1e6] {
+                let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
+                _ = try decoder.open()
+                let landed = try decoder.seek(toSeconds: target)
+                XCTAssertEqual(landed, end, accuracy: 1e-9, "\(name): seek to \(target)s landed \(landed)s")
+                XCTAssertTrue(decodeAll(decoder).isEmpty, "\(name): PCM after a seek to \(target)s")
+            }
+        }
+    }
+
     /// **A frame with no timestamp after a seek is timed from where the seek went.**
     ///
     /// The pre-roll before a seek's target is dropped by the frames' timestamps. A frame with none
