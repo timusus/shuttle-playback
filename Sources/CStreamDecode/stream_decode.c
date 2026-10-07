@@ -47,7 +47,8 @@ struct StreamDecoder {
     int         pending_offset;   /* frames already handed out */
 
     int64_t     last_frame_pts;   /* best_effort_timestamp of the most recent decoded frame */
-    int         flushing;         /* a NULL packet has been sent to the decoder */
+    int         decode_errors;    /* consecutive `avcodec_receive_frame` errors, see `pump` */
+    int         flushing;        /* a NULL packet has been sent to the decoder */
     int         ended;            /* the decoder and the resampler are both drained */
 
     /* Written by `stream_decoder_cancel` from another thread and only ever read, so a plain flag
@@ -351,6 +352,10 @@ static int is_sbr(enum AVCodecID codec_id, int profile) {
 
 static void mp3_measure_preroll(StreamDecoder *d, const AVPacket *pkt);
 
+/* About 0.8 s of MP3 or 0.7 s of AAC: more than any real burst of damage, little enough that a
+ * stream of nothing but garbage gives up promptly. */
+#define MAX_CONSECUTIVE_DECODE_ERRORS 32
+
 /*
  * Advance until `pending` holds audio, or the stream is over.
  *
@@ -369,6 +374,7 @@ static int pump(StreamDecoder *d) {
 
         int rc = avcodec_receive_frame(d->dec, d->frame);
         if (rc == 0) {
+            d->decode_errors = 0;
             if (is_sbr(d->dec->codec_id, d->dec->profile)) d->sbr = 1;
             /* The rate this frame came out at: for HE-AAC that is the SBR rate, twice the core
              * rate an implicitly signalled stream's header gives. */
@@ -425,7 +431,15 @@ static int pump(StreamDecoder *d) {
             d->ended = 1;
             return d->pending_frames > 0 ? STREAM_DECODE_OK : STREAM_DECODE_EOF;
         }
-        if (rc != AVERROR(EAGAIN)) return STREAM_DECODE_ERR_DECODER;
+        if (rc != AVERROR(EAGAIN)) {
+            /* A frame the codec cannot decode is a glitch, not the end of the recording: skip it
+             * like a rejected packet. Out of memory is not the stream's fault, and a run of
+             * MAX_CONSECUTIVE_DECODE_ERRORS failures with no good frame between is garbage, not
+             * damage, so that ends with an error rather than spinning to the end of the file. */
+            if (rc == AVERROR(ENOMEM)) return STREAM_DECODE_ERR_ALLOC;
+            if (++d->decode_errors > MAX_CONSECUTIVE_DECODE_ERRORS) return STREAM_DECODE_ERR_DECODER;
+            continue;
+        }
 
         if (d->flushing) {
             /* EAGAIN after a NULL packet cannot happen, but treat it as the end rather than
@@ -1073,6 +1087,7 @@ static void after_seek_reset(StreamDecoder *d) {
     d->has_held = 0;
     d->has_last_pkt = 0;
     d->has_first_pkt = 0;
+    d->decode_errors = 0;
     d->flushing = 0;
     d->ended = 0;
     d->last_frame_pts = AV_NOPTS_VALUE;
