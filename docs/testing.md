@@ -36,10 +36,10 @@ iPhone.
 
 ## The conformance suite
 
-**Fixtures.** 23 files in `Tests/PlaybackDecodeConformanceTests/Fixtures`, plus the three in
+**Fixtures.** 25 files in `Tests/PlaybackDecodeConformanceTests/Fixtures`, plus the three in
 `PlaybackDecodeTests/Fixtures`. They cover MP3 variants (Xing, VBRI, CBR, junk before the first frame,
 ID3v1 footer, a sample-rate change), AAC in ADTS and MP4 (including a fragmented MP4 with a `sidx`),
-HE-AAC, Opus and Vorbis. Three come from
+HE-AAC v1 and v2 in MP4 and in ADTS (where the header says AAC-LC), Opus and Vorbis. Three come from
 the androidx/media project and are listed in `Fixtures/NOTICE`. `Fixtures/make-fixtures.sh` makes the
 rest and needs `ffmpeg`, `lame` and `afconvert`. The HE-AAC, Opus and Vorbis files are not
 byte-reproducible, so re-run it only on purpose.

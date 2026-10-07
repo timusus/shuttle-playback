@@ -117,6 +117,9 @@ struct StreamDecoder {
     /* The timestamps after the last seek are the stream's true times: everything but a VBR MP3
      * placed by its TOC or bitrate (see `land_exactly`). */
     int          landing_exact;
+    /* An AAC stream has been seen to carry SBR (HE-AAC v1 or v2), by its parameters or by a frame
+     * the codec decoded: an ADTS header says plain AAC-LC either way. Never cleared. */
+    int          sbr;
 
     /* The first bytes of the media as libavformat read them (offset 0 is `base_offset`), kept so
      * the Xing/Info/VBRI frame can be read without a second request. */
@@ -328,6 +331,12 @@ static void pending_reset(StreamDecoder *d) {
     d->pending_offset = 0;
 }
 
+/* HE-AAC v1 or v2: AAC with SBR. The AAC codec sets the profile per frame, from what it decoded. */
+static int is_sbr(enum AVCodecID codec_id, int profile) {
+    return codec_id == AV_CODEC_ID_AAC
+        && (profile == AV_PROFILE_AAC_HE || profile == AV_PROFILE_AAC_HE_V2);
+}
+
 /*
  * Advance until `pending` holds audio, or the stream is over.
  *
@@ -346,13 +355,17 @@ static int pump(StreamDecoder *d) {
 
         int rc = avcodec_receive_frame(d->dec, d->frame);
         if (rc == 0) {
+            if (is_sbr(d->dec->codec_id, d->dec->profile)) d->sbr = 1;
+            /* The rate this frame came out at: for HE-AAC that is the SBR rate, twice the core
+             * rate an implicitly signalled stream's header gives. */
+            int rate = d->frame->sample_rate > 0 ? d->frame->sample_rate : d->sample_rate;
             /* Where this frame starts: its timestamp, or, for a frame with none, where the one
              * before it ended. */
             int64_t pts = d->frame->best_effort_timestamp;
             if (pts == AV_NOPTS_VALUE) pts = d->next_pts;
             if (pts != AV_NOPTS_VALUE) {
                 d->next_pts = pts + av_rescale_q(d->frame->nb_samples,
-                                                 (AVRational){ 1, d->sample_rate }, d->time_base);
+                                                 (AVRational){ 1, rate }, d->time_base);
                 if (d->seek_first_pts == AV_NOPTS_VALUE) d->seek_first_pts = pts;
             }
             int64_t cut = 0;
@@ -361,7 +374,7 @@ static int pump(StreamDecoder *d) {
                     d->discard_until = AV_NOPTS_VALUE;   /* nothing to place it by: keep it all */
                 } else {
                     cut = av_rescale_q(d->discard_until - pts, d->time_base,
-                                       (AVRational){ 1, d->sample_rate });
+                                       (AVRational){ 1, rate });
                     if (cut >= d->frame->nb_samples) {   /* wholly before the seek target */
                         av_frame_unref(d->frame);
                         continue;
@@ -371,7 +384,7 @@ static int pump(StreamDecoder *d) {
                 }
             }
             d->last_frame_pts = pts == AV_NOPTS_VALUE ? AV_NOPTS_VALUE
-                : pts + av_rescale_q(cut, (AVRational){ 1, d->sample_rate }, d->time_base);
+                : pts + av_rescale_q(cut, (AVRational){ 1, rate }, d->time_base);
             int ok = push_through_swr(d, d->frame);
             av_frame_unref(d->frame);
             if (!ok) return STREAM_DECODE_ERR_ALLOC;
@@ -512,6 +525,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     d->channels = d->dec->ch_layout.nb_channels > 0 ? d->dec->ch_layout.nb_channels
                                                     : par->ch_layout.nb_channels;
     if (d->sample_rate <= 0 || d->channels <= 0) { local_status = STREAM_DECODE_ERR_DECODER; goto fail; }
+    d->sbr = is_sbr(par->codec_id, par->profile);
     d->time_base = stream->time_base;
     d->start_time = stream->start_time == AV_NOPTS_VALUE ? 0 : stream->start_time;
 
@@ -1008,8 +1022,14 @@ static const int kSeekPlaced = 1000;
 
 /* How far before its target a seek puts the demuxer, in samples, so the codec has converged by the
  * target: an MP3's bit reservoir spans a few frames (more at a low VBR quality), and Opus's CELT
- * state takes about 30000 samples after a reset to decode bit-identically to an unbroken run. */
+ * state takes about 30000 samples after a reset to decode bit-identically to an unbroken run.
+ *
+ * HE-AAC's SBR and PS headers come every so many frames, not in each, and a codec opened mid-stream
+ * decodes without them until the next one arrives. An HE-AAC v2 stream from Apple's encoder decoded
+ * bit-identically to an unbroken run only after more than 65536 samples at the output rate (98304
+ * were enough); 131072, about 3 s, leaves a margin for an encoder that repeats them less often. */
 static int64_t seek_preroll_samples(const StreamDecoder *d) {
+    if (d->sbr) return 131072;
     return d->dec->codec_id == AV_CODEC_ID_OPUS ? 32768 : 16384;
 }
 
@@ -1132,12 +1152,14 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
  * them (a seek retried after an interruption decoded other noise than one that was not). A new
  * codec makes a seek's audio depend on nothing but where it went.
  *
- * Only plain AAC-LC is reopened. HE-AAC's SBR and PS headers come every so many frames, not in
- * each, and a codec opened mid-stream has none until the next one arrives: it decoded v2 as
- * nonsense for over half a second. The other codecs' flush leaves nothing behind that matters.
+ * Every AAC stream is reopened, HE-AAC included. A flushed HE-AAC codec keeps its SBR and PS state,
+ * so what it decoded after a seek depended on the frames before (an ADTS HE-AAC seek retried after
+ * an I/O error decoded differently from one that was not). A fresh one has no SBR or PS header
+ * until the next arrives, which the longer pre-roll for SBR streams covers
+ * (`seek_preroll_samples`). The other codecs' flush leaves nothing behind that matters.
  */
 static int codec_outlives_flush(const StreamDecoder *d) {
-    return d->dec->codec_id == AV_CODEC_ID_AAC && d->dec->profile == AV_PROFILE_AAC_LOW;
+    return d->dec->codec_id == AV_CODEC_ID_AAC;
 }
 
 static int reopen_codec(StreamDecoder *d) {

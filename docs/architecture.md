@@ -155,8 +155,12 @@ flowchart TD
 ```
 
 - **Landing is on the requested sample.** The demuxer is put a pre-roll before the target (16384
-  samples, 32768 for Opus), and the decoder decodes it eagerly and drops everything before the
-  target, so codec warm-up and partial frames never reach the caller. An MP3 frame does not carry
+  samples, 32768 for Opus, 131072 for HE-AAC), and the decoder decodes it eagerly and drops
+  everything before the target, so codec warm-up and partial frames never reach the caller. An AAC
+  codec is replaced by a fresh one at every seek, because a flushed one keeps state from before it
+  (the noise generator, and HE-AAC's SBR and PS state). A fresh HE-AAC codec has no SBR or PS header
+  until the next one arrives, hence its long pre-roll. A stream counts as HE-AAC once its parameters
+  or any decoded frame say so, since an ADTS header says AAC-LC either way. An MP3 frame does not carry
   its time, so it is counted from a frame of known time: the first frame, a VBRI table entry, or
   for CBR the byte offset. A VBR MP3 target further from one than a seek's byte budget is placed by
   its Xing TOC or bitrate instead, and that estimate is the landed time (issue #3). A caller that

@@ -84,6 +84,9 @@ $FF -i "$TMP/s44.wav" -c:a aac -b:a 48k -movflags empty_moov+default_base_moof+g
 # HE-AAC v1 and v2 via the macOS encoder (ffmpeg has no SBR/PS encoder).
 afconvert -f m4af -d aach -b 32000 "$TMP/s44.wav" he_aac_v1.m4a
 afconvert -f m4af -d aacp -b 24000 "$TMP/s44.wav" he_aac_v2.m4a
+# The same streams in ADTS, implicitly signalled: the header says AAC-LC at the core rate, and only
+# the SBR (and PS) data inside the frames says otherwise.
+for v in 1 2; do $FF -i he_aac_v$v.m4a -c copy -f adts adts_he_aac_v$v.aac; done
 
 # ADTS with a leading ID3v2 tag, whole and truncated mid-frame.
 $FF -i "$TMP/s44.wav" -c:a aac -b:a 48k -f adts -write_id3v2 1 -metadata title="conformance" adts_id3.aac
