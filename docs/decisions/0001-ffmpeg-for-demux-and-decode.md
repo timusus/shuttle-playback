@@ -1,7 +1,7 @@
 # ADR-0001: FFmpeg for demux and decode
 
 Status: Accepted
-Date: 2026-09-09 (FFmpeg decode); 2026-10-07 (per-app profiles, static link kept)
+Date: 2026-09-09 (FFmpeg decode); 2026-10-07 (static link kept); superseded in part by ADR-0006 (one build, no profiles)
 
 ## Context
 
@@ -11,10 +11,8 @@ libavformat can then decode with the same FFmpeg as the player.
 
 ## Decision
 
-We demux and decode with FFmpeg (tag n7.1) through a custom seekable `AVIOContext`. Each app chooses
-its formats with a build profile. The `podcast` profile has MP3, AAC (ADTS and LATM), MP4/M4A, Ogg,
-Opus and Vorbis. Music formats belong to a `music` profile that is still a stub. FFmpeg stays
-statically linked.
+We demux and decode with FFmpeg (tag n7.1) through a custom seekable `AVIOContext`. The build is one
+format set shared by both apps (ADR-0006). FFmpeg stays statically linked.
 
 ## Alternatives rejected
 
@@ -28,7 +26,7 @@ statically linked.
 
 ## Consequences
 
-- A C shim and an FFmpeg build script to maintain. The podcast-profile library is about 2.5 MB per
+- A C shim and an FFmpeg build script to maintain. The library is about 2.6 MB per
   platform slice.
 - Adding Ogg was a rebuild flag, not a parser.
 - Static linking against an LGPL library leaves the relinking question open for closed-source

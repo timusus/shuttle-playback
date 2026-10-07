@@ -58,7 +58,7 @@ while let chunk = decoder.nextChunk() {          // interleaved Float32, up to 4
 - [Reference](docs/reference.md): the public types and their contracts.
 - [Architecture](docs/architecture.md): how the decoder and the download source work, with diagrams.
 - [Decisions](docs/decisions/README.md): why the engine is built this way.
-- [FFmpeg](docs/ffmpeg.md): the committed static build, profiles, patches, rebuilding.
+- [FFmpeg](docs/ffmpeg.md): the committed static build, formats, patches, rebuilding.
 - [Testing and releasing](docs/testing.md): the test suites, the conformance goldens, cutting a release.
 
 ## Status

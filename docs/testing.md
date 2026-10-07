@@ -42,7 +42,7 @@ ID3v1 footer, a sample-rate change, and noise that leans on the bit reservoir: 3
 tagged CBR, 8 kHz MPEG-2.5), AAC in ADTS and MP4 (including a fragmented MP4 with a `sidx`),
 HE-AAC v1 and v2 in MP4 and in ADTS (where the header says AAC-LC), Opus and Vorbis. Three come from
 the androidx/media project and are listed in `Fixtures/NOTICE`. `Fixtures/make-fixtures.sh` makes the
-rest and needs `ffmpeg`, `lame` and `afconvert`. The HE-AAC, Opus and Vorbis files are not
+rest and needs `ffmpeg`, `lame` and `afconvert`. The HE-AAC, Opus and Vorbis files (Ogg and Matroska) are not
 byte-reproducible, so re-run it only on purpose.
 
 **Fault matrix.** Each fixture is decoded through `FaultyByteReader` under all 7 combinations of three

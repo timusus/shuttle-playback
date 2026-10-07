@@ -33,17 +33,14 @@ downloaded:
 ## Build the FFmpeg
 
 ```sh
-scripts/build-ffmpeg.sh                     # podcast profile -> Frameworks/FFmpeg.xcframework
-FFMPEG_PROFILE=music FFMPEG_ALLOW_UNVERIFIED_PROFILE=1 scripts/build-ffmpeg.sh   # stub, see below
+scripts/build-ffmpeg.sh                     # the music superset -> Frameworks/FFmpeg.xcframework
 ```
 
-- `podcast`: mp3, AAC (ADTS and LATM), MP4/M4A, Ogg with Opus and Vorbis.
-- `music`: a superset (adds FLAC, ALAC, PCM WAV/AIFF, Matroska). It is a **stub**: the format list
-  exists so Shuttle2's migration starts from it, but nothing builds, ships or tests it yet. The
-  script refuses it without the override, and it writes `FFmpeg-music.xcframework`, which no
-  target references.
+- One build, linked by both apps (ADR-0006): mp3, AAC (ADTS and LATM), MP4/M4A (AAC, ALAC), Ogg
+  (Opus, Vorbis), FLAC, PCM WAV/AIFF, and Opus/Vorbis in Matroska/WebM. The lists are at the top of
+  `scripts/build-ffmpeg.sh`; each format has a conformance fixture. There are no profiles.
 - LGPL-2.1 only. Never add `--enable-gpl`, `--enable-version3`, `--enable-nonfree` or an
-  external library to a profile: the library links statically into closed-source apps.
+  external library beyond the system zlib (Matroska): the library links statically into closed-source apps.
 - A build takes several minutes. Run it in the foreground and commit the rebuilt framework in its
   own commit (`build: rebuild ffmpeg ...`), with `VERSION.txt` showing the change.
 
