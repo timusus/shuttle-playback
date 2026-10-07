@@ -82,7 +82,7 @@ final class MP3SeekTests: XCTestCase {
                 frames += chunk.count / format.channelCount
             }
             let size = try XCTUnwrap(reader.totalLength)
-            let targetByte = Int64(Double(size) * target / format.duration)
+            let targetByte = Int64(Double(size) * target / (try XCTUnwrap(format.duration)))
             let positionsBefore = reader.positions.count
             let bytesBefore = reader.bytesRead
 
@@ -147,7 +147,7 @@ final class MP3SeekTests: XCTestCase {
         let channels = format.channelCount
         let window = 2048 * channels
         for fraction in [0.25, 0.4, 0.55, 0.7, 0.85] {
-            let target = format.duration * fraction
+            let target = try XCTUnwrap(format.duration) * fraction
             let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
             _ = try decoder.open()
             _ = try decoder.seek(toSeconds: target)

@@ -33,7 +33,7 @@ final class StreamDecodeTests: XCTestCase {
             let format = try decoder.open()
             XCTAssertEqual(format.sampleRate, 44100, "\(name): the player runs at the source's rate")
             XCTAssertEqual(format.channelCount, 2, "\(name)")
-            XCTAssertEqual(format.duration, 20, accuracy: 0.2, "\(name)")
+            XCTAssertEqual(try XCTUnwrap(format.duration), 20, accuracy: 0.2, "\(name)")
             XCTAssertFalse(format.codec.isEmpty, "\(name)")
             XCTAssertFalse(format.container.isEmpty, "\(name)")
         }
@@ -275,7 +275,7 @@ final class StreamDecodeTests: XCTestCase {
         let counting = CountingByteReader(try FileByteReader(url: url))
         let decoder = FFmpegStreamDecoder(reader: counting)
         let format = try decoder.open()
-        XCTAssertEqual(format.duration, 1800, accuracy: 5, "a CBR MP3's duration comes from its size and bitrate")
+        XCTAssertEqual(try XCTUnwrap(format.duration), 1800, accuracy: 5, "a CBR MP3's duration comes from its size and bitrate")
 
         var frames = 0
         while frames < Int(format.sampleRate), let chunk = decoder.nextChunk() {
@@ -312,7 +312,7 @@ final class StreamDecodeTests: XCTestCase {
         let counting = CountingByteReader(try FileByteReader(url: url))
         let decoder = FFmpegStreamDecoder(reader: counting)
         let format = try decoder.open()
-        XCTAssertEqual(format.duration, 300, accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(format.duration), 300, accuracy: 1)
 
         /* The audio after the near seek must be the continuous decode's at the same sample. The
          * landed time alone proves nothing: a TOC landing is labelled with the time asked for. At
@@ -358,7 +358,7 @@ final class StreamDecodeTests: XCTestCase {
         let decoder = FFmpegStreamDecoder(reader: counting)
         let format = try decoder.open()
         XCTAssertEqual(format.sampleRate, 44100)
-        XCTAssertEqual(format.duration, 20, accuracy: 0.5, "the duration is the AUDIO's, not the file's")
+        XCTAssertEqual(try XCTUnwrap(format.duration), 20, accuracy: 0.5, "the duration is the AUDIO's, not the file's")
 
         var frames = 0
         while frames < Int(format.sampleRate), let chunk = decoder.nextChunk() {
@@ -498,7 +498,7 @@ final class StreamDecodeTests: XCTestCase {
         XCTAssertEqual(format.sampleRate, 44100)
         /* The Xing duration survives a length-less source: stock n7.1 mp3dec discarded the tag
          * when `avio_size()` could not answer, which scripts/ffmpeg-patches/0001 fixes (issue #1). */
-        XCTAssertEqual(format.duration, 20, accuracy: 0.1, "the Xing frame count gives the duration")
+        XCTAssertEqual(try XCTUnwrap(format.duration), 20, accuracy: 0.1, "the Xing frame count gives the duration")
         let pcm = decodeAll(decoder)
         XCTAssertEqual(Double(pcm.count / format.channelCount), 44100 * 20, accuracy: 4096)
         XCTAssertEqual(decoder.endReason, .eof)
@@ -556,7 +556,7 @@ final class StreamDecodeTests: XCTestCase {
             let standard = try FFmpegStreamDecoder(reader: try FileByteReader(url: url)).open()
             XCTAssertEqual(custom.sampleRate, standard.sampleRate, "\(name)")
             XCTAssertEqual(custom.channelCount, standard.channelCount, "\(name)")
-            XCTAssertEqual(custom.duration, standard.duration, accuracy: 0.01, "\(name)")
+            XCTAssertEqual(try XCTUnwrap(custom.duration), try XCTUnwrap(standard.duration), accuracy: 0.01, "\(name)")
         }
     }
 

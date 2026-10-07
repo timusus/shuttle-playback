@@ -50,7 +50,7 @@ let reader = try FileByteReader(url: URL(fileURLWithPath: CommandLine.arguments[
 let decoder = FFmpegStreamDecoder(reader: reader)
 let format = try decoder.open()
 print("\(format.codec) in \(format.container), \(format.sampleRate) Hz, \(format.channelCount) channels")
-print("duration: \(format.duration) s")
+print("duration: \(format.duration.map { "\($0) s" } ?? "unknown")")
 
 var frames = 0
 while let chunk = decoder.nextChunk() {

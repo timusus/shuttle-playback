@@ -59,7 +59,7 @@ enum ConformanceMatrix {
                 return (decoder, try decoder.open(), attempts, nil, start)
             } catch {
                 if reader.injectedErrors > before, attempts < maxAttempts { continue }
-                return (decoder, StreamAudioFormat(sampleRate: 0, channelCount: 0, duration: 0, codec: "", container: ""),
+                return (decoder, StreamAudioFormat(sampleRate: 0, channelCount: 0, duration: nil, codec: "", container: ""),
                         attempts, String(describing: error), start)
             }
         }

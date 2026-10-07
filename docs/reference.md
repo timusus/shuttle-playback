@@ -10,7 +10,7 @@ works as it does, see [Architecture](architecture.md).
 | `StreamByteReader` | PlaybackDecode | Protocol: blocking, seekable bytes. |
 | `FileByteReader` | PlaybackDecode | Reader over a local file. `reportsTotalLength: false` imitates a chunked response. |
 | `FFmpegStreamDecoder` | PlaybackDecode | `open()`, `seek(toSeconds:)`, `nextChunk()`, `cancel()`, `interrupt()`, `endReason`, `mediaFramesRead`, `bytesConsumed`. |
-| `StreamAudioFormat` | PlaybackDecode | Sample rate, channel count, duration (0 if unknown), codec name, container name. |
+| `StreamAudioFormat` | PlaybackDecode | Sample rate, channel count, duration (`nil` if unknown), codec name, container name. |
 | `StreamProbeBudget` | PlaybackDecode | Probe bytes and analysis time. Default 64 KiB and 1 s. |
 | `StreamDecoderError` | PlaybackDecode | `unavailable`, `invalidState`, `failed(status:)`, `cancelled`, `interrupted`. |
 | `StreamByteReaderError` | PlaybackDecode | `cancelled`, `interrupted`, `unseekable`, `transport`. |

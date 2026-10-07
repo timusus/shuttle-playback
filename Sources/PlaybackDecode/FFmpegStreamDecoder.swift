@@ -9,13 +9,14 @@ public struct StreamAudioFormat: Equatable {
     public let sampleRate: Double
     public let channelCount: Int
     /// From the container (`AVFormatContext.duration`: MP4's sample table, MP3's Xing TOC, or
-    /// `Content-Length` ÷ bitrate). Zero when the container does not know, in which case the
-    /// caller falls back to whatever duration it has from elsewhere.
-    public let duration: TimeInterval
+    /// `Content-Length` ÷ bitrate). `nil` when the container does not know (ADTS AAC, or an MP3
+    /// with no Xing/Info header, read with no total length), in which case the caller falls back
+    /// to whatever duration it has from elsewhere. Never 0.
+    public let duration: TimeInterval?
     public let codec: String
     public let container: String
 
-    public init(sampleRate: Double, channelCount: Int, duration: TimeInterval, codec: String, container: String) {
+    public init(sampleRate: Double, channelCount: Int, duration: TimeInterval?, codec: String, container: String) {
         self.sampleRate = sampleRate
         self.channelCount = channelCount
         self.duration = duration
@@ -195,7 +196,7 @@ public final class FFmpegStreamDecoder {
             let format = StreamAudioFormat(
                 sampleRate: Double(info.sample_rate),
                 channelCount: Int(info.channel_count),
-                duration: info.duration_sec,
+                duration: info.duration_sec > 0 ? info.duration_sec : nil,
                 codec: Self.string(from: &info.codec_name, capacity: 32),
                 container: Self.string(from: &info.container_name, capacity: 64)
             )
