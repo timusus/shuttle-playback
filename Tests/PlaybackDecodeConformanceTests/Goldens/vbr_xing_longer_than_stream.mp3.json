@@ -37,7 +37,15 @@
       "windowSha256Int16" : "3b1f6180a3415c2668c5981970b85e963e5b4a5db6bab688dbe3c40cf2259d15"
     },
     {
-      "alignFrames" : null,
+      "alignFrames" : 0,
+      "landedS" : 2.304,
+      "toS" : 2.304,
+      "tolS" : 0.03,
+      "windowFrames" : 256,
+      "windowSha256Int16" : "6c540936ff0d9ee72683aaad7e59417e1d220e02746547a79dc9f7358a4c805c"
+    },
+    {
+      "alignFrames" : 0,
       "landedS" : 2.404,
       "toS" : 2.404,
       "tolS" : 0.03,

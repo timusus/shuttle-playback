@@ -24,6 +24,17 @@ struct DecodeRun {
 
 enum ConformanceMatrix {
     static let seekFractions: [Double] = [0, 1.0 / 3, 2.0 / 3, 1]
+    /// A seek this far before the last frame, between 2/3 and the end: the seek to the end lands on
+    /// EOF and pins no audio, so this one pins the last of it.
+    static let nearEndSeconds = 0.1
+
+    /// Where the suite seeks in a file of `duration` seconds: each of `seekFractions`, with the
+    /// near-end seek before the last.
+    static func seekTargets(duration: Double) -> [Double] {
+        var targets = seekFractions.map { duration * $0 }
+        targets.insert(max(0, duration - nearEndSeconds), at: targets.count - 1)
+        return targets
+    }
     /// A seek restarts the codec: the first frames after it lack the previous frame's overlap (AAC,
     /// Opus, Vorbis) or bit-reservoir bytes (MP3, catalogue C20), so they are not expected to equal
     /// the continuous decode. The warm-up is skipped; the frames after it must match.
@@ -132,8 +143,7 @@ enum ConformanceMatrix {
         let (decoder, _, _, openError, _) = open(reader)
         if let openError { XCTFail("\(label): open failed: \(openError)"); return [] }
         var results: [SeekResult] = []
-        for fraction in seekFractions {
-            let target = duration * fraction
+        for target in seekTargets(duration: duration) {
             var result: SeekResult?
             for _ in 0..<maxAttempts where result == nil {
                 let before = reader.injectedErrors
@@ -163,11 +173,13 @@ enum ConformanceMatrix {
 
     /// How many frames after the landed time the window really sits in the continuous decode: 0 when
     /// the seek is exact, nil when no alignment within ±`alignSearchFrames` matches to tolerance.
-    /// The whole window must match, not a probe of it.
+    /// The whole window must match, not a probe of it. An empty window is exact (0) only when it
+    /// landed on the clean decode's end, where there is nothing after it to compare.
     static func alignment(of result: SeekResult, clean: DecodeRun) -> Int? {
-        guard let format = clean.format, !result.window.isEmpty else { return nil }
+        guard let format = clean.format else { return nil }
         let channels = format.channelCount
         let nominal = Int((result.landed * format.sampleRate).rounded()) + result.skipFrames
+        if result.window.isEmpty { return nominal == clean.frames ? 0 : nil }
         for distance in 0...alignSearchFrames {
             for offset in distance == 0 ? [0] : [distance, -distance] {
                 let start = (nominal + offset) * channels
