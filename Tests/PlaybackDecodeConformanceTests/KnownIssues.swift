@@ -21,7 +21,23 @@ enum KnownIssues {
         var messages: [String]
     }
 
-    static let rules: [Rule] = []
+    static let rules: [Rule] = [
+        // FLAC's seek after a one-shot I/O error returns different PCM than the clean seek.
+        // Not yet filed: GitHub was down when the suite found it.
+        Rule(issue: "unfiled (FLAC seek after a one-shot I/O error)",
+             fixture: "flac_stereo.flac", kind: .seekPCM,
+             switches: [.ioErrorOncePerPosition, [.partialReads, .ioErrorOncePerPosition]],
+             messages: ["seek to 3.9s: PCM after the landing differs from the clean seek"]),
+        // The open of a 24-bit WAV reads more before the first audio when the length is unknown.
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/21 (stream-info probe for header-described formats)",
+             fixture: "wav_s24.wav", kind: .bytes,
+             switches: [.unknownLength, [.ioErrorOncePerPosition, .unknownLength],
+                        [.partialReads, .ioErrorOncePerPosition, .unknownLength]],
+             messages: ["131082 bytes read before the first audio, golden allows 99328"]),
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/21 (stream-info probe for header-described formats)",
+             fixture: "wav_s24.wav", kind: .bytes, switches: [[.partialReads, .unknownLength]],
+             messages: ["106506 bytes read before the first audio, golden allows 99328"]),
+    ]
 
     /// The rule a finding is pinned by, if any.
     static func rule(for fixture: String, kind: ConformanceMatrix.Kind, switches: FaultSwitches,

@@ -154,4 +154,15 @@ $FF -i "$TMP/s44.wav" -c:a aac -b:a 48k -f latm latm_loas.aac
 $FF -i "$TMP/s48.wav" -c:a libopus -b:a 32k -map_metadata -1 opus_stereo.opus
 $FF -i "$TMP/s44.wav" -c:a vorbis -strict -2 -b:a 48k -map_metadata -1 vorbis_stereo.ogg
 
-ls -l *.mp3 *.m4a *.aac *.opus *.ogg | awk '{print $5, $9}'
+# --- Music formats (the superset build) --------------------------------------------------------
+# Lossless and PCM containers (the PCM ones 2 s long): deterministic under +bitexact. The Matroska
+# pair is not (random segment UID), so re-running changes their sha256.
+$FF -i "$TMP/s44.wav" -c:a flac -map_metadata -1 flac_stereo.flac
+$FF -i "$TMP/s44.wav" -c:a alac -map_metadata -1 alac_stereo.m4a
+$FF -i "$TMP/s44.wav" -t 2 -c:a pcm_s16le -map_metadata -1 wav_s16.wav
+$FF -i "$TMP/s44.wav" -t 2 -c:a pcm_s24le -map_metadata -1 wav_s24.wav
+$FF -i "$TMP/s44.wav" -t 2 -c:a pcm_s16be -map_metadata -1 aiff_s16.aiff
+$FF -i "$TMP/s48.wav" -c:a libopus -b:a 32k -map_metadata -1 opus_stereo.mka
+$FF -i "$TMP/s44.wav" -c:a vorbis -strict -2 -b:a 48k -map_metadata -1 vorbis_stereo.webm
+
+ls -l *.mp3 *.m4a *.aac *.opus *.ogg *.flac *.wav *.aiff *.mka *.webm | awk '{print $5, $9}'
