@@ -42,8 +42,11 @@ final class FLACSeekTests: XCTestCase {
     /// ones (16 KiB a frame), so a byte ratio places a time tens of seconds wrong. An 8 KiB PADDING
     /// block puts the first frame past the bytes the decoder keeps from the open. `variable` codes
     /// sample numbers rather than frame numbers, with block sizes alternating 4096 and 1152.
+    /// `trailing` zero bytes follow the last frame, as an appended tag would. With `lookalikes`,
+    /// the last samples of every second noise frame spell a valid frame header naming an earlier
+    /// frame.
     /// Returns the file, its PCM interleaved, and its largest frame.
-    private func writeFLAC(variable: Bool) throws -> (URL, [Int16], Int) {
+    private func writeFLAC(variable: Bool, trailing: Int = 0, lookalikes: Bool = false) throws -> (URL, [Int16], Int) {
         let total = 60 * Self.rate
         var frames = Data()
         var pcm: [Int16] = []
@@ -62,25 +65,38 @@ final class FLACSeekTests: XCTestCase {
             frame += Self.utf8(UInt64(variable ? first : index))
             if sizeCode == 7 { frame += [UInt8((blockSize - 1) >> 8), UInt8((blockSize - 1) & 0xFF)] }
             frame.append(Self.crc8(frame))
+            var samples = (0..<2).map { channel in
+                noise ? (0..<blockSize).map { Self.noise(first + $0, channel) }
+                    : [Int16](repeating: Int16(index % 64 * 8 - 256 + channel), count: blockSize)
+            }
+            if lookalikes && noise && index % 2 == 0 && blockSize >= 8 {
+                // A header of this stream, CRC-8 and all, naming the frame three before this one.
+                // In every frame, each would name the one after the last's: a chain as consistent
+                // as the real one.
+                var fake: [UInt8] = [0xFF, variable ? 0xF9 : 0xF8, 12 << 4 | 9, 1 << 4 | 4 << 1]
+                fake += Self.utf8(UInt64(variable ? max(first - 3 * 4096, 0) : max(index - 3, 0)))
+                fake.append(Self.crc8(fake))
+                fake += [UInt8](repeating: 0, count: fake.count % 2)
+                for (i, k) in stride(from: 0, to: fake.count, by: 2).enumerated() {
+                    samples[1][blockSize - fake.count / 2 + i] = Int16(bitPattern: UInt16(fake[k]) << 8 | UInt16(fake[k + 1]))
+                }
+            }
             for channel in 0..<2 {
                 if noise {
                     frame.append(0x02)               // VERBATIM
-                    for k in 0..<blockSize {
-                        let v = Self.noise(first + k, channel)
+                    for v in samples[channel] {
                         frame += [UInt8(UInt16(bitPattern: v) >> 8), UInt8(UInt16(bitPattern: v) & 0xFF)]
                     }
                 } else {
                     frame.append(0x00)               // CONSTANT
-                    let v = Int16(index % 64 * 8 - 256 + channel)
+                    let v = samples[channel][0]
                     frame += [UInt8(UInt16(bitPattern: v) >> 8), UInt8(UInt16(bitPattern: v) & 0xFF)]
                 }
             }
             let crc = Self.crc16(frame)
             frame += [UInt8(crc >> 8), UInt8(crc & 0xFF)]
             for k in 0..<blockSize {
-                for channel in 0..<2 {
-                    pcm.append(noise ? Self.noise(first + k, channel) : Int16(index % 64 * 8 - 256 + channel))
-                }
+                for channel in 0..<2 { pcm.append(samples[channel][k]) }
             }
             maxFrame = max(maxFrame, frame.count)
             frames.append(contentsOf: frame)
@@ -100,6 +116,7 @@ final class FLACSeekTests: XCTestCase {
         file += [0x81, UInt8(padding >> 16), UInt8(padding >> 8 & 0xFF), UInt8(padding & 0xFF)]
         file += [UInt8](repeating: 0, count: padding)
         file += frames
+        file += [UInt8](repeating: 0, count: trailing)
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("flac-no-seektable-\(UUID().uuidString).flac")
@@ -146,24 +163,56 @@ final class FLACSeekTests: XCTestCase {
     ///
     /// Every frame header says which frame it is, so the seek reads headers at interpolated (or,
     /// where the bitrate jumps, bisected) bytes until it has a frame at most 32 KiB before the
-    /// target, then decodes from there and drops up to the target. The bytes a seek reads before
-    /// its first audio are bounded: 128 KiB of probing (plus the probe that crosses it, at most two
-    /// frames), a placement at most 64 KiB before the target, the ten frames the FLAC parser
-    /// buffers before it hands out the first, and one AVIO refill. The file is as hard as a FLAC
+    /// target, then decodes from there and drops up to the target. The file is as hard as a FLAC
     /// gets (its bitrate jumps 700-fold); before issue #38 its far seeks landed by byte ratio,
     /// seconds from their target, and said they had landed on it.
     func testAFLACWithNoSeekTableSeeksExactlyFarAndNearWithinItsBudget() throws {
+        // Far into each kind of stretch, both ways, then near the last landing both ways.
+        try assertSeeksExactly(to: [45.0, 30.5, 55.123, 0.25, 59.9, 21.0, 21.1, 20.95, 12.345, 12.3])
+    }
+
+    /// **A FLAC followed by a tag seeks to its end exactly, not into the tag.**
+    ///
+    /// 64 KiB of zeros after the last frame (an appended ID3v2 or APE tag) count in the file's
+    /// length but hold no frame, so a seek near the end interpolated into them and read a largest
+    /// frame's worth with no header there. Such a probe bounds the search from above, as a byte
+    /// with nothing after it does; before, it ended the search, the byte estimate went into the
+    /// tag, and the retry for an estimate past the last frame (issue #28) stepped back once, still
+    /// inside the tag, and reported the end.
+    func testAFLACFollowedByATagSeeksToItsEndExactly() throws {
+        try assertSeeksExactly(to: [59.9, 59.99, 59.5, 30.5], trailing: 64 * 1024)
+    }
+
+    /// **A header lookalike inside a frame's data does not move a seek.**
+    ///
+    /// The last samples of every second noise frame spell a header of this stream with a right
+    /// CRC-8, naming the frame three before it, between two real headers. A header at or before
+    /// the target is believed only when a later one follows it, so the lookalike costs a frame of
+    /// scanning, where taking it would have anchored the seek a frame early and labelled the audio
+    /// four frames late; and the real header before it is still followed by the one after it,
+    /// where keeping only the latest header met had the lookalike hide it, and a probe read two
+    /// more frames to believe one, or gave up.
+    func testAHeaderLookalikeInsideAFrameDoesNotMoveASeek() throws {
+        try assertSeeksExactly(to: [25.5, 33.3, 21.0, 39.0, 55.123, 52.2], lookalikes: true)
+    }
+
+    /// Seek the generated FLAC, fixed and variable blocksize, to each target in turn, and require
+    /// the landing, the PCM after it and the bytes read before it to be what an exact seek gives.
+    /// The bytes are bounded by 128 KiB of probing (plus the probe that crosses it, at most two
+    /// frames), a placement at most 64 KiB before the target, the ten frames the FLAC parser
+    /// buffers before it hands out the first, and one AVIO refill.
+    private func assertSeeksExactly(to targets: [Double], trailing: Int = 0, lookalikes: Bool = false,
+                                    file: StaticString = #filePath, line: UInt = #line) throws {
         for variable in [false, true] {
-            let (url, pcm, maxFrame) = try writeFLAC(variable: variable)
+            let (url, pcm, maxFrame) = try writeFLAC(variable: variable, trailing: trailing, lookalikes: lookalikes)
             let reader = try CountingReader(url)
             let decoder = FFmpegStreamDecoder(reader: reader)
             let format = try decoder.open()
-            XCTAssertEqual(format.sampleRate, Double(Self.rate))
+            XCTAssertEqual(format.sampleRate, Double(Self.rate), file: file, line: line)
             let budget = Int64(128 * 1024 + 2 * maxFrame + 64 + 64 * 1024 + 11 * maxFrame + 32 * 1024)
             let window = 4096
 
-            // Far into each kind of stretch, both ways, then near the last landing both ways.
-            for target in [45.0, 30.5, 55.123, 0.25, 59.9, 21.0, 21.1, 20.95, 12.345, 12.3] {
+            for target in targets {
                 let label = "\(variable ? "variable" : "fixed") blocksize, seek to \(target)s"
                 let bytesBefore = reader.bytesRead
                 let seeksBefore = reader.seeks
@@ -173,15 +222,20 @@ final class FLACSeekTests: XCTestCase {
                 let bytes = reader.bytesRead - bytesBefore
                 got = Array(got.prefix(window * 2))
 
-                XCTAssertEqual(landed, target, accuracy: 0.5 / Double(Self.rate), "\(label): landed \(landed)")
+                XCTAssertEqual(landed, target, accuracy: 0.5 / Double(Self.rate), "\(label): landed \(landed)",
+                               file: file, line: line)
                 let start = Int((target * Double(Self.rate)).rounded()) * 2
                 let want = pcm[start..<min(start + window * 2, pcm.count)].map { Float($0) / 32768 }
-                XCTAssertEqual(got.count, want.count, "\(label): frames after the landing")
+                XCTAssertEqual(got.count, want.count, "\(label): frames after the landing", file: file, line: line)
                 if let miss = zip(got, want).enumerated().first(where: { $0.element.0 != $0.element.1 })?.offset {
-                    XCTFail("\(label): PCM differs from the stream's at frame \(miss / 2) after the landing")
+                    XCTFail("\(label): PCM differs from the stream's at frame \(miss / 2) after the landing",
+                            file: file, line: line)
                 }
-                XCTAssertLessThanOrEqual(bytes, budget, "\(label): read \(bytes) bytes before its first audio")
-                XCTAssertLessThanOrEqual(reader.seeks - seeksBefore, 16, "\(label): positioned the reader \(reader.seeks - seeksBefore) times")
+                XCTAssertLessThanOrEqual(bytes, budget, "\(label): read \(bytes) bytes before its first audio",
+                                         file: file, line: line)
+                XCTAssertLessThanOrEqual(reader.seeks - seeksBefore, 16,
+                                         "\(label): positioned the reader \(reader.seeks - seeksBefore) times",
+                                         file: file, line: line)
             }
         }
     }
