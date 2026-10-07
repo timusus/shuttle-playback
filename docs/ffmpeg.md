@@ -35,7 +35,7 @@ the command-line programs. Only libavformat, libavcodec, libswresample and libav
 
 | Profile | Status | Decoders | Demuxers | Parsers |
 |---|---|---|---|---|
-| `podcast` | Built, shipped and tested. | `mp3`, `mp3float`, `aac`, `aac_latm`, `opus`, `vorbis` | `mp3`, `aac`, `mov`, `ogg` | `mpegaudio`, `aac`, `aac_latm`, `opus`, `vorbis` |
+| `podcast` | Built, shipped and tested. | `mp3`, `mp3float`, `aac`, `aac_latm`, `opus`, `vorbis` | `mp3`, `aac`, `loas`, `mov`, `ogg` | `mpegaudio`, `aac`, `aac_latm`, `opus`, `vorbis` |
 | `music` | Stub. Nothing tests it. | podcast, plus `flac`, `alac` and PCM (16, 24, 32-bit, float, u8) | podcast, plus `flac`, `wav`, `aiff`, `matroska` | podcast, plus `flac` |
 
 The `podcast` profile covers MP3, AAC (ADTS and LATM), MP4 and M4A, and Ogg with Opus and Vorbis.

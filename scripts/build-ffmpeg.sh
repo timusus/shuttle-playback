@@ -55,7 +55,7 @@ LIBS=(libavformat libavcodec libswresample libavutil)
 # The podcast set is what Shuttle Podcasts has always shipped (mp3/aac/mov) plus Ogg, Opus and
 # Vorbis (owner decision 2026-10-07: some feeds publish Ogg, and Android already decodes it).
 PODCAST_DECODERS=mp3,mp3float,aac,aac_latm,opus,vorbis
-PODCAST_DEMUXERS=mp3,aac,mov,ogg
+PODCAST_DEMUXERS=mp3,aac,loas,mov,ogg
 PODCAST_PARSERS=mpegaudio,aac,aac_latm,opus,vorbis
 
 case "$PROFILE" in
