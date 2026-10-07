@@ -26,6 +26,10 @@ struct StreamDecoder {
     AVFormatContext *fmt;
     AVCodecContext  *dec;
     SwrContext      *swr;
+    /* What `swr` takes in; a frame that differs reconfigures it (see `push_through_swr`). */
+    int              swr_in_rate;
+    int              swr_in_fmt;
+    int              swr_in_channels;
     AVPacket        *pkt;
     AVFrame         *frame;
     /* A packet read during open (see `skip_unscanned_junk`) that the decoder has not had yet. */
@@ -284,29 +288,42 @@ static int64_t probe_id3_offset(StreamDecoder *d) {
 /* Same rate, same layout, float32 out: the resampler is here ONLY to interleave and to convert
  * whatever sample format the codec produces (mp3float is planar float, aac is planar float, and a
  * fixed-point build would be planar s16) into the one buffer format the player schedules. */
-static int init_swr(StreamDecoder *d) {
+static int init_swr_from(StreamDecoder *d, int in_rate, int in_fmt, const AVChannelLayout *src) {
     swr_free(&d->swr);
 
     AVChannelLayout out_layout = { 0 };
     /* Zero-initialised: av_channel_layout_copy uninitialises its destination first, so a free() of
      * stack garbage is an intermittent SIGABRT. */
     AVChannelLayout in_layout = { 0 };
-    if (d->dec->ch_layout.nb_channels > 0) {
-        av_channel_layout_copy(&in_layout, &d->dec->ch_layout);
+    if (src->nb_channels > 0) {
+        av_channel_layout_copy(&in_layout, src);
     } else {
         av_channel_layout_default(&in_layout, d->channels > 0 ? d->channels : 1);
     }
-    av_channel_layout_copy(&out_layout, &in_layout);
+    /* The output keeps the channel count the stream opened with; an input with another count is
+     * remixed to it by the resampler. */
+    if (d->channels > 0 && in_layout.nb_channels != d->channels) {
+        av_channel_layout_default(&out_layout, d->channels);
+    } else {
+        av_channel_layout_copy(&out_layout, &in_layout);
+    }
 
     int rc = swr_alloc_set_opts2(&d->swr,
                                  &out_layout, AV_SAMPLE_FMT_FLT, d->sample_rate,
-                                 &in_layout, d->dec->sample_fmt, d->dec->sample_rate,
+                                 &in_layout, in_fmt, in_rate,
                                  0, NULL);
+    d->swr_in_rate = in_rate;
+    d->swr_in_fmt = in_fmt;
+    d->swr_in_channels = in_layout.nb_channels;
     av_channel_layout_uninit(&in_layout);
     av_channel_layout_uninit(&out_layout);
     if (rc < 0 || !d->swr) return STREAM_DECODE_ERR_RESAMPLE;
     if (swr_init(d->swr) < 0) return STREAM_DECODE_ERR_RESAMPLE;
     return STREAM_DECODE_OK;
+}
+
+static int init_swr(StreamDecoder *d) {
+    return init_swr_from(d, d->dec->sample_rate, d->dec->sample_fmt, &d->dec->ch_layout);
 }
 
 static int pending_reserve(StreamDecoder *d, int frames) {
@@ -323,11 +340,31 @@ static int pending_reserve(StreamDecoder *d, int frames) {
 
 /* Push `frame` (NULL flushes) through the resampler into `pending`. Returns 0 on allocation
  * failure, 1 otherwise; `pending_frames` says how much arrived. */
-static int push_through_swr(StreamDecoder *d, AVFrame *frame) {
+static int convert_through_swr(StreamDecoder *d, AVFrame *frame);
+
+/* `lead` receives how many pending frames precede this frame's own output: what the resampler
+ * flushed when the frame changed its input format. */
+static int push_through_swr(StreamDecoder *d, AVFrame *frame, int *lead) {
+    *lead = 0;
+    if (frame && (frame->sample_rate != d->swr_in_rate
+                  || frame->format != d->swr_in_fmt
+                  || frame->ch_layout.nb_channels != d->swr_in_channels)
+        && frame->sample_rate > 0 && frame->ch_layout.nb_channels > 0) {
+        /* The stream changed rate, layout or sample format mid-way (stitched audio): hand out
+         * what the old resampler still holds, then take the new input to the unchanged output. */
+        if (!convert_through_swr(d, NULL)) return 0;
+        *lead = d->pending_frames;
+        if (init_swr_from(d, frame->sample_rate, frame->format, &frame->ch_layout)
+                != STREAM_DECODE_OK) {
+            return 0;
+        }
+    }
+    return convert_through_swr(d, frame);
+}
+
+static int convert_through_swr(StreamDecoder *d, AVFrame *frame) {
     int in_samples = frame ? frame->nb_samples : 0;
-    int64_t delay = swr_get_delay(d->swr, d->sample_rate);
-    int out_samples = (int)av_rescale_rnd(delay + in_samples, d->sample_rate, d->sample_rate,
-                                          AV_ROUND_UP);
+    int out_samples = swr_get_out_samples(d->swr, in_samples);
     if (out_samples <= 0) return 1;
     if (!pending_reserve(d, out_samples)) return 0;
 
@@ -416,19 +453,24 @@ static int pump(StreamDecoder *d) {
             }
             d->last_frame_pts = pts == AV_NOPTS_VALUE ? AV_NOPTS_VALUE
                 : pts + av_rescale_q(cut, (AVRational){ 1, rate }, d->time_base);
-            int ok = push_through_swr(d, d->frame);
+            int lead = 0;
+            int ok = push_through_swr(d, d->frame, &lead);
             av_frame_unref(d->frame);
             if (!ok) return STREAM_DECODE_ERR_ALLOC;
             /* Same rate in and out, so the resampler holds nothing back: frame sample N is
-             * pending frame N. */
-            d->pending_offset = cut < d->pending_frames ? (int)cut : d->pending_frames;
+             * pending frame N. After a rate change it is the same sample at the output rate,
+             * behind whatever the old resampler flushed. */
+            int64_t cut_out = rate == d->sample_rate ? cut
+                : av_rescale_q(cut, (AVRational){ 1, rate }, (AVRational){ 1, d->sample_rate });
+            int64_t offset = lead + cut_out;
+            d->pending_offset = offset < d->pending_frames ? (int)offset : d->pending_frames;
             if (d->pending_frames > d->pending_offset) return STREAM_DECODE_OK;
             pending_reset(d);
             continue;   /* the resampler is still filling; ask for another frame */
         }
         if (rc == AVERROR_EOF) {
             /* The decoder is drained; whatever libswresample still holds is the last of it. */
-            if (!push_through_swr(d, NULL)) return STREAM_DECODE_ERR_ALLOC;
+            if (!convert_through_swr(d, NULL)) return STREAM_DECODE_ERR_ALLOC;
             d->ended = 1;
             return d->pending_frames > 0 ? STREAM_DECODE_OK : STREAM_DECODE_EOF;
         }
@@ -445,7 +487,7 @@ static int pump(StreamDecoder *d) {
         if (d->flushing) {
             /* EAGAIN after a NULL packet cannot happen, but treat it as the end rather than
              * looping: an unbounded loop here is a hung player. */
-            if (!push_through_swr(d, NULL)) return STREAM_DECODE_ERR_ALLOC;
+            if (!convert_through_swr(d, NULL)) return STREAM_DECODE_ERR_ALLOC;
             d->ended = 1;
             return d->pending_frames > 0 ? STREAM_DECODE_OK : STREAM_DECODE_EOF;
         }

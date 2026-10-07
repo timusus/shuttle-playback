@@ -32,3 +32,10 @@ rm tone.wav
 `StreamDecodeTests.testMoovLastAtomOrder` asserts the two M4A layouts really are what their names
 say, by walking the top-level atoms — a re-encode with a different ffmpeg default would otherwise
 turn the bandwidth test into a test of nothing.
+
+## stitch_44k_48k_64k.mp3
+
+4 s of 440 Hz left / 660 Hz right at 44.1 kHz, then 4 s of the same at 48 kHz, each a 64 kbps CBR
+libmp3lame encode (`-write_xing 0 -id3v2_version 0 -write_id3v1 0`), concatenated at the byte level:
+a sample-rate change mid-stream. Used by `testSampleRateChangeMidStreamIsResampledToTheOpenRate`; the
+conformance suite skips it.

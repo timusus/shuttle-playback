@@ -48,6 +48,39 @@ final class StreamDecodeTests: XCTestCase {
         XCTAssertGreaterThan(last.firstIndex(of: "moov") ?? -1, last.firstIndex(of: "mdat") ?? -1)
     }
 
+    // MARK: - Mid-stream format change
+
+    /// `stitch_44k_48k_64k.mp3` is 4 s of tone at 44.1 kHz glued to 4 s of the same tone at 48 kHz.
+    /// The output stays at the rate it opened with, so the second half has to be resampled: its
+    /// length and its pitch come out right instead of the 48 kHz samples being played as if they
+    /// were 44.1 kHz ones.
+    func testSampleRateChangeMidStreamIsResampledToTheOpenRate() throws {
+        try skipUnlessAvailable()
+        let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: try Fixture.url("stitch_44k_48k_64k.mp3")))
+        let format = try decoder.open()
+        let rate = format.sampleRate
+        XCTAssertEqual(rate, 44100)
+        let channels = format.channelCount
+        let pcm = decodeAll(decoder)
+        XCTAssertEqual(decoder.endReason, .eof)
+
+        let frames = pcm.count / channels
+        XCTAssertEqual(Double(frames) / rate, 8.0, accuracy: 0.15, "two 4 s halves, whatever their rates")
+
+        /* The left channel is 440 Hz in both halves: count its rising zero crossings over the last
+         * two seconds, well inside the second half. */
+        let window = Int(2 * rate)
+        let start = frames - Int(0.5 * rate) - window
+        var crossings = 0
+        var previous = pcm[start * channels]
+        for i in (start + 1)..<(start + window) {
+            let sample = pcm[i * channels]
+            if previous <= 0, sample > 0 { crossings += 1 }
+            previous = sample
+        }
+        XCTAssertEqual(Double(crossings) / 2, 440, accuracy: 5, "the second half's pitch")
+    }
+
     // MARK: - Parity against AVAssetReader
 
     func testDecodeMatchesAVAssetReader() throws {
