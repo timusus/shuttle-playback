@@ -980,6 +980,106 @@ final class GrowingFileByteSourceTests: XCTestCase {
         }
     }
 
+    // MARK: - 416, gzip and a changing resource
+
+    /// The file shrank behind the URL between a drop and its resume, so the frontier is now at
+    /// the new end and a strict origin answers the resume 416. That is a refused resume, not an
+    /// end of stream: the retry restarts at the decoder's position into a new file, and the read
+    /// gets the new file's bytes instead of hanging or ending early.
+    func testAResumeAnswered416AtTheEndRestartsAndTheReadGetsTheNewFile() throws {
+        let first = makeBody(160_000)
+        let second = makeBody(100_000, seed: 42)
+        let server = try startServer(body: first)
+        server.bodies = [first, second]
+        server.answers416AtOrAfterEnd = true
+        server.closesAfterBodyBytes = 100_000
+        let source = makeSource(server.url)
+
+        XCTAssertEqual(try read(source, 4096), first.prefix(4096))
+        XCTAssertTrue(waitUntil { server.requestedRanges.count == 3 })
+        XCTAssertEqual(server.requestedRanges, [0, 100_000, 4096], "the resume asked for the new end, then restarted")
+        let rest = readAsync(source, Int.max)
+        XCTAssertTrue(rest.finished(within: 20), "the read hung after a 416")
+        XCTAssertEqual(try rest.result.get(), second.suffix(from: 4096))
+        XCTAssertEqual(source.totalLength, 100_000)
+    }
+
+    /// The same shrunken file with the decoder already at the old frontier: the restart asks for
+    /// a byte past the new end and gets 416 again. The source cannot tell that from an end of
+    /// stream it may trust, so the read fails clearly after the retries, never hangs and never
+    /// reports the old file's bytes as the whole.
+    func testA416ForARestartPastTheEndFailsTheReadAfterTheRetries() throws {
+        let first = makeBody(160_000)
+        let second = makeBody(100_000, seed: 42)
+        let server = try startServer(body: first)
+        server.bodies = [first, second]
+        server.answers416AtOrAfterEnd = true
+        server.closesAfterBodyBytes = 100_000
+        let source = makeSource(server.url)
+
+        let pending = readAsync(source, Int.max)
+        XCTAssertTrue(pending.finished(within: 30), "the read hung after a 416")
+        assertTransport(pending.result)
+        XCTAssertEqual(server.requestedRanges.prefix(3), [0, 100_000, 100_000])
+    }
+
+    /// A gzip-encoded body is inflated by the session, and its `Content-Length` is the encoded
+    /// size, not the file's. The file must never be taken for complete at the wrong length.
+    func testAGzipEncodedBodyIsReadAsThePlainFileDespiteItsEncodedContentLength() throws {
+        let body = makeBody(64 * 1024)
+        let server = try startServer(body: body)
+        server.gzipsBody = true
+        let source = makeSource(server.url)
+
+        let pending = readAsync(source, Int.max)
+        XCTAssertTrue(pending.finished(within: 20), "the read hung on a gzip body")
+        // The session inflates the body, so the read is the plain file whose length the encoded
+        // `Content-Length` never named.
+        XCTAssertEqual(try pending.result.get(), body)
+        XCTAssertTrue(waitUntil { source.snapshot.isComplete })
+        let cached = try XCTUnwrap(GrowingFileStore(directory: directory).completedFile(for: server.url))
+        XCTAssertEqual(try Data(contentsOf: cached), body, "a garbled file was promoted as complete")
+    }
+
+    /// The same-length file swapped behind the URL between a drop and its resume: the total does
+    /// not move, so only the validator can tell. The resume sends `If-Range` with the first
+    /// response's ETag, the origin answers the whole new body, and the retry restarts at the
+    /// decoder's position into a new file instead of splicing the new tail onto the old head.
+    func testAResumeOfAFileChangedToSameLengthBytesIsNotSplicedBecauseOfIfRange() throws {
+        let first = makeBody(160_000)
+        let second = makeBody(160_000, seed: 42)
+        let server = try startServer(body: first)
+        server.bodies = [first, second]
+        server.etags = ["\"v1\"", "\"v2\""]
+        server.closesAfterBodyBytes = 100_000
+        let source = makeSource(server.url)
+
+        XCTAssertEqual(try read(source, 4096), first.prefix(4096))
+        XCTAssertTrue(waitUntil { server.requestedRanges.count == 3 })
+        XCTAssertTrue(
+            server.requestHeads[1].lowercased().contains("if-range: \"v1\""), "the resume carried no validator"
+        )
+        XCTAssertEqual(server.requestedRanges, [0, 100_000, 4096])
+        XCTAssertEqual(try readToEnd(source), second.suffix(from: 4096), "the new file was spliced onto the old")
+        XCTAssertEqual(source.snapshot.base, 4096)
+        XCTAssertEqual(source.snapshot.transactionGeneration, 2)
+    }
+
+    /// The control: a validator that still matches resumes into the same file, as before.
+    func testAResumeOfAnUnchangedFileWithAnETagStaysInTheSameFile() throws {
+        let body = makeBody(160_000)
+        let server = try startServer(body: body)
+        server.etag = "\"v1\""
+        server.closesAfterBodyBytes = 100_000
+        let source = makeSource(server.url)
+
+        XCTAssertEqual(try read(source, 4096), body.prefix(4096))
+        XCTAssertEqual(try readToEnd(source).count, body.count - 4096)
+        XCTAssertEqual(server.requestedRanges, [0, 100_000])
+        XCTAssertTrue(server.requestHeads[1].lowercased().contains("if-range: \"v1\""))
+        XCTAssertEqual(source.snapshot.transactionGeneration, 1)
+    }
+
     func testCancelDuringARetryBackoffEndsTheRetries() throws {
         let body = makeBody(32 * 1024)
         let server = try startServer(body: body)

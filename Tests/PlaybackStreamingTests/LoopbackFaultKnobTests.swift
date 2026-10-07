@@ -91,4 +91,70 @@ final class LoopbackFaultKnobTests: XCTestCase {
         XCTAssertNil(data, "a stalled body completed")
         XCTAssertEqual(origin.servedBytes, 16 * 1024)
     }
+
+    /// The response itself, for a test of status and headers.
+    private func respond(_ url: URL, headers: [String: String]) async throws -> (Data, HTTPURLResponse) {
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+        for (field, value) in headers { request.setValue(value, forHTTPHeaderField: field) }
+        let (data, response) = try await session.data(for: request)
+        return (data, response as! HTTPURLResponse)
+    }
+
+    func testAnswers416AtOrAfterEndAnswers416OnlyForARangePastTheBody() async throws {
+        let (origin, body) = try start(bodyBytes: 4096)
+        origin.answers416AtOrAfterEnd = true
+        for start in [body.count, body.count + 10] {
+            let (data, response) = try await respond(origin.url, headers: ["Range": "bytes=\(start)-"])
+            XCTAssertEqual(response.statusCode, 416)
+            XCTAssertEqual(response.value(forHTTPHeaderField: "Content-Range"), "bytes */\(body.count)")
+            XCTAssertTrue(data.isEmpty)
+        }
+        let (tail, response) = try await respond(origin.url, headers: ["Range": "bytes=\(body.count - 1)-"])
+        XCTAssertEqual(response.statusCode, 206)
+        XCTAssertEqual(tail, body.suffix(1))
+        XCTAssertEqual(origin.requestedRanges, [4096, 4106, 4095])
+    }
+
+    func testGzipsBodyEncodesTheBodyAndItsContentLengthIsTheEncodedSize() async throws {
+        let (origin, body) = try start(bodyBytes: 70_000)
+        origin.gzipsBody = true
+        let (data, _) = try await respond(origin.url, headers: ["Accept-Encoding": "gzip"])
+        XCTAssertEqual(data, body, "URLSession inflates a gzip body, and the inflated bytes are the plain ones")
+        let encoded = LoopbackMediaServer.gzip(body)
+        XCTAssertGreaterThan(encoded.count, body.count, "stored blocks: the declared length cannot match the plain one")
+        XCTAssertEqual(Array(encoded.prefix(3)), [0x1f, 0x8b, 8])
+    }
+
+    func testEtagIsSentAndIfRangeIsHonouredAgainstTheCurrentTag() async throws {
+        let (origin, body) = try start(bodyBytes: 4096)
+        origin.etag = "\"v1\""
+        let (first, response) = try await respond(origin.url, headers: ["Range": "bytes=1000-"])
+        XCTAssertEqual(response.statusCode, 206)
+        XCTAssertEqual(response.value(forHTTPHeaderField: "ETag"), "\"v1\"")
+        XCTAssertEqual(first, body.suffix(from: 1000))
+
+        let (matched, matchedResponse) = try await respond(origin.url, headers: ["Range": "bytes=1000-", "If-Range": "\"v1\""])
+        XCTAssertEqual(matchedResponse.statusCode, 206)
+        XCTAssertEqual(matched, body.suffix(from: 1000))
+
+        // The resource changed: the same validator now buys the whole new body, not a range of it.
+        let changed = Data(body.reversed())
+        origin.body = changed
+        origin.etag = "\"v2\""
+        let (stale, staleResponse) = try await respond(origin.url, headers: ["Range": "bytes=1000-", "If-Range": "\"v1\""])
+        XCTAssertEqual(staleResponse.statusCode, 200)
+        XCTAssertNil(staleResponse.value(forHTTPHeaderField: "Content-Range"))
+        XCTAssertEqual(staleResponse.value(forHTTPHeaderField: "ETag"), "\"v2\"")
+        XCTAssertEqual(stale, changed)
+    }
+
+    func testEtagsServeOneTagPerRequestAndTheLastForever() async throws {
+        let (origin, _) = try start(bodyBytes: 1024)
+        origin.etags = ["\"a\"", "\"b\""]
+        var seen: [String?] = []
+        for _ in 0..<3 {
+            seen.append(try await respond(origin.url, headers: [:]).1.value(forHTTPHeaderField: "ETag"))
+        }
+        XCTAssertEqual(seen, ["\"a\"", "\"b\"", "\"b\""])
+    }
 }

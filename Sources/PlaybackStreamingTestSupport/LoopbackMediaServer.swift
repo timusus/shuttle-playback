@@ -39,7 +39,43 @@ public final class LoopbackMediaServer: @unchecked Sendable {
     private var _outageAfterClose: TimeInterval?
     private var _contentLengthLie: Int?
     private var _refusesRequestsUntil: Date?
+    private var _answers416AtOrAfterEnd = false
+    private var _gzipsBody = false
+    private var _etag: String?
+    private var _etags: [String]?
     private var connections: [NWConnection] = []
+
+    /// Answer `416 Range Not Satisfiable` (with `Content-Range: bytes */<total>`) to a request
+    /// whose range starts at or after the end of the body, as a strict origin does, instead of
+    /// clamping it to the last byte. The resume of a download that was in fact already complete.
+    public var answers416AtOrAfterEnd: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _answers416AtOrAfterEnd }
+        set { lock.lock(); _answers416AtOrAfterEnd = newValue; lock.unlock() }
+    }
+
+    /// Send every body gzip-encoded (`Content-Encoding: gzip`). The declared `Content-Length` is
+    /// the encoded size, so it no longer matches the bytes the client ends up with. The range
+    /// still names offsets of the plain body; the slice it selects is what is encoded.
+    public var gzipsBody: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _gzipsBody }
+        set { lock.lock(); _gzipsBody = newValue; lock.unlock() }
+    }
+
+    /// A strong `ETag` on every response, e.g. `"v1"` (quotes included). A request carrying
+    /// `If-Range` is honoured: a range is served only while the validator matches the current
+    /// tag, otherwise the whole current body answers `200`, as RFC 9110 says. Swap ``body`` and
+    /// this together to change the resource between a download and its resume.
+    public var etag: String? {
+        get { lock.lock(); defer { lock.unlock() }; return _etag }
+        set { lock.lock(); _etag = newValue; _etags = nil; lock.unlock() }
+    }
+
+    /// One `ETag` per request, in order; the last serves every request after it. The counterpart
+    /// of ``bodies`` for a validator that changes between a client's response and its reconnect.
+    public var etags: [String]? {
+        get { lock.lock(); defer { lock.unlock() }; return _etags }
+        set { lock.lock(); _etags = newValue; lock.unlock() }
+    }
 
     /// Drip every response body at this many bytes per second instead of writing it at once: a
     /// link slower (or faster) than the media plays. The header goes out at once; the body follows
@@ -391,15 +427,22 @@ public final class LoopbackMediaServer: @unchecked Sendable {
         }
         lock.lock()
         let body = _bodies.map { $0[min(_requestedRanges.count, $0.count - 1)] } ?? _body
+        let etag = _etags.map { $0[min(_requestedRanges.count, $0.count - 1)] } ?? _etag
+        let gzips = _gzipsBody
+        let strict416 = _answers416AtOrAfterEnd
         lock.unlock()
         let range = Self.parseRange(head, total: Int64(body.count))
+        let rawStart = Self.rawRangeStart(head)
+        let unsatisfiable = strict416 && rawStart.map { $0 >= Int64(body.count) } == true
+        // `If-Range` is a validator for the range: stale, the range is dropped for the whole body.
+        let staleValidator = Self.parseHeader(head, "if-range").map { $0 != etag } ?? false
         lock.lock()
-        _requestedRanges.append(range.lowerBound)
+        _requestedRanges.append(unsatisfiable ? rawStart ?? range.lowerBound : range.lowerBound)
         _requestHeads.append(head)
         var delay = range.lowerBound == 0 ? _delayForOffsetZero : 0
         if let held = _delayForRangeStartingAt, held.offset == range.lowerBound { delay = held.seconds }
         delay = max(delay, _delayForEveryRange)
-        let wholeBody = _respondsWholeBodyIgnoringRange
+        let wholeBody = _respondsWholeBodyIgnoringRange || staleValidator
         let omitsLength = _omitsContentLength
         let shouldFail = _failNextRequest
         if shouldFail { _failNextRequest = false }
@@ -425,6 +468,12 @@ public final class LoopbackMediaServer: @unchecked Sendable {
             return
         }
 
+        if unsatisfiable {
+            let header = "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */\(body.count)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            connection.send(content: Data(header.utf8), completion: .contentProcessed { _ in connection.cancel() })
+            return
+        }
+
         if let page, Self.parseHost(head) == page.host {
             let header = Data("HTTP/1.1 200 OK\r\nContent-Type: \(page.contentType)\r\nContent-Length: \(page.body.count)\r\nConnection: close\r\n\r\n".utf8)
             if let firstChunkBytes = page.firstChunkBytes, firstChunkBytes < page.body.count {
@@ -446,7 +495,8 @@ public final class LoopbackMediaServer: @unchecked Sendable {
             return
         }
 
-        let slice = wholeBody ? body : body.subdata(in: Int(range.lowerBound)..<Int(range.upperBound + 1))
+        let plainSlice = wholeBody ? body : body.subdata(in: Int(range.lowerBound)..<Int(range.upperBound + 1))
+        let slice = gzips ? Self.gzip(plainSlice) : plainSlice
         var header: String
         if wholeBody {
             header = "HTTP/1.1 200 OK\r\n"
@@ -458,6 +508,8 @@ public final class LoopbackMediaServer: @unchecked Sendable {
             header += "Accept-Ranges: bytes\r\n"
             header += "Content-Range: bytes \(range.lowerBound)-\(range.upperBound)/\(body.count)\r\n"
         }
+        if let etag { header += "ETag: \(etag)\r\n" }
+        if gzips { header += "Content-Encoding: gzip\r\n" }
         if !omitsLength { header += "Content-Length: \(slice.count)\r\n" }
         header += "Connection: close\r\n\r\n"
         if let heldAfter, heldAfter < slice.count {
@@ -603,6 +655,44 @@ public final class LoopbackMediaServer: @unchecked Sendable {
         let parts = path.split(separator: "/")
         guard parts.count >= 2, parts[0] == "redirect" else { return nil }
         return Int(parts[1])
+    }
+
+    /// The value of header `name` (lowercase), or nil when the request carries none.
+    static func parseHeader(_ head: String, _ name: String) -> String? {
+        for line in head.split(separator: "\r\n") where line.lowercased().hasPrefix("\(name):") {
+            return line.dropFirst(name.count + 1).trimmingCharacters(in: .whitespaces)
+        }
+        return nil
+    }
+
+    /// The start of a `Range` header as sent, before any clamping; nil when there is none.
+    static func rawRangeStart(_ head: String) -> Int64? {
+        guard let spec = parseHeader(head, "range")?.split(separator: "=").last else { return nil }
+        return Int64(spec.split(separator: "-", omittingEmptySubsequences: false).first ?? "")
+    }
+
+    /// `data` as a gzip stream of stored (uncompressed) deflate blocks: valid to any inflater,
+    /// larger than its input, and needing no compressor.
+    public static func gzip(_ data: Data) -> Data {
+        var out = Data([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff])
+        var offset = 0
+        repeat {
+            let count = min(0xffff, data.count - offset)
+            let last: UInt8 = offset + count >= data.count ? 1 : 0
+            out.append(contentsOf: [last, UInt8(count & 0xff), UInt8(count >> 8), UInt8(~count & 0xff), UInt8((~count >> 8) & 0xff)])
+            out.append(data[data.startIndex + offset ..< data.startIndex + offset + count])
+            offset += count
+        } while offset < data.count
+        var crc: UInt32 = 0xffff_ffff
+        for byte in data {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 { crc = crc & 1 == 1 ? (crc >> 1) ^ 0xedb8_8320 : crc >> 1 }
+        }
+        crc = ~crc
+        for shift in stride(from: 0, to: 32, by: 8) { out.append(UInt8((crc >> UInt32(shift)) & 0xff)) }
+        let size = UInt32(truncatingIfNeeded: data.count)
+        for shift in stride(from: 0, to: 32, by: 8) { out.append(UInt8((size >> UInt32(shift)) & 0xff)) }
+        return out
     }
 
     /// `bytes=a-b`, `bytes=a-`, or no header at all (the whole body).
