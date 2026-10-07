@@ -113,6 +113,11 @@ Notes:
   cancelled for a look at the tail.
 - **The source writes to `GrowingFileStore.shared`**, a directory under `Caches`. Pass your own store
   with `store:`. Call `sweepPartials()` on the store at launch to remove leftovers from a killed run.
+- **Bound the cache per owner with one store each.** `shared` is one 1 GiB LRU, so a large music
+  library can push podcast episodes out of it. Give each owner its own store, for example
+  `GrowingFileStore(directory: caches.appendingPathComponent("growing-music"), budgetBytes: 4 << 30)`,
+  and pass it as `store:`. Eviction, the low-disk clear and `sweepPartials()` touch only that store's
+  directory, so use a distinct directory per store and look a URL up in the store that played it.
 - **A completed download is cached.** Before streaming a URL, ask the store:
   `GrowingFileStore.shared.completedFile(for: url)`. If it returns a file, play that with
   `FileByteReader` and skip the network.

@@ -87,7 +87,9 @@ protocol and calls it from its own `onEvent` closure and player code. The requir
 | `temporary()` | A store in a fresh temporary directory. |
 | `completedFile(for:)` | The cached complete file for a URL, or nil. |
 | `sweepPartials()` | Removes `.partial` files left by a killed run. Returns the count. |
-| `evict(toBudget:excluding:)` | Removes least recently played files until under the budget. The default budget is 1 GiB. |
+| `init(directory:budgetBytes:)` | A store over its own directory with its own complete-file budget (default `GrowingFileStore.budgetBytes`, 1 GiB). Stores with different directories never see or evict each other's files. |
+| `budget` | This store's ceiling. |
+| `evict(toBudget:excluding:)` | Removes least recently played files of this store until under `toBudget`, by default the store's `budget`. |
 
 ## `LoopbackMediaServer`
 

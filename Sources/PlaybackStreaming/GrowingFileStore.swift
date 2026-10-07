@@ -19,7 +19,8 @@ private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback
 /// write with `ENOSPC` at the byte it chooses.
 public final class GrowingFileStore {
 
-    /// The complete-file cache's ceiling, as the removed `CachedRunStore` had. A constant, not a setting.
+    /// The default complete-file cache ceiling, as the removed `CachedRunStore` had. A store takes its
+    /// own with `init(directory:budgetBytes:)`; each store evicts only the files in its own directory.
     public static let budgetBytes: Int64 = 1024 * 1024 * 1024
     /// Free space a transaction leaves beyond its own bytes before the cache is evicted to make room.
     static let headroomBytes: Int64 = 200 * 1024 * 1024
@@ -40,18 +41,24 @@ public final class GrowingFileStore {
     }
 
     public let directory: URL
+    /// This store's complete-file ceiling; ``budgetBytes`` unless set at init.
+    public let budget: Int64
     let write: WriteFunction
     private let availableCapacity: () -> Int64?
 
     /// - Parameters:
+    ///   - budgetBytes: the ceiling of this store's complete-file cache. Give each owner (a podcast
+    ///     library, a music library) a store of its own directory and budget so one cannot evict the other.
     ///   - write: how body bytes reach the disk; `pwrite` but in a test.
     ///   - availableCapacity: free bytes for important usage on the volume; the real query when nil.
     public init(
         directory: URL,
+        budgetBytes: Int64 = GrowingFileStore.budgetBytes,
         write: @escaping WriteFunction = { Foundation.pwrite($0, $1, $2, $3) },
         availableCapacity: (() -> Int64?)? = nil
     ) {
         self.directory = directory
+        self.budget = budgetBytes
         self.write = write
         self.availableCapacity = availableCapacity ?? {
             let values = try? directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
@@ -147,11 +154,12 @@ public final class GrowingFileStore {
         return complete
     }
 
-    /// Deletes the least recently played complete files until the rest fit `budget`, never the
+    /// Deletes the least recently played complete files until the rest fit `limit` (the store's ``budget`` when nil), never the
     /// one for `excluding`. Returns how many were deleted.
     @discardableResult
-    public func evict(toBudget budget: Int64 = GrowingFileStore.budgetBytes, excluding: URL? = nil) -> Int {
+    public func evict(toBudget limit: Int64? = nil, excluding: URL? = nil) -> Int {
         let kept = excluding.map { completedURL(for: $0).lastPathComponent }
+        let budget = limit ?? self.budget
         let cached = files(withExtension: "audio").sorted { $0.modified < $1.modified }
         var total = cached.reduce(0) { $0 + $1.bytes }
         var evicted = 0

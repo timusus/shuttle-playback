@@ -62,6 +62,36 @@ final class GrowingFileStoreTests: XCTestCase {
         XCTAssertEqual(store.evict(toBudget: 900), 0, "under budget: nothing goes")
     }
 
+    func testDefaultBudgetIsOneGiBAndEvictUsesTheStoresOwn() throws {
+        XCTAssertEqual(GrowingFileStore(directory: directory).budget, 1024 * 1024 * 1024)
+        let store = GrowingFileStore(directory: directory, budgetBytes: 900)
+        XCTAssertEqual(store.budget, 900)
+        try cached(store, URL(string: "https://example.com/1.mp3")!, bytes: 400, ageHours: 3)
+        try cached(store, URL(string: "https://example.com/2.mp3")!, bytes: 400, ageHours: 2)
+        try cached(store, URL(string: "https://example.com/3.mp3")!, bytes: 400, ageHours: 1)
+        XCTAssertEqual(store.evict(), 1)
+        XCTAssertNil(store.completedFile(for: URL(string: "https://example.com/1.mp3")!))
+    }
+
+    func testFillingOneOwnersBudgetNeverEvictsAnotherOwnersFiles() throws {
+        let podcasts = GrowingFileStore(directory: directory.appendingPathComponent("podcasts"), budgetBytes: 1000)
+        let music = GrowingFileStore(directory: directory.appendingPathComponent("music"), budgetBytes: 500)
+        let episode = URL(string: "https://example.com/episode.mp3")!
+        let tracks = (1...4).map { URL(string: "https://example.com/\($0).flac")! }
+        try cached(podcasts, episode, bytes: 400, ageHours: 100)
+        for (index, track) in tracks.enumerated() {
+            try cached(music, track, bytes: 300, ageHours: Double(10 - index))
+        }
+
+        XCTAssertEqual(music.evict(), 3)
+        XCTAssertNotNil(music.completedFile(for: tracks[3]))
+        XCTAssertNil(music.completedFile(for: tracks[0]))
+        XCTAssertNotNil(podcasts.completedFile(for: episode), "the older podcast file survives the music store's eviction")
+
+        music.makeRoom(forBytes: Int64.max / 2)
+        XCTAssertNotNil(podcasts.completedFile(for: episode), "the low-disk clear is scoped to its own store")
+    }
+
     func testLaunchSweepDeletesEveryPartialAndKeepsTheCache() throws {
         let store = GrowingFileStore(directory: directory)
         _ = try store.makePartial()
