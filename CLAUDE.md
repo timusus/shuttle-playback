@@ -10,7 +10,7 @@ Full documentation (architecture, decisions, integration, FFmpeg, testing) is in
 
 | Product | Target(s) | What it is |
 |---|---|---|
-| `PlaybackDecode` | `PlaybackDecode`, `CStreamDecode` | `FFmpegStreamDecoder`: pull decoder over a `StreamByteReader`, Float32 interleaved at the source rate, seekable, cancellable. `FileByteReader` is the plain-file reader. Probe budget is `StreamProbeBudget` (default 64 KiB / 1 s). |
+| `PlaybackDecode` | `PlaybackDecode`, `CStreamDecode` | `FFmpegStreamDecoder`: pull decoder over a `StreamByteReader`, Float32 interleaved at the source rate (or a fixed rate and channel count from `setOutputFormat`), via `nextChunk()` or the buffer-filling `read(into:maxFrames:)`, seekable, cancellable. `FileByteReader` is the plain-file reader. Probe budget is `StreamProbeBudget` (default 64 KiB / 1 s). |
 | `PlaybackStreaming` | `PlaybackStreaming` | Opt-in network byte source: `GrowingFileByteSource` (a `StreamByteReader` over an HTTP(S) URL that writes to a growing file and retries/resumes from the frontier: `DownloadRetry`, `GrowingFileReadRule`), `GrowingFileStore`, `GrowingFileSnapshot` and `GrowingFileListener`. Depends on `PlaybackDecode`; a decode-only consumer never links it. Auth headers arrive resolved; no feed or podcast concept lives here. |
 | `PlaybackStreamingTestSupport` | `PlaybackStreamingTestSupport` | `LoopbackMediaServer`, no fixtures. Tests of the streaming target are in `PlaybackStreamingTests` (own two tone fixtures). |
 | `FFmpeg` | `CFFmpeg` (binary) | The static FFmpeg. For an app with its own C against libavformat (Podcasts' scanner decode). An app links exactly one FFmpeg. |

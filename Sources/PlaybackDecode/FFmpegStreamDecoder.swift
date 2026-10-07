@@ -5,7 +5,8 @@ import Foundation
 
 /// What the container says about the audio behind a ``StreamByteReader``.
 public struct StreamAudioFormat: Equatable {
-    /// The SOURCE's rate. The player runs at it; nothing here resamples.
+    /// The SOURCE's rate. The output's too, unless
+    /// ``FFmpegStreamDecoder/setOutputFormat(sampleRate:channelCount:)`` fixed another.
     public let sampleRate: Double
     public let channelCount: Int
     /// From the container (`AVFormatContext.duration`: MP4's sample table, MP3's Xing TOC, or
@@ -75,11 +76,11 @@ public enum StreamDecoderError: Error, Equatable, CustomStringConvertible {
 
 /// **The playback decoder: encoded bytes in, interleaved float32 out, a chunk at a time.**
 ///
-/// It produces what a *player* schedules — the source's own rate and channel count — over a reader
-/// that may block. Nothing here resamples or mixes down; a consumer that needs PCM in another shape
-/// converts it itself.
+/// It produces what a *player* schedules over a reader that may block: the source's own rate and
+/// channel count, or, after ``setOutputFormat(sampleRate:channelCount:)``, one fixed format for a
+/// player that runs a single graph across tracks.
 ///
-/// Not thread-safe. One thread calls `open`, `seek` and `nextChunk`; ``cancel()`` and
+/// Not thread-safe. One thread calls `open`, `seek`, `nextChunk` and `read`; ``cancel()`` and
 /// ``interrupt()`` are the two calls allowed from another thread. `cancel` turns a stalled network
 /// read into a clean end; `interrupt` brings it back so a seek can be applied and leaves the
 /// decoder usable.
@@ -116,6 +117,10 @@ public final class FFmpegStreamDecoder {
     private var reason: EndReason = .running
     private var framesRead: Int64 = 0
     private var chunk: [Float] = []
+    /// What ``nextChunk()`` and ``read(into:maxFrames:)`` hand out: the source's rate and channels
+    /// until ``setOutputFormat(sampleRate:channelCount:)``.
+    private var outputRate: Double = 0
+    private var outputChannels: Int = 0
     private let probeBudget: StreamProbeBudget
     #if canImport(CStreamDecode)
         private var handle: OpaquePointer?
@@ -135,8 +140,9 @@ public final class FFmpegStreamDecoder {
 
     public var endReason: EndReason { reason }
 
-    /// Frames of *media* handed to the caller so far. Media time, not wall time: position is this
-    /// divided by the sample rate, which is why silence a later effect drops never moves it.
+    /// Frames of *media* handed to the caller so far, at the output rate. Media time, not wall time:
+    /// position is this divided by the output rate, which is why silence a later effect drops never
+    /// moves it.
     public var mediaFramesRead: Int64 { framesRead }
 
     /// Bytes the reader has been asked for. The bandwidth number the `moov`-at-end test asserts on.
@@ -201,6 +207,8 @@ public final class FFmpegStreamDecoder {
                 container: Self.string(from: &info.container_name, capacity: 64)
             )
             self.format = format
+            outputRate = format.sampleRate
+            outputChannels = format.channelCount
             chunk = [Float](repeating: 0, count: Self.framesPerChunk * max(format.channelCount, 1))
             return format
         #else
@@ -229,7 +237,7 @@ public final class FFmpegStreamDecoder {
             switch status {
             case Int32(STREAM_DECODE_OK.rawValue):
                 reason = .running
-                framesRead = Int64((landed * (format?.sampleRate ?? 0)).rounded())
+                framesRead = Int64((landed * outputRate).rounded())
                 return landed
             case Int32(STREAM_DECODE_EOF.rawValue):
                 reason = .eof
@@ -246,6 +254,56 @@ public final class FFmpegStreamDecoder {
             }
         #else
             throw StreamDecoderError.unavailable
+        #endif
+    }
+
+    /// Convert everything read from here on to `sampleRate` Hz and `channelCount` channels.
+    ///
+    /// For a player that runs one fixed format across tracks, so two sources of different rates
+    /// can be scheduled back to back on one node (gapless playback). More channels are downmixed by
+    /// swresample's default matrix (5.1 to stereo, stereo to mono); mono is duplicated to every
+    /// channel at full level.
+    ///
+    /// Call after ``open()`` and before the first read or seek; it may be called again in that
+    /// window, and throws ``StreamDecoderError/invalidState(_:)`` after it, or for a rate or
+    /// channel count <= 0. The format ``open()`` returned keeps describing the source. Seeks still
+    /// land on the requested sample and return media seconds; ``mediaFramesRead`` counts output
+    /// frames.
+    public func setOutputFormat(sampleRate: Double, channelCount: Int) throws {
+        #if canImport(CStreamDecode)
+            guard let handle else { throw StreamDecoderError.invalidState("not open") }
+            let rate = sampleRate.rounded()
+            guard rate >= 1, rate <= Double(Int32.max), channelCount > 0, channelCount <= Int(Int32.max) else {
+                throw StreamDecoderError.invalidState("output format \(sampleRate) Hz, \(channelCount) channels")
+            }
+            let status = stream_decoder_set_output(handle, Int32(rate), Int32(channelCount))
+            switch status {
+            case Int32(STREAM_DECODE_OK.rawValue):
+                outputRate = rate
+                outputChannels = channelCount
+                chunk = [Float](repeating: 0, count: Self.framesPerChunk * channelCount)
+            case Int32(STREAM_DECODE_ERR_ARGS.rawValue):
+                throw StreamDecoderError.invalidState("output format set after the first read or seek")
+            default:
+                throw StreamDecoderError.failed(status: status)
+            }
+        #else
+            throw StreamDecoderError.unavailable
+        #endif
+    }
+
+    /// Read up to `maxFrames` interleaved frames straight into `buffer`, which holds `maxFrames`
+    /// times the output channel count floats. Returns the frames written; 0 means the stream ended
+    /// and ``endReason`` says why, exactly as nil does for ``nextChunk()``.
+    ///
+    /// The same samples as ``nextChunk()``, without a per-chunk allocation: a real-time pull fills
+    /// the player's own buffer. The two may be mixed on one decoder.
+    public func read(into buffer: UnsafeMutablePointer<Float>, maxFrames: Int) -> Int {
+        #if canImport(CStreamDecode)
+            guard let handle, format != nil, reason == .running, maxFrames > 0 else { return 0 }
+            return readFrames(handle, into: buffer, maxFrames: Int32(clamping: maxFrames))
+        #else
+            return 0
         #endif
     }
 
@@ -272,12 +330,24 @@ public final class FFmpegStreamDecoder {
     /// the end would mark the item played and move the listener on.
     public func nextChunk() -> [Float]? {
         #if canImport(CStreamDecode)
-            guard let handle, let format, reason == .running else { return nil }
-            var frames: Int32 = 0
-            let status = chunk.withUnsafeMutableBufferPointer { buffer -> Int32 in
-                guard let base = buffer.baseAddress else { return Int32(STREAM_DECODE_ERR_ARGS.rawValue) }
-                return stream_decoder_read(handle, base, Int32(Self.framesPerChunk), &frames)
+            guard let handle, format != nil, reason == .running else { return nil }
+            let frames = chunk.withUnsafeMutableBufferPointer { buffer -> Int in
+                guard let base = buffer.baseAddress else { return 0 }
+                return readFrames(handle, into: base, maxFrames: Int32(Self.framesPerChunk))
             }
+            guard frames > 0 else { return nil }
+            let count = frames * outputChannels
+            return count == chunk.count ? chunk : Array(chunk[0..<count])
+        #else
+            return nil
+        #endif
+    }
+
+    #if canImport(CStreamDecode)
+        /// The one `stream_decoder_read` call: frames written, or 0 with ``endReason`` set.
+        private func readFrames(_ handle: OpaquePointer, into buffer: UnsafeMutablePointer<Float>, maxFrames: Int32) -> Int {
+            var frames: Int32 = 0
+            let status = stream_decoder_read(handle, buffer, maxFrames, &frames)
             guard status == Int32(STREAM_DECODE_OK.rawValue), frames > 0 else {
                 switch status {
                 case Int32(STREAM_DECODE_EOF.rawValue): reason = .eof
@@ -285,15 +355,12 @@ public final class FFmpegStreamDecoder {
                 case Int32(STREAM_DECODE_ERR_INTERRUPTED.rawValue): reason = .interrupted
                 default: reason = .failure
                 }
-                return nil
+                return 0
             }
             framesRead += Int64(frames)
-            let count = Int(frames) * format.channelCount
-            return count == chunk.count ? chunk : Array(chunk[0..<count])
-        #else
-            return nil
-        #endif
-    }
+            return Int(frames)
+        }
+    #endif
 
     /// Abort the decode from any thread. Unblocks a reader that is waiting on the network; the
     /// pull loop then returns nil with ``endReason`` `.cancelled`.

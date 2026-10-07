@@ -9,7 +9,7 @@ works as it does, see [Architecture](architecture.md).
 |---|---|---|
 | `StreamByteReader` | PlaybackDecode | Protocol: blocking, seekable bytes. |
 | `FileByteReader` | PlaybackDecode | Reader over a local file. `reportsTotalLength: false` imitates a chunked response. |
-| `FFmpegStreamDecoder` | PlaybackDecode | `open()`, `seek(toSeconds:)`, `nextChunk()`, `cancel()`, `interrupt()`, `endReason`, `mediaFramesRead`, `bytesConsumed`. |
+| `FFmpegStreamDecoder` | PlaybackDecode | `open()`, `setOutputFormat(sampleRate:channelCount:)`, `seek(toSeconds:)`, `nextChunk()`, `read(into:maxFrames:)`, `cancel()`, `interrupt()`, `endReason`, `mediaFramesRead`, `bytesConsumed`. |
 | `StreamAudioFormat` | PlaybackDecode | Sample rate, channel count, duration (`nil` if unknown), codec name, container name. |
 | `StreamProbeBudget` | PlaybackDecode | Probe bytes and analysis time. Default 64 KiB and 1 s. |
 | `StreamDecoderError` | PlaybackDecode | `unavailable`, `invalidState`, `failed(status:)`, `cancelled`, `interrupted`. |
@@ -36,16 +36,18 @@ build of this package.
 | Member | Behaviour |
 |---|---|
 | `init(reader:probeBudget:)` | The budget defaults to `StreamProbeBudget.default`. |
-| `open()` | Blocks. Returns a `StreamAudioFormat` or throws `StreamDecoderError`. |
-| `nextChunk()` | Blocks. Returns up to `framesPerChunk` (4096) frames of interleaved Float32 at the source rate, or nil. |
-| `seek(toSeconds:)` | Returns the landed time: the requested sample, or an estimate in a VBR MP3 far from a frame of known time. If the stream ended at the target it returns normally and `endReason` is `.eof`. |
+| `open()` | Blocks. Returns a `StreamAudioFormat` (the source's) or throws `StreamDecoderError`. |
+| `setOutputFormat(sampleRate:channelCount:)` | Optional. Fixes the output rate and channel count for everything read afterwards: swresample resamples, downmixes by its default matrix (5.1 to stereo, stereo to mono) and duplicates mono to every channel at full level. Only between `open()` and the first read or seek; may be called again in that window. Throws `invalidState` after it, before `open()`, or for a rate or channel count <= 0. |
+| `nextChunk()` | Blocks. Returns up to `framesPerChunk` (4096) frames of interleaved Float32 at the output format (the source's unless set), or nil. |
+| `read(into:maxFrames:)` | Blocks. Fills a caller buffer of `maxFrames` × output channels floats and returns the frames written, or 0 where `nextChunk()` returns nil. The same samples as `nextChunk()` without an allocation per call; the two may be mixed. |
+| `seek(toSeconds:)` | Returns the landed time in media seconds: the requested sample, or an estimate in a VBR MP3 far from a frame of known time. At a non-native output rate the first frame after it is within one output frame of that time (the resampler restarts at the landing). If the stream ended at the target it returns normally and `endReason` is `.eof`. |
 | `cancel()` | Any thread. Ends the stream for good. |
 | `interrupt()` | Any thread. Ends only the blocked call. Cleared by the next `seek(toSeconds:)`. |
 | `endReason` | `.running`, `.eof`, `.failure`, `.cancelled` or `.interrupted`. |
-| `mediaFramesRead` | Media time in frames. After a seek it is set from the landed time. |
+| `mediaFramesRead` | Media time in frames at the output rate. After a seek it is set from the landed time. |
 | `bytesConsumed` | Bytes the decoder has taken from the reader. |
 
-One thread drives a decoder. `open()` and `nextChunk()` block.
+One thread drives a decoder. `open()`, `nextChunk()` and `read(into:maxFrames:)` block.
 
 ## `GrowingFileByteSource`
 

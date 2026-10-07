@@ -3,9 +3,10 @@
  *
  * It takes a *byte reader* — a file, or an HTTP range transaction that may block for a second —
  * and hands back the source's OWN rate and channel count, interleaved float32, a chunk at a time,
- * seekably, cancellably. That is what a player schedules; resampling it would be a second, lossy,
- * pointless conversion. Position is media time: after a seek it comes from the decoded frames'
- * timestamps, not from the request.
+ * seekably, cancellably. That is what a player that follows each source schedules; resampling it
+ * would be a second, lossy, pointless conversion. A player that runs one fixed format across
+ * tracks asks for it with `stream_decoder_set_output` instead. Position is media time: after a
+ * seek it comes from the decoded frames' timestamps, not from the request.
  *
  * THE SEEK CALLBACK IS NOT OPTIONAL. With a read callback alone `pb->seekable` is 0, and
  * libavformat's `mov` demuxer then read-discards the entire `mdat` to reach a trailing `moov`
@@ -65,7 +66,7 @@ typedef struct {
 
 /** What the container says about the audio, filled in by `stream_decoder_open`. */
 typedef struct {
-    int    sample_rate;      /* the SOURCE's rate; the player runs at it */
+    int    sample_rate;      /* the SOURCE's rate; the output's unless `stream_decoder_set_output` */
     int    channel_count;
     double duration_sec;     /* 0 when the container does not know (AV_NOPTS_VALUE) */
     char   codec_name[32];   /* "mp3", "aac", ... */
@@ -129,13 +130,30 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
 int stream_decoder_seek(StreamDecoder *decoder, double seconds, double *landed_seconds);
 
 /**
- * Fill `out` with up to `max_frames` frames of interleaved float32 in [-1, 1] at the source's rate
- * and channel count. `out` must hold `max_frames * info.channel_count` floats.
+ * Fill `out` with up to `max_frames` frames of interleaved float32 in [-1, 1] at the output rate
+ * and channel count: the source's (`info`), unless `stream_decoder_set_output` fixed another. `out`
+ * must hold `max_frames` times the output channel count floats.
  *
  * Writes the frame count to `frames`. Zero frames is not by itself an error: the status says
  * whether it was `STREAM_DECODE_EOF`, a cancel, or an IO failure. Returns a `StreamDecodeStatus`.
  */
 int stream_decoder_read(StreamDecoder *decoder, float *out, int max_frames, int *frames);
+
+/**
+ * Convert everything this decoder hands out to `sample_rate` Hz and `channels` channels, for a
+ * player that runs one fixed format across tracks (gapless playback on one graph). swresample
+ * resamples and remixes: more channels are downmixed by its default matrix (5.1 to stereo, stereo
+ * to mono), and mono is duplicated to every output channel at full level.
+ *
+ * Call after open and before the first `stream_decoder_read` or `stream_decoder_seek`; it may be
+ * called again in that window. Afterwards it is refused with `STREAM_DECODE_ERR_ARGS`, as is a
+ * rate or channel count <= 0, and a format swresample cannot build returns
+ * `STREAM_DECODE_ERR_RESAMPLE` and leaves the output as it was.
+ *
+ * `info` keeps describing the SOURCE. A seek's landed time stays in media seconds, whatever the
+ * output rate; it is still sample-accurate, to one output frame.
+ */
+int stream_decoder_set_output(StreamDecoder *decoder, int sample_rate, int channels);
 
 /** Bytes the reader has been asked for since the decoder opened. Diagnostics and tests only. */
 int64_t stream_decoder_position_bytes(const StreamDecoder *decoder);

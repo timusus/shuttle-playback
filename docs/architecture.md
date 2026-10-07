@@ -63,9 +63,9 @@ flowchart LR
     A["Custom AVIOContext<br/>read, seek, size callbacks<br/>ID3v2 offset hidden"]
     D["libavformat demuxer<br/>mp3, aac, mov, ogg"]
     C["libavcodec decoder<br/>one thread"]
-    S["libswresample<br/>sample format only"]
+    S["libswresample<br/>sample format, or the fixed output format"]
     P["pending buffer"]
-    O["nextChunk<br/>4096 frames of interleaved Float32"]
+    O["nextChunk or read(into:)<br/>interleaved Float32"]
 
     R --> B --> A --> D -->|packets| C -->|frames| S --> P --> O
 ```
@@ -86,9 +86,12 @@ How the pieces behave:
   carry megabytes of tag, and FFmpeg's MP3 demuxer reads all of it. The decoder reads the tag
   headers itself, seeks past them, and gives FFmpeg an offset-0 that is the first MPEG frame. The
   AVIO callbacks translate offsets, so the reader always sees real file offsets.
-- **Output is at the source's own rate and channel count.** The resampler is configured with the same
-  rate and channel layout in and out. It only interleaves and converts whatever sample format the
-  codec produced to Float32. Nothing is resampled.
+- **Output is at the source's own rate and channel count**, unless the caller fixed a format with
+  `setOutputFormat(sampleRate:channelCount:)`. By default the resampler has the same rate and channel
+  layout in and out, and only interleaves and converts whatever sample format the codec produced to
+  Float32; it resamples only a stream whose rate changes mid-way, back to the rate it opened with.
+  With a fixed format it resamples and remixes every frame to it, and the seek's discard of the
+  frames before the target is counted at the output rate.
 - **A chunk is `framesPerChunk` = 4096 frames.** About 93 ms at 44.1 kHz. Decoded audio that does not
   fit the chunk stays in the pending buffer for the next call.
 

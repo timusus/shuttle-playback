@@ -55,6 +55,31 @@ thread of your own, not the main thread. One thread drives a decoder.
 The output is Float32 at the file's own sample rate. Nothing is resampled, so an `AVAudioEngine` graph
 or other renderer should run at `format.sampleRate`.
 
+## Decode to a fixed format
+
+A player that runs one graph at one format across tracks (gapless playback, where two files of
+different rates play back to back on one node) asks the decoder for that format instead, after
+`open()` and before the first read or seek:
+
+```swift
+let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: fileURL))
+let source = try decoder.open()                          // still describes the file
+try decoder.setOutputFormat(sampleRate: 48000, channelCount: 2)
+
+let buffer = UnsafeMutablePointer<Float>.allocate(capacity: 4096 * 2)
+defer { buffer.deallocate() }
+while true {
+    let frames = decoder.read(into: buffer, maxFrames: 4096)
+    if frames == 0 { break }   // check decoder.endReason, exactly as for nextChunk() returning nil
+    // `frames` interleaved stereo frames at 48 kHz in `buffer`
+}
+```
+
+The decoder resamples, downmixes more channels by swresample's default matrix and spreads mono to
+both sides at full level. `read(into:maxFrames:)` hands out the same samples as `nextChunk()` without
+allocating; `nextChunk()` also returns the fixed format. A seek still returns media seconds, and
+`mediaFramesRead` counts frames at the output rate.
+
 Always check `endReason` after `nextChunk()` returns nil. A nil from a network failure is not the end
 of the stream.
 
