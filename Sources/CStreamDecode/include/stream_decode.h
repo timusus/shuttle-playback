@@ -71,6 +71,7 @@ typedef struct {
     double duration_sec;     /* 0 when the container does not know (AV_NOPTS_VALUE) */
     char   codec_name[32];   /* "mp3", "aac", ... */
     char   container_name[64];
+    int    skipped_probe;    /* 1 when the header sufficed and `avformat_find_stream_info` was skipped */
 } StreamAudioInfo;
 
 typedef struct StreamDecoder StreamDecoder;
@@ -98,6 +99,8 @@ StreamDecoder *stream_decoder_open(const StreamDecodeCallbacks *callbacks,
 typedef struct {
     int64_t probe_bytes;              /* AVFormatContext.probesize */
     int64_t max_analyze_duration_us;  /* AVFormatContext.max_analyze_duration, AV_TIME_BASE units */
+    int     force_probe;              /* nonzero: always run `avformat_find_stream_info`, even for FLAC,
+                                       * ALAC and PCM WAV/AIFF whose header describes the stream */
 } StreamDecodeOptions;
 
 /**

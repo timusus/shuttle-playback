@@ -122,14 +122,22 @@ public final class FFmpegStreamDecoder {
     private var outputRate: Double = 0
     private var outputChannels: Int = 0
     private let probeBudget: StreamProbeBudget
+    private let forcesProbe: Bool
+    /// True when ``open()`` skipped FFmpeg's stream-info probe because the header already described
+    /// a FLAC, ALAC or PCM WAV/AIFF stream (#21). A caller whose open turns out wrong can retry with
+    /// `forcesProbe: true`.
+    public private(set) var skippedProbe = false
     #if canImport(CStreamDecode)
         private var handle: OpaquePointer?
     #endif
 
-    public init(reader: StreamByteReader, probeBudget: StreamProbeBudget = .default) {
+    /// `forcesProbe` always runs the stream-info probe, even where the header suffices; the default
+    /// skips it for FLAC, ALAC and PCM WAV/AIFF.
+    public init(reader: StreamByteReader, probeBudget: StreamProbeBudget = .default, forcesProbe: Bool = false) {
         self.reader = reader
         self.box = ReaderBox(reader: reader)
         self.probeBudget = probeBudget
+        self.forcesProbe = forcesProbe
     }
 
     deinit {
@@ -181,7 +189,8 @@ public final class FFmpegStreamDecoder {
             let opaque = Unmanaged.passUnretained(box).toOpaque()
             var options = StreamDecodeOptions(
                 probe_bytes: probeBudget.bytes,
-                max_analyze_duration_us: Int64((probeBudget.analyzeDuration * 1_000_000).rounded())
+                max_analyze_duration_us: Int64((probeBudget.analyzeDuration * 1_000_000).rounded()),
+                force_probe: forcesProbe ? 1 : 0
             )
             guard let opened = stream_decoder_open_with(&callbacks, opaque, &options, &info, &status) else {
                 // An interrupt is a seek arriving while the stream opens, not a format this build
@@ -199,6 +208,7 @@ public final class FFmpegStreamDecoder {
                 }
             }
             handle = opened
+            skippedProbe = info.skipped_probe != 0
             let format = StreamAudioFormat(
                 sampleRate: Double(info.sample_rate),
                 channelCount: Int(info.channel_count),

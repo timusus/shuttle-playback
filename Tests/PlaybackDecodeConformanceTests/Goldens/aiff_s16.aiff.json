@@ -1,5 +1,5 @@
 {
-  "bytesBeforeFirstAudioMax" : 99328,
+  "bytesBeforeFirstAudioMax" : 66560,
   "channels" : 2,
   "durationS" : 2,
   "expect" : "decodes",

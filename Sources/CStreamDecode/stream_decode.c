@@ -36,6 +36,9 @@ struct StreamDecoder {
     AVPacket        *held;
     int              has_held;
 
+    /* 1 when the last `open_format` skipped `avformat_find_stream_info` (see
+     * `header_described_audio_stream`). */
+    int         skipped_probe;
     int         audio_idx;
     int         sample_rate;
     int         channels;
@@ -693,6 +696,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
 
     info->sample_rate = d->sample_rate;
     info->channel_count = d->channels;
+    info->skipped_probe = d->skipped_probe;
     /* Format duration first, stream duration second (an MP3's Xing frame count reaches the stream
      * before it reaches the format).
      *
@@ -738,6 +742,83 @@ static void close_format(StreamDecoder *d) {
 }
 
 static void hold_first_packet(StreamDecoder *d);
+
+/*
+ * The audio stream's index when the container header alone has described it, so that
+ * `avformat_find_stream_info` (which reads ahead, several range requests on a remote stream) would
+ * only add latency; -1 when the probe is needed. True only for lossless codecs whose header carries
+ * everything: FLAC (STREAMINFO), ALAC (the moov `alac` atom) and PCM in WAV or AIFF. Lossy codecs
+ * (MP3, AAC, Opus, Vorbis) keep the probe: their parameters and duration come from the frames.
+ */
+static int header_described_audio_stream(const AVFormatContext *fmt) {
+    if (!fmt->iformat || !fmt->iformat->name) return -1;
+    const char *container = fmt->iformat->name;
+    int is_mp4 = strstr(container, "mp4") != NULL;
+    int is_flac = strcmp(container, "flac") == 0;
+    int is_wav = strcmp(container, "wav") == 0;
+    int is_aiff = strcmp(container, "aiff") == 0;
+    if (!is_mp4 && !is_flac && !is_wav && !is_aiff) return -1;
+
+    int audio = -1;
+    for (unsigned i = 0; i < fmt->nb_streams; i++) {
+        if (fmt->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) continue;
+        if (audio >= 0) return -1;   /* more than one audio stream: let the probe choose */
+        audio = (int)i;
+    }
+    if (audio < 0) return -1;
+    const AVStream *stream = fmt->streams[audio];
+    const AVCodecParameters *par = stream->codecpar;
+
+    int codec_ok = 0;
+    if (is_flac) {
+        codec_ok = par->codec_id == AV_CODEC_ID_FLAC;
+    } else if (is_mp4) {
+        codec_ok = par->codec_id == AV_CODEC_ID_ALAC;
+    } else {
+        /* The PCM codecs the wav and aiff demuxers emit; anything else they can carry (ADPCM,
+         * a-law, MPEG in a RIFF hack) keeps the probe. */
+        switch (par->codec_id) {
+        case AV_CODEC_ID_PCM_U8:
+        case AV_CODEC_ID_PCM_S8:
+        case AV_CODEC_ID_PCM_S16LE:
+        case AV_CODEC_ID_PCM_S24LE:
+        case AV_CODEC_ID_PCM_S32LE:
+        case AV_CODEC_ID_PCM_F32LE:
+        case AV_CODEC_ID_PCM_F64LE:
+        case AV_CODEC_ID_PCM_S16BE:
+        case AV_CODEC_ID_PCM_S24BE:
+        case AV_CODEC_ID_PCM_S32BE:
+            codec_ok = 1;
+            break;
+        default:
+            break;
+        }
+    }
+    if (!codec_ok) return -1;
+
+    if (is_flac) {
+        /* The flac demuxer leaves the parameters to its parser (they stay 0 until the probe), but
+         * hands the decoder the STREAMINFO block as extradata, which is where the decoder reads its
+         * rate, channels and bit depth from. */
+        if (par->extradata_size < 34) return -1;
+    } else {
+        if (par->sample_rate <= 0 || par->ch_layout.nb_channels <= 0) return -1;
+        if (par->format == AV_SAMPLE_FMT_NONE && par->bits_per_raw_sample <= 0
+            && par->bits_per_coded_sample <= 0) {
+            return -1;
+        }
+        /* The ALAC decoder reads its setup from the magic cookie the moov `alac` atom carries as
+         * extradata (36 bytes); without it the open fails, so let the probe have the file. */
+        if (is_mp4 && par->extradata_size < 36) return -1;
+    }
+    /* The duration must already be known without the probe, from the stream or the format. A WAV
+     * without a total length is the exception: its demuxer cannot size the data chunk, so the
+     * duration is unknown with the probe too (it only reads on to the same nothing). */
+    if (!is_wav && (stream->duration == AV_NOPTS_VALUE || stream->duration <= 0)) {
+        if (fmt->duration == AV_NOPTS_VALUE || fmt->duration <= 0) return -1;
+    }
+    return audio;
+}
 
 /*
  * Open libavformat over the reader, starting at `base_offset`, and find the audio stream.
@@ -797,6 +878,19 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
         /* Not "unsupported": the caller answers that with another player, and an interrupt is
          * only a seek arriving while the stream opens. */
         return d->interrupted ? STREAM_DECODE_ERR_INTERRUPTED : STREAM_DECODE_ERR_OPEN;
+    }
+    /* Skipped when the header already describes a lossless stream (issue #21): the probe's
+     * read-ahead is pure play-start latency there. `force_probe` restores the probe. */
+    d->skipped_probe = 0;
+    if (!(options && options->force_probe)) {
+        int header_audio = header_described_audio_stream(d->fmt);
+        if (header_audio >= 0) {
+            d->skipped_probe = 1;
+            /* av_find_best_stream ignores a FLAC stream whose rate and channels are still 0, so
+             * take the one audio stream the check above found. */
+            d->audio_idx = header_audio;
+            return STREAM_DECODE_OK;
+        }
     }
     /* Best effort: some containers decode fine with thinner metadata. */
     (void)avformat_find_stream_info(d->fmt, NULL);

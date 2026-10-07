@@ -28,6 +28,6 @@ RIFF, FORM, an MP4 `ftyp` box) or a text page (a leading `<` or `{`). A file tha
 - A hopeless file costs at most the probe plus 1 MiB (about 65 s of 128 kbps audio), a bounded few
   seconds of cellular data.
 - Junk longer than 1 MiB is not played.
-- Header-described formats (FLAC, ALAC, WAV) have a separate probe problem, pending in #21.
+- Header-described formats (FLAC, ALAC, PCM WAV/AIFF) skip the probe altogether when the header gives the codec, rate, channels, format and (WAV aside) duration (#21); the decoder reports `skippedProbe`, and `forcesProbe: true` restores the probe. The budget above only governs the formats that still probe.
 
 Links: [architecture](../architecture.md), [testing](../testing.md).

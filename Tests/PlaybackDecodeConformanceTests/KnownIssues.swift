@@ -27,15 +27,10 @@ enum KnownIssues {
              fixture: "flac_stereo.flac", kind: .seekPCM,
              switches: [.ioErrorOncePerPosition, [.partialReads, .ioErrorOncePerPosition]],
              messages: ["seek to 3.9s: PCM after the landing differs from the clean seek"]),
-        // The open of a 24-bit WAV reads more before the first audio when the length is unknown.
-        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/21 (stream-info probe for header-described formats)",
-             fixture: "wav_s24.wav", kind: .bytes,
-             switches: [.unknownLength, [.ioErrorOncePerPosition, .unknownLength],
-                        [.partialReads, .ioErrorOncePerPosition, .unknownLength]],
-             messages: ["131082 bytes read before the first audio, golden allows 99328"]),
-        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/21 (stream-info probe for header-described formats)",
-             fixture: "wav_s24.wav", kind: .bytes, switches: [[.partialReads, .unknownLength]],
-             messages: ["106506 bytes read before the first audio, golden allows 99328"]),
+        // A 24-bit WAV with no known length buffers a second 32 KiB before the first audio.
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/36 (wav_s24 reads twice with unknown length)",
+             fixture: "wav_s24.wav", kind: .bytes, switches: [.unknownLength, [.partialReads, .unknownLength]],
+             messages: ["65546 bytes read before the first audio, golden allows 33792"]),
     ]
 
     /// The rule a finding is pinned by, if any.

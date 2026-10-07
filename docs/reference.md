@@ -35,7 +35,8 @@ build of this package.
 
 | Member | Behaviour |
 |---|---|
-| `init(reader:probeBudget:)` | The budget defaults to `StreamProbeBudget.default`. |
+| `init(reader:probeBudget:forcesProbe:)` | The budget defaults to `StreamProbeBudget.default`. `forcesProbe` (default `false`) always runs FFmpeg's stream-info probe; without it the probe is skipped for FLAC, ALAC (MP4) and PCM WAV/AIFF, whose header already describes the stream, and runs for everything else (#21). |
+| `skippedProbe` | True after `open()` when the probe was skipped. A caller whose open turns out wrong can retry with `forcesProbe: true`. |
 | `open()` | Blocks. Returns a `StreamAudioFormat` (the source's) or throws `StreamDecoderError`. |
 | `setOutputFormat(sampleRate:channelCount:)` | Optional. Fixes the output rate and channel count for everything read afterwards: swresample resamples, downmixes by its default matrix (5.1 to stereo, stereo to mono) and duplicates mono to every channel at full level. Only between `open()` and the first read or seek; may be called again in that window. Throws `invalidState` after it, before `open()`, or for a rate or channel count <= 0. |
 | `nextChunk()` | Blocks. Returns up to `framesPerChunk` (4096) frames of interleaved Float32 at the output format (the source's unless set), or nil. |
