@@ -1,0 +1,40 @@
+{
+  "bytesBeforeFirstAudioMax" : 32768,
+  "channels" : 2,
+  "durationS" : 4.05,
+  "expect" : "decodes",
+  "fixture" : "vbr_xing_no_toc.mp3",
+  "frames" : 178560,
+  "pcmSha256PerSecondInt16" : [
+    "cf028ccac1203aae9dd9323f3e27b9b7cb988d589230b142b4996564be36d340",
+    "c76285290a50ad8076754547908be395685f69a7e47e7f392dcff8d636183359",
+    "a8f14548ebd5ab0354fe4a5b8bfb0b15c1d9aee7e5f33381f6adc85e3779bfe3",
+    "8f0f5c7ae6f6abcb7355c1877ae869785586ae8a7c46c43c0747fbcb368c27fc",
+    "d4082b9c6601f9a85156d65bd42dc4ec8d1bab194166654aa76529cdc700cfd1"
+  ],
+  "sampleRate" : 44100,
+  "seeks" : [
+    {
+      "alignFrames" : 0,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 1.35,
+      "toS" : 1.35,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 2.699,
+      "toS" : 2.699,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 3.953,
+      "toS" : 4.049,
+      "tolS" : 0.03
+    }
+  ],
+  "sha256" : "a805d5a49697d2882a015232a924e9338f4241d4a60570da5e3b391c72018b76"
+}

@@ -1,0 +1,39 @@
+{
+  "bytesBeforeFirstAudioMax" : 16384,
+  "channels" : 1,
+  "durationS" : 1.07,
+  "expect" : "decodes",
+  "fixture" : "test-cbr-info-header-pcut-frame.mp3",
+  "frames" : 45252,
+  "pcmSha256PerSecondInt16" : [
+    "cba96eb464527321ae2486ccefc86cf2e0573ffc11e859ce69c031e8ea06cf44",
+    "716c18dd471da97df30293783de6c33049b170f540b8f625160782418cbba2cc"
+  ],
+  "sampleRate" : 44100,
+  "seeks" : [
+    {
+      "alignFrames" : -171,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03
+    },
+    {
+      "alignFrames" : -171,
+      "landedS" : 0.315,
+      "toS" : 0.342,
+      "tolS" : 0.03
+    },
+    {
+      "alignFrames" : -171,
+      "landedS" : 0.654,
+      "toS" : 0.684,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 1.026,
+      "toS" : 1.026,
+      "tolS" : 0.03
+    }
+  ],
+  "sha256" : "ff499ac7f6a6ee2197117842237b47c5ca09e164655549056345782ee429731f"
+}

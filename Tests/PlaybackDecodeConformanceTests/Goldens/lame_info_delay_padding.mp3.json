@@ -1,0 +1,41 @@
+{
+  "bytesBeforeFirstAudioMax" : 98304,
+  "channels" : 2,
+  "durationS" : 4.07,
+  "expect" : "decodes",
+  "fixture" : "lame_info_delay_padding.mp3",
+  "frames" : 128000,
+  "pcmSha256PerSecondInt16" : [
+    "1cd64a180032a6f37ab1164097a9aa0442822a63024ece2b31255da296f176c8",
+    "45ad359634cf7048e698f6301cbfef199e5e5db58159ceb70df6b307788f8050",
+    "f0dc9f0a2d01e163ad8c69744abd231423fc6a3aef1fdfc2992775a70dbd100d",
+    "456355dbcb2fc2727ef06d4a9de05c84939a0c59a8e8884d2137b0d349b3804d"
+  ],
+  "sampleRate" : 32000,
+  "seeks" : [
+    {
+      "alignFrames" : 0,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 1.333,
+      "toS" : 1.333,
+      "tolS" : 0.03
+    },
+    {
+      "alignFrames" : 1152,
+      "landedS" : 2.629,
+      "toS" : 2.667,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 4,
+      "toS" : 4,
+      "tolS" : 0.03
+    }
+  ],
+  "sha256" : "82da79b47d8f90a9c4a60d66274d6ae3a179c84f8534119a1a8b023909a36753"
+}

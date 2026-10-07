@@ -1,0 +1,43 @@
+{
+  "bytesBeforeFirstAudioMax" : 32768,
+  "channels" : 2,
+  "durationS" : 4,
+  "expect" : "decodes",
+  "fixture" : "vorbis_stereo.ogg",
+  "frames" : 176448,
+  "pcmSha256PerSecondInt16" : [
+    "6a7072139ebb1dc4f8a75b51005766a033f6d5d8b51099e3f22f0f6e7f38e51b",
+    "f2c598df7fcf6a64efa987fd5357975cc27ed600182faf8df325374e29d173a0",
+    "d6b5710aab532351761b0f634ab444ed7dd74082c8fdb68be2d65e82e1c10d08",
+    "8e9464d4d7e762620a04be50ee106bf83da8ef2f1ce91055270c6d0e857e3586",
+    "c83d1e1436ba8920c4f574bcd8e20c55ca9d78d41ff1d4de42930d3bdfdcfcf6"
+  ],
+  "sampleRate" : 44100,
+  "seeks" : [
+    {
+      "alignFrames" : 0,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 1.022,
+      "toS" : 1.334,
+      "tolS" : 0.03
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 2.043,
+      "toS" : 2.667,
+      "tolS" : 0.03
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 2.043,
+      "toS" : 4.001,
+      "tolS" : 0.03
+    }
+  ],
+  "sha256" : "9edeb04367ea41a044b1be68cb46438ea9b9ba682e4df28c52595def60d37e01"
+}

@@ -1,0 +1,40 @@
+{
+  "bytesBeforeFirstAudioMax" : 16384,
+  "channels" : 2,
+  "durationS" : 4.13,
+  "expect" : "decodes",
+  "fixture" : "he_aac_v2.m4a",
+  "frames" : 180160,
+  "pcmSha256PerSecondInt16" : [
+    "0175cabb027798bc5146771f20dea8df24d19ef40da1ed99968058adc73f8a24",
+    "527ef727dd49dbe4ff3c5cf526b75357a6e5eded771b097a866b1ca368c54fcf",
+    "fd17dd9fa8d2aef94ae0bcbfcae53c833d68218eb71534b4f21f9c671bafb54c",
+    "e7eba4a1029402df3603de6e2effedba6b218c4394697e2fea2346d5a455090e",
+    "714e83fa64054a617796d85dae0e9f4f9486abe3c1e66070b576e389821ed3b1"
+  ],
+  "sampleRate" : 44100,
+  "seeks" : [
+    {
+      "alignFrames" : 0,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 1.345,
+      "toS" : 1.362,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 2.692,
+      "toS" : 2.724,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 4.039,
+      "toS" : 4.085,
+      "tolS" : 0.03
+    }
+  ],
+  "sha256" : "49fdef4b8d78b2f83debe8c25b86044624a755f3da0b7a09e39314933555aabd"
+}

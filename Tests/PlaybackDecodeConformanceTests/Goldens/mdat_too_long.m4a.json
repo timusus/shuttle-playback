@@ -1,0 +1,16 @@
+{
+  "bytesBeforeFirstAudioMax" : 0,
+  "channels" : 0,
+  "durationS" : 0,
+  "expect" : "error:streaming decode failed, status 3",
+  "fixture" : "mdat_too_long.m4a",
+  "frames" : 0,
+  "pcmSha256PerSecondInt16" : [
+
+  ],
+  "sampleRate" : 0,
+  "seeks" : [
+
+  ],
+  "sha256" : "9bb81cad6b1afd7b8f7ec2ace7dca82a76525a8f936025ebf01944870dc31b34"
+}

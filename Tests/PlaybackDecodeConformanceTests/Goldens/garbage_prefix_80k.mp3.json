@@ -1,0 +1,39 @@
+{
+  "bytesBeforeFirstAudioMax" : 98304,
+  "channels" : 2,
+  "durationS" : 12,
+  "expect" : "decodes",
+  "fixture" : "garbage_prefix_80k.mp3",
+  "frames" : 87552,
+  "pcmSha256PerSecondInt16" : [
+    "61e0d8f7d461107191d075caa0109a3d77b8f83e280b78a575e8258f955e0d3c",
+    "107f4c1382e34bc8323a2f270318823398ba604a5ed5bea0c6a5725122ebbb75"
+  ],
+  "sampleRate" : 44100,
+  "seeks" : [
+    {
+      "alignFrames" : -1152,
+      "landedS" : 0.026,
+      "toS" : 0,
+      "tolS" : 0.03
+    },
+    {
+      "alignFrames" : -30336,
+      "landedS" : 0.688,
+      "toS" : 0.662,
+      "tolS" : 0.03
+    },
+    {
+      "alignFrames" : -59520,
+      "landedS" : 1.35,
+      "toS" : 1.324,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 2.011,
+      "toS" : 1.985,
+      "tolS" : 0.03
+    }
+  ],
+  "sha256" : "b4b106b72a7c4ecdbb45c65ee4d676de0c808a629671f3eedc840fa45c30dc8d"
+}

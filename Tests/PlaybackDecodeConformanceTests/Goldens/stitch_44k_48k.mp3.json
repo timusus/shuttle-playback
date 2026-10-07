@@ -1,0 +1,46 @@
+{
+  "bytesBeforeFirstAudioMax" : 81920,
+  "channels" : 2,
+  "durationS" : 8.21,
+  "expect" : "decodes",
+  "fixture" : "stitch_44k_48k.mp3",
+  "frames" : 131328,
+  "pcmSha256PerSecondInt16" : [
+    "52d9dd1ebae74eab544b1cf4b6eccdc779fd5f3e5f0a0cc5d635b0b3a800ef0e",
+    "d57046213a46b869bc8cf689a6c3789aee39847af286c4b5b06ebd888c5c1bfc",
+    "8cca924e426de7197515eb409911bc5fce9dbba3d6db30a6547fb9c49bbca45a",
+    "0edec0e120aa76b4b86824e8a1508bc06592955fee8b831ea11397ba08fed245",
+    "8bfaaafb324bc8b41aa95dac3d9b5d34927e0a6ea24b2803e34f3f9b30e0bad5",
+    "0057ec7ea83199b009ad485b45459eb36fe36b2d6ae2ca23541274cf9b7c9b51",
+    "37efd74f48acc9088e1d0223dcd3208f4265dfb6e55068bca97c805ace2e1361",
+    "249fa160f294de207c5732c256fd2cb0f23fc659ae2e79cf5f0964263c1c8d8d",
+    "6d31fca4eeb0b2a2dd2887f0807b481c2c15823273643bb34f234669e0b28975"
+  ],
+  "sampleRate" : 16000,
+  "seeks" : [
+    {
+      "alignFrames" : 0,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 2.736,
+      "toS" : 2.736,
+      "tolS" : 0.03
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 5.472,
+      "toS" : 5.472,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 8.172,
+      "toS" : 8.208,
+      "tolS" : 0.03
+    }
+  ],
+  "sha256" : "0629444cd9e043f2db01b2d1a536a2bd67476257b739b7d870d2b2a0113f5dc6"
+}

@@ -1,0 +1,39 @@
+{
+  "bytesBeforeFirstAudioMax" : 32768,
+  "channels" : 2,
+  "durationS" : 4.05,
+  "expect" : "decodes",
+  "fixture" : "vbr_xing.mp3",
+  "frames" : 176400,
+  "pcmSha256PerSecondInt16" : [
+    "e3cce0c3b322ec4818ac6c516eb00e8426d85c2e13a14976aa8417da320f3ab8",
+    "69c32e754a20eee538e81e6eff1b5a12fa2267ebe6c9ea156d7bb1be40effda9",
+    "0d762e803e1e4ef694be04acbc6e7a55cc9aa98774173136b64d2cd579c985f0",
+    "d59f6e95d579aae390ae3082c2091d0055e806fd83a156198d7965a7139f6176"
+  ],
+  "sampleRate" : 44100,
+  "seeks" : [
+    {
+      "alignFrames" : 0,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 1.311,
+      "toS" : 1.333,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 2.647,
+      "toS" : 2.667,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 4,
+      "toS" : 4,
+      "tolS" : 0.03
+    }
+  ],
+  "sha256" : "a805e7ed5fdf9734285d2b66c7f3f0bd354d71c04d61424730c3168711a64588"
+}
