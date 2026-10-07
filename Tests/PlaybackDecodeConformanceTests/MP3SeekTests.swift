@@ -60,7 +60,7 @@ final class MP3SeekTests: XCTestCase {
     /// first position the decoder asks for, and plays nothing until the bytes from there to the
     /// target have arrived. 0.3.0 asked for 4 KiB before the frame (mp3_sync's backward window);
     /// 0.3.1 added a 16384-sample pre-roll on top, 7 KiB in all at 64 kbps, which at twice the
-    /// bitrate held the podcast player's far seek silent for 470 ms. What a seek needs before its
+    /// bitrate held a far seek into a growing file silent for 470 ms. What a seek needs before its
     /// target is the bit reservoir the target's frames can reach: about 1 KiB at 64 kbps.
     ///
     /// Positions after the first are fine as long as they are inside what the seek has read since
@@ -97,7 +97,8 @@ final class MP3SeekTests: XCTestCase {
                                      "\(label): the seek read from \(targetByte - first) bytes before its target")
             XCTAssert(positions.allSatisfy { $0 >= first && $0 <= first + bytes },
                       "\(label): the seek went back before where it started reading: \(positions)")
-            XCTAssertLessThanOrEqual(bytes, 4096, "\(label): the seek read \(bytes) bytes before its first audio")        }
+            XCTAssertLessThanOrEqual(bytes, 4096, "\(label): the seek read \(bytes) bytes before its first audio")
+        }
     }
 
     /// **An MP3 seek decodes exactly what an unbroken decode does, from the requested sample on.**

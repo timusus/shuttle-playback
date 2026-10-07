@@ -88,7 +88,7 @@ noise 14 brown 0.02 5 6 "lowpass=f=1500" "$TMP/quiet.wav"
 $FF -i "$TMP/loud.wav" -i "$TMP/quiet.wav" -filter_complex "[0][1]concat=n=2:v=0:a=1" -c:a pcm_s16le "$TMP/drop.wav"
 lame --quiet -t -V 9 "$TMP/drop.wav" ../SeekFixtures/vbr_no_xing_bitrate_drop.mp3
 # Also MP3SeekTests only: 8 kbps CBR MPEG-2 at 22.05 kHz, mono, no tag. Its frames are 26 bytes,
-# one in about nine padded to 27, and the file is cut to start on a padded one, the frame a seek
+# one in about eight padded to 27, and the file is cut to start on a padded one, the frame a seek
 # sizes its pre-roll from. Every main_data_begin is set to 255 (the most MPEG-2 allows), so the
 # frames after a seek need as much of the reservoir as a stream can ask for; the PCM is not
 # meaningful, the seek's reads are what the test measures.
