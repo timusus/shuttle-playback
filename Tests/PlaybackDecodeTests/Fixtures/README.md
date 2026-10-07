@@ -52,3 +52,18 @@ for r in 48000 44100; do
 done
 cat h48000.mp3 h44100.mp3 > stitch_48k_44k_64k.mp3   # h44100.mp3 first gives stitch_44k_48k_64k.mp3
 ```
+
+## stitch_stereo_mono_64k.mp3
+
+4 s of stereo (440 Hz left, 660 Hz right, amplitude 0.5), then 4 s of mono (440 Hz, amplitude 0.5),
+both 44.1 kHz 64 kbps CBR, concatenated at the byte level: a channel-count change mid-stream. Used by
+`testStereoToMonoSwitchMidStreamComesOutAtFullLevelOnBothChannels` (OutputFormatTests).
+
+```sh
+ffmpeg -y -f lavfi -i "aevalsrc=0.5*sin(2*PI*440*t)|0.5*sin(2*PI*660*t):s=44100:d=4" st.wav
+ffmpeg -y -f lavfi -i "aevalsrc=0.5*sin(2*PI*440*t):s=44100:d=4" mo.wav
+for n in st mo; do
+  ffmpeg -y -i $n.wav -c:a libmp3lame -b:a 64k -write_xing 0 -id3v2_version 0 -write_id3v1 0 $n.mp3
+done
+cat st.mp3 mo.mp3 > stitch_stereo_mono_64k.mp3
+```

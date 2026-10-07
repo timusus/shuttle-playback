@@ -122,6 +122,34 @@ final class OutputFormatTests: XCTestCase {
                       "both sides identical")
     }
 
+    /// A stream opened as stereo that turns mono mid-way (`stitch_stereo_mono_64k.mp3`, see the
+    /// fixtures README) comes out of the explicit mono matrix at full level on both channels: the
+    /// mono half is as loud on each side as the stereo half's left channel, not 3 dB down as
+    /// swresample's default mono matrix would have it. Default output format, no `setOutputFormat`.
+    func testStereoToMonoSwitchMidStreamComesOutAtFullLevelOnBothChannels() throws {
+        try skipUnlessAvailable()
+        let url = try Fixture.url("stitch_stereo_mono_64k.mp3")
+        let (decoder, format) = try decoder(url)
+        XCTAssertEqual(format.channelCount, 2)
+        let pcm = decodeAll(decoder)
+        let frames = pcm.count / 2
+        XCTAssertEqual(Double(frames), 8 * format.sampleRate, accuracy: 4 * 1152, "output length")
+
+        func rms(_ channel: Int, _ range: Range<Int>) -> Double {
+            (range.reduce(0.0) { $0 + Double(pcm[$1 * 2 + channel]) * Double(pcm[$1 * 2 + channel]) }
+                / Double(range.count)).squareRoot()
+        }
+        let rate = Int(format.sampleRate)
+        let stereoLeft = rms(0, rate..<(3 * rate))
+        let monoLeft = rms(0, (5 * rate)..<(7 * rate))
+        let monoRight = rms(1, (5 * rate)..<(7 * rate))
+        XCTAssertEqual(stereoLeft, 0.5 / 2.0.squareRoot(), accuracy: 0.03, "stereo half level")
+        XCTAssertEqual(monoLeft, stereoLeft, accuracy: 0.01, "mono half, left: \(monoLeft) vs \(stereoLeft)")
+        XCTAssertEqual(monoRight, stereoLeft, accuracy: 0.01, "mono half, right: \(monoRight) vs \(stereoLeft)")
+        XCTAssertTrue((5 * rate..<(7 * rate)).allSatisfy { abs(pcm[$0 * 2] - pcm[$0 * 2 + 1]) < 1e-6 },
+                      "both sides of the mono half are identical")
+    }
+
     // MARK: - Seek
 
     /// A seek at a non-native output rate lands where it says: the landed time is the media time it
@@ -174,6 +202,34 @@ final class OutputFormatTests: XCTestCase {
                 XCTAssertLessThanOrEqual(abs(best.lag), 1, "\(name): seek to \(target)s: audio is \(best.lag) frames off")
                 XCTAssertLessThan(best.error, 0.02, "\(name): seek to \(target)s: RMS error \(best.error)")
             }
+        }
+    }
+
+    /// The MP4 edit list's end clip (#13) holds at a non-native output rate: `aac_edit_list.m4a`
+    /// (from the conformance fixtures) at 48 kHz has the clipped duration × 48000 frames, to a
+    /// frame, and a seek past its end lands on that clipped end with nothing left to read.
+    func testEditListEndClipHoldsAtANonNativeRate() throws {
+        try skipUnlessAvailable()
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("PlaybackDecodeConformanceTests/Fixtures/aac_edit_list.m4a")
+        let rate = 48000.0
+        let (native, format) = try decoder(url)
+        let nativeFrames = decodeAll(native).count / format.channelCount
+        XCTAssertNotEqual(format.sampleRate, rate)
+        let clipped = Double(nativeFrames) / format.sampleRate
+        let expected = clipped * rate
+
+        let (resampled, _) = try decoder(url, rate: rate)
+        let frames = decodeAll(resampled).count / format.channelCount
+        XCTAssertEqual(resampled.endReason, .eof)
+        XCTAssertEqual(Double(frames), expected, accuracy: 1, "total frames at 48 kHz")
+
+        for target in [clipped + 0.5, 1e6] {
+            let (seeking, _) = try decoder(url, rate: rate)
+            let landed = try seeking.seek(toSeconds: target)
+            XCTAssertEqual(landed, clipped, accuracy: 1 / rate, "seek to \(target)s landed \(landed)s")
+            XCTAssertEqual(Double(seeking.mediaFramesRead), expected, accuracy: 1, "seek to \(target)s: frames read")
+            XCTAssertTrue(decodeAll(seeking).isEmpty, "PCM after a seek to \(target)s")
         }
     }
 

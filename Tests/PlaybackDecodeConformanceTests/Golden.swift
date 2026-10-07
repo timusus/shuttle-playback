@@ -77,9 +77,11 @@ enum GoldenStore {
         /* The stitch_*_64k.mp3 pair belongs to StreamDecodeTests: the second half is resampled, and
          * a seek into it starts the resampler on another output grid (anchored at the landing, not
          * at the switch) and lands to within a byte's time, so it is not bit-identical to the
-         * clean decode. */
+         * clean decode. stitch_stereo_mono_64k.mp3 changes channel count mid-stream and belongs to
+         * OutputFormatTests. */
         let skip: Set<String> = ["NOTICE", "make-fixtures.sh", "README.md",
-                                 "stitch_44k_48k_64k.mp3", "stitch_48k_44k_64k.mp3"]
+                                 "stitch_44k_48k_64k.mp3", "stitch_48k_44k_64k.mp3",
+                                 "stitch_stereo_mono_64k.mp3"]
         return [fixturesDir, legacyFixturesDir].flatMap { dir -> [URL] in
             let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
             return names.filter { !skip.contains($0) && !$0.hasPrefix(".") }.sorted()

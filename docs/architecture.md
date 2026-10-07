@@ -92,6 +92,11 @@ How the pieces behave:
   Float32; it resamples only a stream whose rate changes mid-way, back to the rate it opened with.
   With a fixed format it resamples and remixes every frame to it, and the seek's discard of the
   frames before the target is counted at the output rate.
+- **A mono source is spread to every output channel at full level, not swresample's -3 dB.** The
+  matrix is set explicitly (up to 8 output channels; beyond that swresample's default stays). This
+  also applies to the #14 format change on the default path: a stream opened as stereo that turns
+  mono mid-way plays the mono half as loud on each side as it was, 3 dB louder than before this
+  matrix. `testStereoToMonoSwitchMidStreamComesOutAtFullLevelOnBothChannels` covers it.
 - **A chunk is `framesPerChunk` = 4096 frames.** About 93 ms at 44.1 kHz. Decoded audio that does not
   fit the chunk stays in the pending buffer for the next call.
 
