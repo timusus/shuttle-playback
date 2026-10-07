@@ -161,6 +161,60 @@ final class StreamDecodeTests: XCTestCase {
         XCTAssertGreaterThan(peak, 0.1, "the post-seek audio is silence, not the tone")
     }
 
+    /// **A frame with no timestamp after a seek is timed from where the seek went.**
+    ///
+    /// The pre-roll before a seek's target is dropped by the frames' timestamps. A frame with none
+    /// used to switch the drop off, so the whole pre-roll (16384 samples here) was played and
+    /// reported as the target. No demuxer in this build hands out an untimed packet after a seek,
+    /// so the test strips them all.
+    func testAFrameWithNoTimestampAfterASeekIsTimedFromWhereTheSeekWent() throws {
+        try skipUnlessAvailable()
+        let url = try Fixture.url(Fixture.moovFirst)
+        let clean = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
+        let format = try clean.open()
+        let reference = decodeAll(clean)
+        let channels = format.channelCount
+        let rate = format.sampleRate
+
+        // Index of the first frame of `after` in the clean decode, searched near `expected`.
+        func offset(of after: [Float], near expected: Int, within: Int) -> Int? {
+            let probe = Array(after.prefix(512 * channels))
+            for frame in max(0, expected - within)...(expected + within) {
+                let start = frame * channels
+                guard start + probe.count <= reference.count else { break }
+                if zip(probe, reference[start..<start + probe.count]).allSatisfy({ abs($0 - $1) < 1e-4 }) {
+                    return frame
+                }
+            }
+            return nil
+        }
+
+        for target in [0.25, 10.0] {
+            let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
+            _ = try decoder.open()
+            decoder.dropTimestampsForTesting()
+            let landed = try decoder.seek(toSeconds: target)
+            var after: [Float] = []
+            while after.count < Int(rate) * channels, let chunk = decoder.nextChunk() {
+                after.append(contentsOf: chunk)
+            }
+            let landedFrame = Int((landed * rate).rounded())
+            let found = offset(of: after, near: landedFrame, within: 4096)
+            XCTAssertNotNil(found, "seek to \(target)s: the audio after it is nowhere near \(landed)s")
+            guard let found else { continue }
+            if target * rate < 16384 {
+                // Placed at the start, whose time is known: exact.
+                XCTAssertEqual(landed, target, accuracy: 1 / rate)
+                XCTAssertEqual(found, landedFrame, "seek to \(target)s from the start")
+            } else {
+                // Placed by the demuxer at or up to one frame before the pre-roll's start.
+                XCTAssertEqual(landed, target, accuracy: 1 / rate)
+                XCTAssertLessThanOrEqual(abs(found - landedFrame), 1024,
+                                         "seek to \(target)s: audio at frame \(found), reported \(landedFrame)")
+            }
+        }
+    }
+
     // MARK: - The §3 bandwidth trap
 
     func testMoovLastCostsOneSeekNotTheWholeFile() throws {

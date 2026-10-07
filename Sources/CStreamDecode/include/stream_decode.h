@@ -158,6 +158,13 @@ int64_t stream_decoder_position_bytes(const StreamDecoder *decoder);
 void stream_decoder_set_seek_budget_bytes(StreamDecoder *decoder, int64_t bytes);
 
 /**
+ * Strip the timestamps from every packet before the codec sees it, so no decoded frame carries a
+ * time. **Tests only.** The demuxers in this build stamp every packet after a seek, so the
+ * decoder's handling of a frame with no time is otherwise unreachable.
+ */
+void stream_decoder_drop_timestamps_for_testing(StreamDecoder *decoder);
+
+/**
  * Abort any blocked or future callback. Safe from any thread, idempotent. The reader's own
  * `cancel` still has to unblock a call that is already waiting; this only stops the decoder
  * starting another one.

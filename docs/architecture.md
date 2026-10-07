@@ -160,7 +160,9 @@ flowchart TD
   codec is replaced by a fresh one at every seek, because a flushed one keeps state from before it
   (the noise generator, and HE-AAC's SBR and PS state). A fresh HE-AAC codec has no SBR or PS header
   until the next one arrives, hence its long pre-roll. A stream counts as HE-AAC once its parameters
-  or any decoded frame say so, since an ADTS header says AAC-LC either way. An MP3 frame does not carry
+  or any decoded frame say so, since an ADTS header says AAC-LC either way. Should no frame after a
+  seek carry a timestamp, the decode is timed from where the demuxer was asked to go, which is
+  exact from the start and within a frame elsewhere. An MP3 frame does not carry
   its time, so it is counted from a frame of known time: the first frame, a VBRI table entry, or
   for CBR the byte offset. A VBR MP3 target further from one than a seek's byte budget is placed by
   its Xing TOC or bitrate instead, and that estimate is the landed time (issue #3). A caller that

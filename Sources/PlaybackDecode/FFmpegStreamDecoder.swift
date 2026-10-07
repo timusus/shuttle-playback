@@ -258,6 +258,14 @@ public final class FFmpegStreamDecoder {
         #endif
     }
 
+    /// Strip every packet's timestamps before the codec sees them.
+    /// **Tests only** — see `stream_decoder_drop_timestamps_for_testing`.
+    func dropTimestampsForTesting() {
+        #if canImport(CStreamDecode)
+            if let handle { stream_decoder_drop_timestamps_for_testing(handle) }
+        #endif
+    }
+
     /// The next chunk of interleaved float32 in [-1, 1], or nil once the stream has ended.
     ///
     /// nil is not by itself "the episode finished": ``endReason`` says whether it was EOF, a

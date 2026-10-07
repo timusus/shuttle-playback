@@ -120,6 +120,11 @@ struct StreamDecoder {
     /* An AAC stream has been seen to carry SBR (HE-AAC v1 or v2), by its parameters or by a frame
      * the codec decoded: an ADTS header says plain AAC-LC either way. Never cleared. */
     int          sbr;
+    /* Where the last seek asked the demuxer to go (stream time base), which is also where the
+     * decode starts if no frame after it carries a time (see `pump`). */
+    int64_t      seek_from;
+    /* Tests only: see `stream_decoder_drop_timestamps_for_testing`. */
+    int          drop_timestamps;
 
     /* The first bytes of the media as libavformat read them (offset 0 is `base_offset`), kept so
      * the Xing/Info/VBRI frame can be read without a second request. */
@@ -363,6 +368,16 @@ static int pump(StreamDecoder *d) {
              * before it ended. */
             int64_t pts = d->frame->best_effort_timestamp;
             if (pts == AV_NOPTS_VALUE) pts = d->next_pts;
+            if (pts == AV_NOPTS_VALUE && d->discard_until != AV_NOPTS_VALUE) {
+                /* No frame since the seek has said what time it is. The demuxer was asked for
+                 * `seek_from` and seeks backward, so the decode starts there or at most one frame
+                 * before it: the frames are timed from there and the pre-roll is dropped as
+                 * usual, which lands within a frame of the target (exactly, from the start).
+                 * Keeping everything instead would play the whole pre-roll, seconds of audio
+                 * before the target, reported as the target. */
+                pts = d->seek_from;
+                if (pts > d->start_time) d->landing_exact = 0;
+            }
             if (pts != AV_NOPTS_VALUE) {
                 d->next_pts = pts + av_rescale_q(d->frame->nb_samples,
                                                  (AVRational){ 1, rate }, d->time_base);
@@ -441,6 +456,7 @@ static int pump(StreamDecoder *d) {
             av_packet_unref(d->pkt);
             continue;
         }
+        if (d->drop_timestamps) d->pkt->pts = d->pkt->dts = AV_NOPTS_VALUE;
         d->last_pkt_pos = d->pkt->pos;
         d->last_pkt_dts = d->pkt->dts;
         d->has_last_pkt = d->pkt->pos >= 0 && d->pkt->dts != AV_NOPTS_VALUE;
@@ -491,6 +507,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     d->discard_until = AV_NOPTS_VALUE;
     d->next_pts = AV_NOPTS_VALUE;
     d->seek_first_pts = AV_NOPTS_VALUE;
+    d->seek_from = AV_NOPTS_VALUE;
 
     /* Before anything reads: hide the ID3v2 tag, which on a real podcast enclosure is megabytes of
      * cover art that libavformat would otherwise consume in full. */
@@ -1113,6 +1130,7 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
         int placed = demux_seek(decoder, seconds, from, landed_seconds);
         if (placed != kSeekPlaced) return placed;
 
+        decoder->seek_from = from;
         int status = land_exactly(decoder, target);
         if (status == STREAM_DECODE_OK && !from_start && !last && decoder->seek_first_pts != AV_NOPTS_VALUE
             && decoder->seek_first_pts > target) {
@@ -1425,6 +1443,10 @@ int64_t stream_decoder_position_bytes(const StreamDecoder *decoder) {
 void stream_decoder_set_seek_budget_bytes(StreamDecoder *decoder, int64_t bytes) {
     if (!decoder) return;
     decoder->seek_budget_override = bytes;
+}
+
+void stream_decoder_drop_timestamps_for_testing(StreamDecoder *decoder) {
+    if (decoder) decoder->drop_timestamps = 1;
 }
 
 void stream_decoder_cancel(StreamDecoder *decoder) {
