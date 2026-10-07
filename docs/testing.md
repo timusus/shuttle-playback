@@ -7,7 +7,7 @@ goldens and cut a release. The repository has no hosted CI. `swift test` locally
 
 | Test target | What it covers | Run with |
 |---|---|---|
-| `PlaybackDecodeTests` | The decoder against `AVAssetReader` on three committed 20 s tone fixtures (MP3, M4A with `moov` first, M4A with `moov` last). Also asserts how many bytes a trailing `moov` costs to open. | `swift test` |
+| `PlaybackDecodeTests` | The decoder against `AVAssetReader` on three committed 20 s tone fixtures (MP3, M4A with `moov` first, M4A with `moov` last). Also asserts how many bytes a trailing `moov` costs to open. Our frame count is checked against the fixtures' known 882000; `AVAssetReader` occasionally returns 336 frames short on `tone_moov_first.m4a` (#35), so a short reference read is repeated up to 3 times. | `swift test` |
 | `PlaybackDecodeConformanceTests` | Every fixture through a faulting reader, then seeks, compared against goldens. | `swift test --filter PlaybackDecodeConformance` (about 30 s) |
 | `PlaybackStreamingTests` | `GrowingFileByteSource`, `DownloadRetry`, `GrowingFileReadRule`, `GrowingFileStore`, the loopback server and decode equality over a growing file, against two tone fixtures. | `swift test`, and on an iOS simulator |
 

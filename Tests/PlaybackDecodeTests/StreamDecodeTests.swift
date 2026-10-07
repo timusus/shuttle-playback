@@ -192,13 +192,25 @@ final class StreamDecodeTests: XCTestCase {
             let ours = decodeAll(decoder)
             XCTAssertEqual(decoder.endReason, .eof, "\(name): a full decode must end at EOF")
 
-            let reference = try ReferenceDecoder.decode(url: url)
-            XCTAssertEqual(reference.channels, format.channelCount, "\(name)")
-
             let ourFrames = ours.count / format.channelCount
+            /* Our side is checked against the fixtures' known length (20 s), never against
+             * AVAssetReader alone: #35 measured AVAssetReader returning 336 frames short of the
+             * edit list's end on about 1 run in 60 (tone_moov_first.m4a, status .completed, no
+             * error), while our count was 882000 every time. */
+            XCTAssertEqual(ourFrames, Fixture.frameCount, "\(name): frame count differs from the fixture's known length (the edit list's end is not honoured)")
+
+            /* A short AVAssetReader result is re-read (up to 3 attempts) before it counts. Ours must
+             * still match one of its reads exactly, so the check on our side is not weakened. */
+            var reference = try ReferenceDecoder.decode(url: url)
+            var attempts = [reference.pcm.count / reference.channels]
+            while attempts.last != ourFrames, attempts.count < 3 {
+                reference = try ReferenceDecoder.decode(url: url)
+                attempts.append(reference.pcm.count / reference.channels)
+            }
+            XCTAssertEqual(reference.channels, format.channelCount, "\(name)")
             let referenceFrames = reference.pcm.count / reference.channels
-            XCTAssertEqual(Double(ourFrames), Double(referenceFrames), accuracy: 0,
-                           "\(name): frame count differs from AVAssetReader's (the edit list's end is not honoured)")
+            XCTAssertEqual(ourFrames, referenceFrames,
+                           "\(name): frame count differs from AVAssetReader's (ours \(ourFrames), AVAssetReader attempts \(attempts); the edit list's end is not honoured)")
 
             let a = PCMComparison.channel(ours, index: 0, of: format.channelCount)
             let b = PCMComparison.channel(reference.pcm, index: 0, of: reference.channels)

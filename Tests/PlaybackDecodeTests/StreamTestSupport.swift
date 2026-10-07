@@ -11,6 +11,8 @@ enum Fixture {
     static let moovFirst = "tone_moov_first.m4a"
     static let moovLast = "tone_moov_last.m4a"
     static let all = [mp3, moovFirst, moovLast]
+    /// Every fixture is 20 s at 44.1 kHz, trimmed to exactly that by its edit list or LAME tag.
+    static let frameCount = 882_000
 
     /// The fixtures are committed, so a missing one is a broken checkout, not a reason to skip.
     static func url(_ name: String) throws -> URL {
@@ -316,6 +318,11 @@ enum ReferenceDecoder {
             pointer.withMemoryRebound(to: Float.self, capacity: length / MemoryLayout<Float>.size) { floats in
                 pcm.append(contentsOf: UnsafeBufferPointer(start: floats, count: length / MemoryLayout<Float>.size))
             }
+        }
+        /* `copyNextSampleBuffer` returns nil on failure as well as at the end, so a reader that
+         * stopped early would otherwise look like a short file. */
+        guard reader.status == .completed else {
+            throw StreamDecoderError.invalidState("AVAssetReader ended with status \(reader.status.rawValue) after \(pcm.count / channels) frames of \(url.lastPathComponent): \(String(describing: reader.error))")
         }
         return (pcm, sampleRate, channels)
     }
