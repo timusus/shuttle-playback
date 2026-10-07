@@ -523,6 +523,11 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
     }
     /* Best effort, as in spine_decode.c: some containers decode fine with thinner metadata. */
     (void)avformat_find_stream_info(d->fmt, NULL);
+    /* Not when it was cut short, though: an interrupted probe leaves out what it had not reached,
+     * an MP3's bitrate duration among it, and every later seek then takes another path and lands
+     * somewhere else (issue #5). Such an open fails, and opening again costs only the probe. */
+    if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+    if (d->interrupted) return STREAM_DECODE_ERR_OPEN;
 
     d->audio_idx = av_find_best_stream(d->fmt, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
     if (d->audio_idx < 0) return STREAM_DECODE_ERR_NO_AUDIO;
@@ -745,6 +750,9 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
 
     if (rc < 0 || walked) {
         if (decoder->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+        /* An interrupted seek is retried by the caller, and has to land where the uninterrupted
+         * one would: the byte estimate would land somewhere else (issue #5). */
+        if (decoder->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
         if (!can_estimate_bytes(decoder)) {
             /* Nothing to estimate FROM: a source with no length and no container duration, which
              * over HTTP is a chunked response. The walk is then the only seek there is, so it is
