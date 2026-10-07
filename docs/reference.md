@@ -52,7 +52,10 @@ One thread drives a decoder. `open()`, `nextChunk()` and `read(into:maxFrames:)`
 
 ## `GrowingFileByteSource`
 
-`init(url:authHeaders:cacheKey:store:session:onEvent:)`. `authHeaders` arrive already resolved. `store` defaults
+`init(url:authHeaders:cacheKey:connectionPolicy:store:session:onEvent:)`. `authHeaders` arrive already resolved,
+and are sent only to `url`'s origin (same scheme, host and port): a redirect to another origin, such as a CDN,
+is requested without them, and so are later requests to that remembered end. `connectionPolicy` (default nil)
+is a `GrowingFileConnectionPolicy`, below. `store` defaults
 to `GrowingFileStore.shared`, a directory under `Caches`. `cacheKey` (default nil) is the URL the completed-file
 cache knows the resource by. Pass the URL without its token or session query parameters (Jellyfin, Emby,
 Subsonic) so each new session reuses the cached file instead of adding a duplicate; requests still go to `url`.
@@ -70,6 +73,19 @@ a second while bytes arrive and once at completion, and `seekLanded` when a seek
 file already there.
 
 A read fails with `StreamByteReaderError.transport` when retries and the 30 s link window are spent.
+
+### `GrowingFileConnectionPolicy`
+
+`Sendable`, `Equatable`; passed at init, per source. Applies to `url`'s origin only.
+
+| Member | Behaviour |
+|---|---|
+| `headers` | Extra request headers, sent after `authHeaders` (these win a clash). Dropped on a redirect to another origin, like `authHeaders`. |
+| `pinnedCertificates` | DER certificates. When not empty, the origin's TLS connection is accepted if and only if a certificate of its chain is byte-identical to one of them; the system's trust evaluation is replaced for that origin (this is how a self-signed server is trusted). Other origins, such as a CDN redirect, use the system's trust. |
+| `pinMismatchReason` | `"certificate_pin_mismatch"`: the `StreamByteReaderError.transport` reason of a read whose certificate failed the pin. It fails at once and is never retried. |
+
+The challenge is answered by the source as the task's delegate, so one shared `URLSession` serves sources
+with different policies.
 
 ## `GrowingFileListener`
 

@@ -18,6 +18,10 @@ no such binary, and always on an iOS device or simulator. A test whose committed
 missing is skipped too. For why the suites are built this way, see
 [Architecture](architecture.md#why-the-tests-are-shaped-this-way).
 
+The loopback server speaks no TLS, so the certificate pin is tested as a decision (`accepts(chain:)`) and
+by applying a rejection to a request in flight; the `URLSession` challenge itself is not driven. Redirect
+header scoping is end to end: `redirectsToAlternateHost` sends the hop to `localhost`, another origin.
+
 `LoopbackMediaServer` closes a short body a beat late. macOS URLSession drops a body's buffered
 bytes if the connection ends before the delegate has answered the response.
 

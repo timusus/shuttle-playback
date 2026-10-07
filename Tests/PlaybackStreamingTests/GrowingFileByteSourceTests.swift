@@ -63,12 +63,13 @@ final class GrowingFileByteSourceTests: XCTestCase {
 
     private func makeSource(
         _ url: URL, store: GrowingFileStore? = nil, authHeaders: [String: String] = [:],
-        cacheKey: URL? = nil,
+        cacheKey: URL? = nil, connectionPolicy: GrowingFileConnectionPolicy? = nil,
         clock: GrowingFileClock = SystemGrowingFileClock.shared, session: URLSession = GrowingFileByteSourceTests.testSession
     ) -> GrowingFileByteSource {
         let recorder = events
         let source = GrowingFileByteSource(
-            url: url, authHeaders: authHeaders, cacheKey: cacheKey, store: store ?? makeStore(), session: session,
+            url: url, authHeaders: authHeaders, cacheKey: cacheKey, connectionPolicy: connectionPolicy,
+            store: store ?? makeStore(), session: session,
             clock: clock, onEvent: { recorder.append($0) }
         )
         sources.append(source)
@@ -366,6 +367,72 @@ final class GrowingFileByteSourceTests: XCTestCase {
         }
         XCTAssertTrue(heads[3].hasPrefix("GET \(LoopbackMediaServer.fixturePath)"), heads[3])
         XCTAssertEqual(server.requestedRanges, [100_000, 0])
+    }
+
+    // MARK: - Connection policy
+
+    private func headsFrom(_ server: LoopbackMediaServer, hostPrefix: String) -> [String] {
+        server.requestHeads.filter { $0.lowercased().contains("host: \(hostPrefix)") }
+    }
+
+    func testServerHeadersAreDroppedOnARedirectToAnotherHostAndKeptOnTheSameHost() throws {
+        let body = makeBody(64 * 1024)
+        let headers = ["Authorization": "Basic c2VjcmV0", "X-Server-Token": "abc"]
+        let policy = GrowingFileConnectionPolicy(headers: ["X-Policy": "yes"])
+
+        let crossing = try startServer(body: body)
+        crossing.redirectsToAlternateHost = true
+        let crossingSource = makeSource(crossing.redirectingURL(hops: 1), authHeaders: headers, connectionPolicy: policy)
+        XCTAssertEqual(try read(crossingSource, 100), body.prefix(100))
+        let first = headsFrom(crossing, hostPrefix: "127.0.0.1").map { $0.lowercased() }
+        let landed = headsFrom(crossing, hostPrefix: "localhost").map { $0.lowercased() }
+        XCTAssertEqual(first.count, 1)
+        XCTAssertTrue(first[0].contains("x-server-token: abc") && first[0].contains("x-policy: yes") && first[0].contains("authorization:"))
+        XCTAssertEqual(landed.count, 1, "the hop landed on localhost")
+        for field in ["authorization", "x-server-token", "x-policy"] {
+            XCTAssertFalse(landed[0].contains("\(field):"), "\(field) leaked to another origin: \(landed[0])")
+        }
+        XCTAssertTrue(landed[0].contains("range: bytes=0-"), "the range still rides the hop")
+
+        // A restart goes straight to the remembered end, another origin, and sends none either.
+        try crossingSource.seek(to: 40_000)
+        XCTAssertEqual(try read(crossingSource, 100), body.subdata(in: 40_000..<40_100))
+        let restart = try XCTUnwrap(headsFrom(crossing, hostPrefix: "localhost").last).lowercased()
+        XCTAssertFalse(restart.contains("authorization:") || restart.contains("x-policy:"), restart)
+
+        let staying = try startServer(body: body)
+        let stayingSource = makeSource(staying.redirectingURL(hops: 2), authHeaders: headers, connectionPolicy: policy)
+        XCTAssertEqual(try read(stayingSource, 100), body.prefix(100))
+        XCTAssertEqual(staying.requestHeads.count, 3)
+        for head in staying.requestHeads.map({ $0.lowercased() }) {
+            XCTAssertTrue(head.contains("x-server-token: abc") && head.contains("x-policy: yes") && head.contains("authorization:"), head)
+        }
+    }
+
+    func testThePinAcceptsAChainHoldingAPinnedCertificateAndRejectsOthers() {
+        let pinned = Data([1, 2, 3]), other = Data([9, 9])
+        let policy = GrowingFileConnectionPolicy(pinnedCertificates: [pinned])
+        XCTAssertTrue(policy.accepts(chain: [other, pinned]))
+        XCTAssertFalse(policy.accepts(chain: [other]))
+        XCTAssertFalse(policy.accepts(chain: []))
+        XCTAssertTrue(GrowingFileConnectionPolicy(headers: ["A": "b"]).accepts(chain: [other]), "no pin: the system decides")
+    }
+
+    func testAPinMismatchFailsTheReadAtOnceAndIsNotRetried() throws {
+        // The loopback server speaks no TLS, so the challenge itself cannot be driven end to end:
+        // the rejection a failed pin check makes is applied to a request in flight instead.
+        let server = try startServer(body: makeBody(64 * 1024))
+        server.delayForEveryRange = 30
+        let source = makeSource(server.url, connectionPolicy: GrowingFileConnectionPolicy(pinnedCertificates: [Data([1])]))
+        let pending = readAsync(source, 100)
+        XCTAssertTrue(waitUntil { server.requestHeads.count == 1 && source.currentTask != nil })
+        source.pinRejected(task: try XCTUnwrap(source.currentTask))
+
+        XCTAssertTrue(pending.finished(within: 5), "a pin mismatch fails the read without waiting out a retry")
+        guard case .transport(let reason)? = readerError(pending.result) else { return XCTFail("\(pending.result)") }
+        XCTAssertEqual(reason, GrowingFileConnectionPolicy.pinMismatchReason)
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(server.requestHeads.count, 1, "no retry")
     }
 
     // MARK: - Failure

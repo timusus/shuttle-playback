@@ -136,6 +136,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     /// What the completed-file cache knows this resource by: `url` unless the host gave a key.
     private let cacheKey: URL
     private let authHeaders: [String: String]
+    private let policy: GrowingFileConnectionPolicy?
     private let store: GrowingFileStore
     private let session: URLSession
     private let onEvent: ((GrowingFileEvent) -> Void)?
@@ -185,18 +186,22 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     ///     token or session id which changes between plays. Pass the URL without them, and ask the
     ///     store for `completedFile(for:)` with the same key. The requests still go to `url`. Nil
     ///     (the default) keys the cache by `url`.
+    ///   - connectionPolicy: extra headers and an optional pinned certificate for `url`'s origin; nil
+    ///     (the default) is the system's trust and no extra headers. Like `authHeaders`, its headers
+    ///     are sent only to that origin, never to another one a redirect lands on.
     ///   - onEvent: the `transaction`/`download` events.
     public convenience init(
         url: URL,
         authHeaders: [String: String],
         cacheKey: URL? = nil,
+        connectionPolicy: GrowingFileConnectionPolicy? = nil,
         store: GrowingFileStore = .shared,
         session: URLSession = GrowingFileByteSource.sharedSession,
         onEvent: ((GrowingFileEvent) -> Void)? = nil
     ) {
         self.init(
-            url: url, authHeaders: authHeaders, cacheKey: cacheKey, store: store, session: session,
-            clock: SystemGrowingFileClock.shared, onEvent: onEvent
+            url: url, authHeaders: authHeaders, cacheKey: cacheKey, connectionPolicy: connectionPolicy,
+            store: store, session: session, clock: SystemGrowingFileClock.shared, onEvent: onEvent
         )
     }
 
@@ -205,6 +210,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         url: URL,
         authHeaders: [String: String],
         cacheKey: URL? = nil,
+        connectionPolicy: GrowingFileConnectionPolicy? = nil,
         store: GrowingFileStore = .shared,
         session: URLSession = GrowingFileByteSource.sharedSession,
         clock: GrowingFileClock,
@@ -213,6 +219,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         self.url = url
         self.cacheKey = cacheKey ?? url
         self.authHeaders = authHeaders
+        self.policy = connectionPolicy
         self.store = store
         self.session = session
         self.clock = clock
@@ -598,9 +605,24 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     private func request(for target: URL, from base: Int64) -> URLRequest {
         var request = URLRequest(url: target)
         request.setValue("bytes=\(base)-", forHTTPHeaderField: "Range")
-        for (field, value) in authHeaders { request.setValue(value, forHTTPHeaderField: field) }
+        if target.hasSameOrigin(as: url) { applyServerHeaders(to: &request) }
         return request
     }
+
+    /// The caller's auth headers, then the policy's: for `url`'s origin only.
+    private func applyServerHeaders(to request: inout URLRequest) {
+        for (field, value) in authHeaders { request.setValue(value, forHTTPHeaderField: field) }
+        for (field, value) in policy?.headers ?? [:] { request.setValue(value, forHTTPHeaderField: field) }
+    }
+
+    private func removeServerHeaders(from request: inout URLRequest) {
+        for field in Array(authHeaders.keys) + Array(policy?.headers.keys ?? [:].keys) {
+            request.setValue(nil, forHTTPHeaderField: field)
+        }
+    }
+
+    /// The current transaction's task: what a test hands ``pinRejected(task:)``.
+    var currentTask: URLSessionTask? { locked { current?.task } }
 
     private func downloadBytesPerSecondLocked(now: TimeInterval? = nil) -> Double? {
         guard let firstSampleAt else { return nil }
@@ -619,17 +641,57 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         newRequest: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
-        // Every hop carries the range, a resume's validator and the caller's headers, whichever host
-        // it lands on.
+        // Every hop carries the range and a resume's validator, whichever host it lands on. The
+        // caller's and the policy's headers ride only the original origin's hops: URLSession carries
+        // custom headers across a redirect, so another origin's hop has them taken off.
         var next = newRequest
         for field in ["Range", "If-Range"] {
             if let value = task.originalRequest?.value(forHTTPHeaderField: field) { next.setValue(value, forHTTPHeaderField: field) }
         }
-        for (field, value) in authHeaders { next.setValue(value, forHTTPHeaderField: field) }
+        if let target = next.url, target.hasSameOrigin(as: url) {
+            applyServerHeaders(to: &next)
+        } else {
+            removeServerHeaders(from: &next)
+        }
         locked {
             if startupValue.firstResponseAt == nil, let host = next.url?.host { startupValue.hosts.append(host) }
         }
         completionHandler(next)
+    }
+
+    public func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let space = challenge.protectionSpace
+        guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = space.serverTrust, let policy, !policy.pinnedCertificates.isEmpty,
+              isOrigin(host: space.host, port: space.port)
+        else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        if policy.accepts(trust: trust) {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            pinRejected(task: task)
+            completionHandler(.cancelAuthenticationChallenge, nil)
+        }
+    }
+
+    private func isOrigin(host: String, port: Int) -> Bool {
+        guard let originHost = url.host else { return false }
+        return host.lowercased() == originHost.lowercased() && port == (url.port ?? (url.scheme == "https" ? 443 : 80))
+    }
+
+    /// The origin's certificate is not the pinned one: the read fails at once, with no retry.
+    func pinRejected(task: URLSessionTask) {
+        locked {
+            guard !cancelled, let tx = current, tx.task === task, !tx.ended else { return }
+            endLocked(tx, GrowingFileConnectionPolicy.pinMismatchReason, retryable: false)
+        }
     }
 
     public func urlSession(

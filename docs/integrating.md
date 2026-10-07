@@ -106,6 +106,12 @@ while let chunk = decoder.nextChunk() { /* schedule it */ }
 
 Notes:
 
+- **Auth headers stay on the origin.** `authHeaders` go to `url`'s scheme, host and port only. If the
+  server redirects to a CDN, that request and its later restarts carry none of them.
+- **Self-signed server.** Pass `connectionPolicy: GrowingFileConnectionPolicy(headers: [...], pinnedCertificates: [der])`
+  with the DER bytes of the certificate the user trusted. Its origin is then accepted only with that
+  certificate; a different one fails the read with `StreamByteReaderError.transport("certificate_pin_mismatch")`
+  and is not retried. Nil (the default) keeps the system's trust.
 - **Call `cancel()` when you are done.** A running URLSession task retains its delegate, which is the
   source. Without `cancel()` the source and its partial file leak.
 - **Set `isProbing` around `open()`.** While it is set, a read of the last 128 bytes past the frontier
