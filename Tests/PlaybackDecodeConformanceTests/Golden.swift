@@ -12,8 +12,14 @@ struct Golden: Codable, Equatable {
         var tolS: Double
         /// Frames between the landed time and where the PCM that follows really sits in the
         /// continuous decode: 0 is an exact seek, nil means no match within ±65536 frames. Pinned
-        /// as measured, so a change in either direction shows in the diff.
+        /// as measured, so a change in either direction shows in the diff. Always written, as an
+        /// explicit `null` when there is no match.
         var alignFrames: Int?
+        /// Frames in the compared window after the landing (fewer than the nominal when the seek
+        /// lands near the end of the file).
+        var windowFrames: Int
+        /// Int16 hash of that window: pins the PCM of a seek even when `alignFrames` is null.
+        var windowSha256Int16: String
     }
 
     var fixture: String
@@ -28,6 +34,33 @@ struct Golden: Codable, Equatable {
     var pcmSha256PerSecondInt16: [String]
     var seeks: [Seek]
     var bytesBeforeFirstAudioMax: Int64
+}
+
+extension Golden.Seek {
+    private enum CodingKeys: String, CodingKey {
+        case toS, landedS, tolS, alignFrames, windowFrames, windowSha256Int16
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        toS = try c.decode(Double.self, forKey: .toS)
+        landedS = try c.decode(Double.self, forKey: .landedS)
+        tolS = try c.decode(Double.self, forKey: .tolS)
+        // `decode`, not `decodeIfPresent`: a missing key is a malformed golden, null is a measurement.
+        alignFrames = try c.decode(Int?.self, forKey: .alignFrames)
+        windowFrames = try c.decode(Int.self, forKey: .windowFrames)
+        windowSha256Int16 = try c.decode(String.self, forKey: .windowSha256Int16)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(toS, forKey: .toS)
+        try c.encode(landedS, forKey: .landedS)
+        try c.encode(tolS, forKey: .tolS)
+        try c.encode(alignFrames, forKey: .alignFrames)
+        try c.encode(windowFrames, forKey: .windowFrames)
+        try c.encode(windowSha256Int16, forKey: .windowSha256Int16)
+    }
 }
 
 enum GoldenStore {
@@ -60,9 +93,41 @@ enum GoldenStore {
 
     static func save(_ golden: Golden) throws {
         try FileManager.default.createDirectory(at: goldensDir, withIntermediateDirectories: true)
+        print("golden \(golden.fixture): \(diffSummary(old: load(golden.fixture), new: golden))")
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(golden).write(to: goldenURL(for: golden.fixture))
+    }
+
+    /// One line naming what changed between the golden on disk and the new measurement.
+    static func diffSummary(old: Golden?, new: Golden) -> String {
+        guard let old else { return "new" }
+        var changed: [String] = []
+        if old.sha256 != new.sha256 { changed.append("fixture sha256") }
+        if old.expect != new.expect { changed.append("expect \(old.expect) -> \(new.expect)") }
+        if old.sampleRate != new.sampleRate { changed.append("sampleRate") }
+        if old.channels != new.channels { changed.append("channels") }
+        if old.frames != new.frames { changed.append("frames \(old.frames) -> \(new.frames)") }
+        if old.durationS != new.durationS { changed.append("durationS \(old.durationS) -> \(new.durationS)") }
+        if old.pcmSha256PerSecondInt16 != new.pcmSha256PerSecondInt16 {
+            let n = max(old.pcmSha256PerSecondInt16.count, new.pcmSha256PerSecondInt16.count)
+            let differing = (0..<n).filter {
+                ($0 < old.pcmSha256PerSecondInt16.count ? old.pcmSha256PerSecondInt16[$0] : nil)
+                    != ($0 < new.pcmSha256PerSecondInt16.count ? new.pcmSha256PerSecondInt16[$0] : nil)
+            }
+            changed.append("PCM seconds \(differing.map(String.init).joined(separator: ","))")
+        }
+        if old.seeks != new.seeks {
+            let n = max(old.seeks.count, new.seeks.count)
+            let differing = (0..<n).filter {
+                ($0 < old.seeks.count ? old.seeks[$0] : nil) != ($0 < new.seeks.count ? new.seeks[$0] : nil)
+            }
+            changed.append("seeks #\(differing.map(String.init).joined(separator: ",#"))")
+        }
+        if old.bytesBeforeFirstAudioMax != new.bytesBeforeFirstAudioMax {
+            changed.append("bytesBeforeFirstAudioMax \(old.bytesBeforeFirstAudioMax) -> \(new.bytesBeforeFirstAudioMax)")
+        }
+        return changed.isEmpty ? "unchanged" : changed.joined(separator: "; ")
     }
 
     static func sha256(of data: Data) -> String {
