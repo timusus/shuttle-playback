@@ -83,11 +83,15 @@ How the pieces behave:
   source: the header does not skip past the `mdat` looking for the end, and a fragmented MP4 reads
   one fragment at a time instead of running to the end of the file after the first.
 - **A fragmented MP4 with AAC and no edit list loses its encoder priming (#25).** The edit list is
-  what normally tells FFmpeg to skip the priming, and a fragmented file has none. When the first
-  packet carries no skip, the decoder drops the file's iTunSMPB priming, else the codec's
-  `initial_padding`, else 1024 samples (the least any AAC-LC first frame holds), and time zero is
-  after them, so `duration`, seeks and the PCM start at the first real sample. HE-AAC and files
-  whose edit list already skips are untouched. The 1024 is an assumption where the file says
+  what normally tells FFmpeg to skip the priming, and a fragmented file has none. The trim applies
+  only when the `moov` (read from the leading 4 KiB the decoder already holds, so no extra I/O)
+  contains an `mvex` and its audio `trak` has no `edts`/`elst`, and the first packet carries no
+  skip. FFmpeg's public API cannot tell "no edit list" from "edit list with media_time 0", so a
+  progressive file, or one whose edit list says no priming, is never trimmed; a `moov` that does
+  not fit in 4 KiB is not trimmed either. The decoder then drops the file's iTunSMPB priming (only
+  0 < priming < 16384, as FFmpeg accepts), else the codec's `initial_padding`, else 1024 samples
+  (the least any AAC-LC first frame holds), and time zero is after them, so `duration`, seeks and
+  the PCM start at the first real sample. HE-AAC is untouched. The 1024 is an assumption where the file says
   nothing: an encoder that primes with more (Apple's 2112) keeps the rest as a short lead-in.
   PCM for such files changes (a minor-bump behaviour change).
 - **Leading ID3v2 tags are stepped over before FFmpeg sees them.** An MP3 with embedded cover art can

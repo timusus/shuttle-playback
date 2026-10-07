@@ -417,6 +417,86 @@ static int is_sbr(enum AVCodecID codec_id, int profile) {
 
 static void hold_first_packet(StreamDecoder *d);
 
+static uint32_t box_be32(const uint8_t *p) {
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+}
+
+/* The next child box of the box body [*pos, end): its type, and body [*body, *body_end). */
+static int box_next(const uint8_t *buf, size_t end, size_t *pos, uint32_t *type,
+                    size_t *body, size_t *body_end) {
+    if (end - *pos < 8) return 0;
+    uint64_t size = box_be32(buf + *pos);
+    size_t head = 8;
+    *type = box_be32(buf + *pos + 4);
+    if (size == 1) {
+        if (end - *pos < 16) return 0;
+        size = ((uint64_t)box_be32(buf + *pos + 8) << 32) | box_be32(buf + *pos + 12);
+        head = 16;
+    } else if (size == 0) {
+        size = end - *pos;
+    }
+    if (size < head || size > end - *pos) return 0;
+    *body = *pos + head;
+    *body_end = *pos + (size_t)size;
+    *pos = *body_end;
+    return 1;
+}
+
+#define BOX4(a, b, c, d) (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8) | (uint32_t)(d))
+
+/*
+ * Is this a fragmented MP4 (a `mvex` in the `moov`) whose audio `trak` has no edit list? Only then
+ * is the missing priming skip the file's silence about it (issue #25): in a progressive file an
+ * edit list with media_time 0 is the encoder saying "no priming", and FFmpeg's public API cannot
+ * tell that from no edit list at all. The answer comes from walking the box tree: moov, then each
+ * trak's mdia/hdlr for the first 'soun' and its edts/elst. The bytes are the ones the demuxer has
+ * already read, the leading `prologue` kept for MP3 framing, so this costs no I/O; a moov that
+ * does not fit in it, or sits after the first mdat or moof, answers no (a fragmented file's moov
+ * leads its first moof).
+ */
+static int mp4_fragmented_audio_without_elst(const StreamDecoder *d) {
+    const uint8_t *buf = d->prologue;
+    size_t len = (size_t)d->prologue_len;
+    size_t top = 0, moov, moov_end;
+    uint32_t type;
+
+    for (;;) {
+        if (!box_next(buf, len, &top, &type, &moov, &moov_end)) return 0;
+        if (type == BOX4('m', 'o', 'o', 'v')) break;
+        if (type == BOX4('m', 'd', 'a', 't') || type == BOX4('m', 'o', 'o', 'f')) return 0;
+    }
+
+    int fragmented = 0, audio_found = 0, audio_has_elst = 0;
+    size_t pos = moov, body, body_end;
+    uint32_t t;
+    while (box_next(buf, moov_end, &pos, &t, &body, &body_end)) {
+        if (t == BOX4('m', 'v', 'e', 'x')) fragmented = 1;
+        if (t != BOX4('t', 'r', 'a', 'k') || audio_found) continue;
+        int soun = 0, elst = 0;
+        size_t tp = body, tb, te;
+        uint32_t tt;
+        while (box_next(buf, body_end, &tp, &tt, &tb, &te)) {
+            if (tt == BOX4('e', 'd', 't', 's')) {
+                size_t ep = tb, eb, ee;
+                uint32_t et;
+                while (box_next(buf, te, &ep, &et, &eb, &ee)) {
+                    if (et == BOX4('e', 'l', 's', 't')) elst = 1;
+                }
+            } else if (tt == BOX4('m', 'd', 'i', 'a')) {
+                size_t mp = tb, mb, me;
+                uint32_t mt;
+                while (box_next(buf, te, &mp, &mt, &mb, &me)) {
+                    /* hdlr: version/flags, pre_defined, handler_type */
+                    if (mt == BOX4('h', 'd', 'l', 'r') && me - mb >= 12 &&
+                        box_be32(buf + mb + 8) == BOX4('s', 'o', 'u', 'n')) soun = 1;
+                }
+            }
+        }
+        if (soun) { audio_found = 1; audio_has_elst = elst; }
+    }
+    return fragmented && audio_found && !audio_has_elst;
+}
+
 /*
  * Encoder priming to drop from an MP4 AAC stream, for the packets whose edit list does not (issue
  * #25). The mov demuxer turns an edit list into skip-samples side data on the first packet; a
@@ -429,11 +509,16 @@ static void hold_first_packet(StreamDecoder *d);
 static int mp4_aac_prime_skip(const StreamDecoder *d, const AVCodecParameters *par) {
     if (par->codec_id != AV_CODEC_ID_AAC || is_sbr(par->codec_id, par->profile)) return 0;
     if (!d->fmt->iformat || !d->fmt->iformat->name || !strstr(d->fmt->iformat->name, "mov")) return 0;
+    if (!mp4_fragmented_audio_without_elst(d)) return 0;
     const AVDictionaryEntry *smpb = av_dict_get(d->fmt->metadata, "iTunSMPB", NULL, 0);
     if (smpb && smpb->value) {
-        /* " 00000000 00000840 000001CA 0000000000...": padding, priming, end padding, length. */
+        /* " 00000000 00000840 000001CA 0000000000...": padding, priming, end padding, length.
+         * FFmpeg's mov demuxer takes 0 < priming < 16384 itself, and sets skip-samples from it,
+         * so this only matters for out-of-range values, which are not believed. */
         unsigned f0, priming;
-        if (sscanf(smpb->value, " %x %x", &f0, &priming) == 2) return (int)priming;
+        if (sscanf(smpb->value, " %x %x", &f0, &priming) == 2 && priming > 0 && priming < 16384) {
+            return (int)priming;
+        }
     }
     if (par->initial_padding > 0) return par->initial_padding;
     return 1024;
@@ -1284,7 +1369,8 @@ static void hold_first_packet(StreamDecoder *d) {
     d->first_pkt_size = d->held->size;
     d->has_first_pkt = d->held->pos >= 0 && d->held->dts != AV_NOPTS_VALUE;
     int spf, br, sr, side;
-    if (d->has_first_pkt && d->held->size >= 4
+    int is_mp3 = d->fmt->iformat && d->fmt->iformat->name && strstr(d->fmt->iformat->name, "mp3");
+    if (is_mp3 && d->has_first_pkt && d->held->size >= 4
         && mp3_parse_header(d->held->data, &spf, &br, &sr, &side)) {
         d->mp3_header_ok = 1;
         d->mp3_header = ((uint32_t)d->held->data[0] << 24) | ((uint32_t)d->held->data[1] << 16)
