@@ -35,19 +35,21 @@ enum ConformanceMatrix {
 
     /// Opens a decoder, retrying with a fresh one when the open itself is interrupted by an injected
     /// error (nothing is decoded yet, so there is nothing to resume).
-    private static func open(_ reader: FaultyByteReader) -> (FFmpegStreamDecoder, StreamAudioFormat, Int, String?) {
+    /// Also returns the bytes the reader had served when the successful attempt began.
+    private static func open(_ reader: FaultyByteReader) -> (FFmpegStreamDecoder, StreamAudioFormat, Int, String?, Int64) {
         var attempts = 0
         while true {
             attempts += 1
             reader.rewind()
             let before = reader.injectedErrors
+            let start = reader.bytesRead
             let decoder = FFmpegStreamDecoder(reader: reader)
             do {
-                return (decoder, try decoder.open(), attempts, nil)
+                return (decoder, try decoder.open(), attempts, nil, start)
             } catch {
                 if reader.injectedErrors > before, attempts < maxAttempts { continue }
                 return (decoder, StreamAudioFormat(sampleRate: 0, channelCount: 0, duration: 0, codec: "", container: ""),
-                        attempts, String(describing: error))
+                        attempts, String(describing: error), start)
             }
         }
     }
@@ -60,7 +62,7 @@ enum ConformanceMatrix {
     /// a real one and is returned.
     static func decode(_ url: URL, switches: FaultSwitches) throws -> DecodeRun {
         let reader = try FaultyByteReader(url: url, switches: switches)
-        let (decoder, format, openAttempts, openError) = open(reader)
+        let (decoder, format, openAttempts, openError, openStart) = open(reader)
         if let openError { return DecodeRun(outcome: .failed(openError), attempts: openAttempts) }
         let channels = format.channelCount
         let rate = format.sampleRate
@@ -69,7 +71,7 @@ enum ConformanceMatrix {
         var injected = reader.injectedErrors
         while true {
             while let chunk = decoder.nextChunk() {
-                if !sawFirst { run.bytesBeforeFirstAudio = reader.bytesRead; sawFirst = true }
+                if !sawFirst { run.bytesBeforeFirstAudio = reader.bytesRead - openStart; sawFirst = true }
                 run.pcm += chunk
             }
             guard reader.injectedErrors > injected || decoder.endReason == .interrupted else { break }
@@ -127,7 +129,7 @@ enum ConformanceMatrix {
         let channels = cleanFormat.channelCount
         let duration = Double(clean.frames) / cleanFormat.sampleRate
         let reader = try FaultyByteReader(url: url, switches: switches)
-        let (decoder, _, _, openError) = open(reader)
+        let (decoder, _, _, openError, _) = open(reader)
         if let openError { XCTFail("\(label): open failed: \(openError)"); return [] }
         var results: [SeekResult] = []
         for fraction in seekFractions {
@@ -192,13 +194,25 @@ enum ConformanceMatrix {
                 if switches.contains(.unknownLength) {
                     // Without a length an MP3 or Opus seek has no bitrate estimate to use, so it may
                     // land elsewhere than the clean seek. What must hold: it lands near the target,
-                    // and the PCM after it is real audio from the clean decode, wherever it sits.
+                    // and the PCM after it sits where the landing says, as exactly as the clean
+                    // seek's does (the same offset, or 0, an exact seek). Where the clean window
+                    // has no alignment, the same landing must give the same PCM.
                     if abs(g.landed - w.target) > 0.1 {
                         report(.seekLanding, name, switches, "seek to \(w.target)s landed \(g.landed)s")
                     }
-                    if alignment(of: w, clean: clean) != nil, alignment(of: g, clean: clean) == nil {
+                    let cleanOffset = alignment(of: w, clean: clean)
+                    let offset = alignment(of: g, clean: clean)
+                    if cleanOffset != nil, offset == nil {
                         report(.seekPCM, name, switches, "seek to \(w.target)s: PCM after the landing at \(g.landed)s "
                             + "is not in the clean decode")
+                    } else if let offset, offset != 0, offset != cleanOffset {
+                        report(.seekPCM, name, switches, "seek to \(w.target)s: PCM after the landing at \(g.landed)s "
+                            + "sits \(offset) frames off, clean seek \(cleanOffset.map(String.init) ?? "unaligned")")
+                    } else if cleanOffset == nil, offset == nil, g.landed == w.landed, g.window != w.window,
+                              !(g.window.isEmpty && Int((g.landed * (clean.format?.sampleRate ?? 0)).rounded()) >= clean.frames) {
+                        // (An empty window at or past the clean decode's last frame is the truth:
+                        // there is nothing after that landing.)
+                        report(.seekPCM, name, switches, "seek to \(w.target)s: PCM after the landing differs from the clean seek")
                     }
                     continue
                 }
@@ -256,6 +270,21 @@ enum ConformanceMatrix {
         if faulted.frames != clean.frames {
             report(.frameCount, name, switches, "\(faulted.frames) frames, clean \(clean.frames)")
         }
+        // A tone repeated or shifted by a resume still matches to tolerance; the bits do not.
+        // Every whole second clear of a resume's warm-up must hash the same as the clean decode.
+        if !faulted.resumeFrames.isEmpty, let format = clean.format {
+            let rate = Int(format.sampleRate)
+            let seconds = min(faulted.frames, clean.frames) / max(rate, 1)
+            let got = GoldenStore.perSecondHashes(faulted.pcm, sampleRate: rate, channels: format.channelCount)
+            let want = GoldenStore.perSecondHashes(clean.pcm, sampleRate: rate, channels: format.channelCount)
+            for second in 0..<seconds where got[second] != want[second] {
+                let span = (second * rate)..<((second + 1) * rate)
+                if faulted.resumeFrames.contains(where: { span.overlaps($0..<($0 + seekWarmupFrames)) }) { continue }
+                report(.resumePCM, name, switches, "second \(second) hashes differently from the clean decode "
+                    + "(resumes at frames \(faulted.resumeFrames.prefix(6)))")
+                break
+            }
+        }
     }
 
     // MARK: Findings
@@ -286,22 +315,24 @@ enum ConformanceMatrix {
         if ProcessInfo.processInfo.environment["CONFORMANCE_LIST_FINDINGS"] == "1" {
             for f in findings { print("FINDING \(name) | \(f.kind.rawValue) | \(f.switches) | \(f.message.prefix(120))") }
         }
-        var used = Set<Int>()
+        var seen = Set<String>()
         for f in findings {
-            let rules = KnownIssues.rules.enumerated().filter {
-                $0.element.fixtures.contains(name) && $0.element.kinds.contains(f.kind) && $0.element.applies(f.switches)
-            }
-            if let (index, rule) = rules.first {
-                used.insert(index)
-                XCTExpectFailure("\(name): known decoder bug, \(rule.issue)") {
+            if let index = KnownIssues.rule(for: name, kind: f.kind, switches: f.switches, message: f.message) {
+                seen.insert("\(index) \(f.switches.rawValue) \(f.message)")
+                XCTExpectFailure("\(name): known decoder bug, \(KnownIssues.rules[index].issue)") {
                     XCTFail("\(name) [\(f.switches)] \(f.kind.rawValue): \(f.message)")
                 }
             } else {
                 XCTFail("\(name) [\(f.switches)] \(f.kind.rawValue): \(f.message)")
             }
         }
-        for (index, rule) in KnownIssues.rules.enumerated() where rule.fixtures.contains(name) && !used.contains(index) {
-            XCTFail("\(name): known issue no longer reproduces, remove its entry: \(rule.issue)")
+        for (index, rule) in KnownIssues.rules.enumerated() where rule.fixture == name {
+            for switches in rule.switches {
+                for message in rule.messages where !seen.contains("\(index) \(switches.rawValue) \(message)") {
+                    XCTFail("\(name) [\(switches)] \(rule.kind.rawValue): pinned finding no longer "
+                        + "reproduces (\(message)); update or remove its rule: \(rule.issue)")
+                }
+            }
         }
     }
 
@@ -352,8 +383,25 @@ enum ConformanceMatrix {
             seeks: landings,
             bytesBeforeFirstAudioMax: (clean.bytesBeforeFirstAudio + 1023) / 1024 * 1024)
 
+        // Counted from the start of the open attempt that succeeded, so an open retried after an
+        // injected error is held to the same budget as one that was not.
+        func checkBytes(allowed: Int64) {
+            for (switches, bytes) in faultedBytes where bytes > allowed {
+                report(.bytes, name, switches, "\(bytes) bytes read before the first audio, golden allows \(allowed)")
+            }
+        }
         if GoldenStore.updating {
-            try GoldenStore.save(measured)
+            // A golden is only written from a run whose fault matrix holds against it.
+            checkBytes(allowed: measured.bytesBeforeFirstAudioMax)
+            let unpinned = findings.filter {
+                KnownIssues.rule(for: name, kind: $0.kind, switches: $0.switches, message: $0.message) == nil
+            }
+            if unpinned.isEmpty {
+                try GoldenStore.save(measured)
+            } else {
+                XCTFail("\(name): golden NOT written, the fault matrix fails \(unpinned.count) time(s) against it")
+            }
+            resolveFindings(for: name)
             return
         }
         guard let golden = GoldenStore.load(name) else {
@@ -361,14 +409,7 @@ enum ConformanceMatrix {
             return
         }
         compare(measured, to: golden, clean: clean)
-        // Not under ioError: each interrupted open is retried with a fresh decoder that probes the
-        // same bytes again, so the count there is the cost of the retries, not of the first audio.
-        for (switches, bytes) in faultedBytes where !switches.contains(.ioErrorOncePerPosition) {
-            if bytes > golden.bytesBeforeFirstAudioMax {
-                report(.bytes, name, switches,
-                       "\(bytes) bytes read before the first audio, golden allows \(golden.bytesBeforeFirstAudioMax)")
-            }
-        }
+        checkBytes(allowed: golden.bytesBeforeFirstAudioMax)
         resolveFindings(for: name)
     }
 
