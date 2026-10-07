@@ -4,16 +4,16 @@ import OSLog
 
 private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback", category: "download")
 
-/// **Where the growing files live** (plan `docs/plans/2026-10-06-growing-file-playback.md` §7).
+/// **Where the growing files live.**
 ///
 /// One directory under `Caches`, so iOS may purge it, excluded from backup. Two kinds of file, and
 /// the name is the whole state, so there is no sidecar:
 /// - `<uuid>.partial`: one per transaction of a ``GrowingFileByteSource``. Deleted on a restart,
 ///   on a new load and stop (the source's `cancel()`), and by ``sweepPartials()`` at launch.
-///   Never reused by a later session (owner decision 1).
+///   Never reused by a later session.
 /// - `<sha256(url)>.audio`: a transaction that completed from byte 0, renamed. Kept up to
-///   ``budgetBytes`` (owner decision 3), least recently played first out; the modification date is
-///   the recency and is touched on every play. Not adopted into Downloads.
+///   ``budgetBytes``, least recently played first out; the modification date is
+///   the recency and is touched on every play. Never treated as a user's saved download.
 ///
 /// `write` is the one seam: the source writes every body byte through it, so a test can fail a
 /// write with `ENOSPC` at the byte it chooses.

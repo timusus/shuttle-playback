@@ -71,7 +71,7 @@ public final class LoopbackMediaServer: @unchecked Sendable {
     }
 
     /// **Once**: write this many bytes of the next body and then close the connection, with the
-    /// declared `Content-Length` still the full slice — the connection that drops mid-episode
+    /// declared `Content-Length` still the full slice — the connection that drops mid-file
     /// (airplane mode, a cell handoff). Cleared when it fires, so the client's reconnect is served
     /// whole; set it again for another drop. Unlike ``stallsAfterBodyBytes`` the client sees the
     /// end of the body at once.
@@ -82,7 +82,7 @@ public final class LoopbackMediaServer: @unchecked Sendable {
 
     /// With ``closesAfterBodyBytes``: the moment that drop fires, ``refuseRequests(for:)`` this
     /// long, so the drop is the start of an outage rather than one lost connection. Airplane mode
-    /// for a few seconds mid-episode, as the harness fixture server's `--drop-at --drop-for` does.
+    /// for a few seconds mid-file.
     public var outageAfterClose: TimeInterval? {
         get { lock.lock(); defer { lock.unlock() }; return _outageAfterClose }
         set { lock.lock(); _outageAfterClose = newValue; lock.unlock() }
@@ -114,7 +114,7 @@ public final class LoopbackMediaServer: @unchecked Sendable {
     }
 
     /// Write only this many bytes of each response body, then hold the connection open forever
-    /// without closing it — a host that went quiet mid-episode.
+    /// without closing it — a host that went quiet mid-file.
     ///
     /// A dropped connection is a different failure and the source already retries it; what a seek
     /// has to survive is the one where nothing arrives and nothing ends, because that is when the
@@ -137,7 +137,7 @@ public final class LoopbackMediaServer: @unchecked Sendable {
     public var servedBytes: Int64 { lock.lock(); defer { lock.unlock() }; return _servedBytes }
 
     /// Answer `200 OK` with the whole body and no `Content-Range`, ignoring any `Range` header —
-    /// what a surprising number of podcast CDNs do to a ranged request.
+    /// what a surprising number of media CDNs do to a ranged request.
     public var respondsWholeBodyIgnoringRange: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _respondsWholeBodyIgnoringRange }
         set { lock.lock(); _respondsWholeBodyIgnoringRange = newValue; lock.unlock() }
@@ -172,7 +172,7 @@ public final class LoopbackMediaServer: @unchecked Sendable {
     /// front of the client; and the response's disposition is answered from the byte source's own
     /// queue, so a response that lands while that queue is parked by another body's chunk is
     /// stranded, body and all. Sending N bytes up front lets the client answer the disposition
-    /// (and see those N bytes) at a moment the test chooses, and the remainder at another (#261).
+    /// (and see those N bytes) at a moment the test chooses, and the remainder at another.
     public var heldBodyAfterBytesForRangeStartingAt: [Int64: Int] {
         get { lock.lock(); defer { lock.unlock() }; return _heldBodyAfterBytesForRangeStartingAt }
         set { lock.lock(); _heldBodyAfterBytesForRangeStartingAt = newValue; lock.unlock() }
@@ -240,7 +240,7 @@ public final class LoopbackMediaServer: @unchecked Sendable {
     ///
     /// `firstChunkBytes`, when given, splits the body into two writes — the first this many bytes,
     /// the rest in a second write once the first is processed — instead of one: a body whose sniff
-    /// cannot be settled by the first delegate chunk alone (#226).
+    /// cannot be settled by the first delegate chunk alone.
     public func answerWithPage(
         host: String, contentType: String = "text/html; charset=utf-8", body: Data, firstChunkBytes: Int? = nil
     ) {
@@ -254,7 +254,7 @@ public final class LoopbackMediaServer: @unchecked Sendable {
         set { lock.lock(); _redirectsToAlternateHost = newValue; lock.unlock() }
     }
 
-    /// Hold every redirect hop's `302` for this long: an ad-stitching chain that is slow but
+    /// Hold every redirect hop's `302` for this long: a long redirect chain that is slow but
     /// alive, while its end answers at once.
     public var delayForRedirectHops: TimeInterval {
         get { lock.lock(); defer { lock.unlock() }; return _delayForRedirectHops }
@@ -264,15 +264,15 @@ public final class LoopbackMediaServer: @unchecked Sendable {
     /// The port the listener bound; zero until `init` returns.
     public private(set) var port: UInt16 = 0
 
-    /// The stitch the origin serves. Settable, because a host re-stitches its ad breaks behind a
-    /// stable URL: a test swaps this between requests to stand in for that.
+    /// The body the origin serves. Settable, because a server that splices dynamic content can
+    /// change the body behind a stable URL: a test swaps this between requests to stand in for that.
     public var body: Data {
         get { lock.lock(); defer { lock.unlock() }; return _body }
         set { lock.lock(); _body = newValue; _bodies = nil; lock.unlock() }
     }
 
-    /// One stitch per request, in order; the last one serves every request after it. A host that
-    /// re-stitches between a listener's first body and their reconnect, made deterministic.
+    /// One body per request, in order; the last one serves every request after it. A server that
+    /// changes the body between a client's first response and its reconnect, made deterministic.
     public var bodies: [Data]? {
         get { lock.lock(); defer { lock.unlock() }; return _bodies }
         set { lock.lock(); _bodies = newValue; lock.unlock() }
@@ -311,8 +311,8 @@ public final class LoopbackMediaServer: @unchecked Sendable {
     /// The fixture path a redirect chain ends at.
     public static let fixturePath = "/fixture.mp3"
 
-    /// A URL that answers `302` `hops` times before landing on ``url``'s path — an enclosure URL
-    /// behind a tracking prefix. Each hop is `/redirect/<n>/fixture.mp3`, the last a `302` to
+    /// A URL that answers `302` `hops` times before landing on ``url``'s path — a media URL
+    /// behind a redirect chain. Each hop is `/redirect/<n>/fixture.mp3`, the last a `302` to
     /// ``fixturePath`` (on `localhost` when ``redirectsToAlternateHost`` is set).
     public func redirectingURL(hops: Int) -> URL {
         URL(string: "http://127.0.0.1:\(port)/redirect/\(hops)/fixture.mp3")!

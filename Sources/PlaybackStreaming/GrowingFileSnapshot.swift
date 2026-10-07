@@ -1,12 +1,11 @@
 import Foundation
 
 /// **What the growing file looks like right now**: the only thing outside the byte source that
-/// may read it (plan `docs/plans/2026-10-06-growing-file-playback.md` §2 "Published state";
-/// architecture doc §3). The controller's buffering and stall rules, and any reader a host puts
+/// may read it. The controller's buffering and stall rules, and any reader a host puts
 /// beside the player through ``GrowingFileListener``, read this and never the source itself.
 ///
 /// The file holds `[base, frontier)` of the resource, from ONE transaction: a restart is a new
-/// file, a new `base` and a new ``transactionGeneration`` (plan §4). A retry that resumes the file
+/// file, a new `base` and a new ``transactionGeneration``. A retry that resumes the file
 /// from its frontier keeps all three, and only when the host answered with the same range start
 /// and total (and `If-Range` when it gave an ETag); a reader of one file sees the bytes that were
 /// played.
@@ -22,7 +21,7 @@ public struct GrowingFileSnapshot: Equatable, Sendable {
     /// Where the file is: a `.partial`, or the cache's `.audio` once a body from byte 0 has completed.
     /// Nil before the first transaction.
     public var fileURL: URL?
-    /// Counts transactions, from 1. A change means a new file and possibly a different stitch.
+    /// Counts transactions, from 1. A change means a new file and possibly a different body from the server.
     public var transactionGeneration: Int
     /// The player's seek generation when the transaction was opened by that seek's read: the
     /// pairing a reader uses to anchor a restart's base byte at the seek's landed time. Nil for a
@@ -58,11 +57,9 @@ public protocol GrowingFileSnapshotSource: AnyObject {
     var snapshot: GrowingFileSnapshot { get }
 }
 
-/// The byte layer's two structured events, `transaction` and `download` in the architecture doc's
-/// fixed set (§4), with the same fields. `PlaybackEventLog` (architecture step A) does not exist
-/// yet: until it does these go to whoever constructed the source, and step A turns the handler into
-/// a call that writes them as `{t_ms, out_frame, type, gen, …}` lines. Every transaction is a fresh
-/// stitch, so the table's `isContinuation` is always false and is not carried.
+/// The byte layer's two structured events, `transaction` and `download`. They go to whoever
+/// constructed the source, which may log them as it likes. Every transaction is a fresh body, so
+/// a continuation flag would always be false and is not carried.
 public enum GrowingFileEvent: Equatable, Sendable {
     /// A transaction's response was accepted. `base` is where its file starts: 0 when the host
     /// ignored the `Range` and answered `200`.

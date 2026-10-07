@@ -2,8 +2,7 @@ import Foundation
 import XCTest
 import PlaybackStreamingTestSupport
 
-/// **The loopback origin's network-fault knobs do what they say** (audio verification plan §3,
-/// task A), checked from a plain `URLSession` so a contract or output test that leans on them is
+/// **The loopback origin's network-fault knobs do what they say** , checked from a plain `URLSession` so a contract or output test that leans on them is
 /// measuring the player, not the server.
 final class LoopbackFaultKnobTests: XCTestCase {
 

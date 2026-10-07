@@ -450,6 +450,7 @@ enum GeneratedFixture {
         guard FileManager.default.isExecutableFile(atPath: ffmpeg) else {
             throw XCTSkip("no ffmpeg at \(ffmpeg); this test generates its own fixture")
         }
+        #if os(macOS)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpeg)
@@ -467,6 +468,9 @@ enum GeneratedFixture {
             throw XCTSkip("ffmpeg could not build the fixture (status \(process.terminationStatus))")
         }
         return url
+        #else
+        throw XCTSkip("the fixture is generated with a host ffmpeg, which an iOS device or simulator lacks")
+        #endif
     }
 
     /// `tone.mp3` behind a padding-only ID3v2 tag of `tagBytes`, standing in for the cover art a

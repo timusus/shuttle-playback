@@ -10,7 +10,7 @@ byte-source and FFmpeg code (effects such as skip-silence and Voice Boost live i
 |---|---|---|
 | `PlaybackDecode` | `PlaybackDecode`, `CStreamDecode` | `FFmpegStreamDecoder`: pull decoder over a `StreamByteReader`, Float32 interleaved at the source rate, seekable, cancellable. `FileByteReader` is the plain-file reader. Probe budget is `StreamProbeBudget` (default 64 KiB / 1 s). |
 | `PlaybackStreaming` | `PlaybackStreaming` | Opt-in network byte source: `GrowingFileByteSource` (a `StreamByteReader` over an HTTP(S) URL that writes to a growing file and retries/resumes from the frontier: `DownloadRetry`, `GrowingFileReadRule`), `GrowingFileStore`, `GrowingFileSnapshot` and `GrowingFileListener`. Depends on `PlaybackDecode`; a decode-only consumer never links it. Auth headers arrive resolved; no feed or podcast concept lives here. |
-| `PlaybackStreamingTestSupport` | `PlaybackStreamingTestSupport` | `LoopbackMediaServer`, no fixtures. Tests of the streaming target are in `PlaybackStreamingTests` (own two tone fixtures). Nine byte-source tests that close a connection short are skipped on a macOS host (URLSession there drops the bytes) and run on iOS. |
+| `PlaybackStreamingTestSupport` | `PlaybackStreamingTestSupport` | `LoopbackMediaServer`, no fixtures. Tests of the streaming target are in `PlaybackStreamingTests` (own two tone fixtures). |
 | `FFmpeg` | `CFFmpeg` (binary) | The static FFmpeg. For an app with its own C against libavformat (Podcasts' scanner decode). An app links exactly one FFmpeg. |
 
 `Frameworks/FFmpeg.xcframework` holds three slices (ios-arm64, ios-arm64-simulator, macos-arm64), each one `libffmpeg.a` plus headers and a `CFFmpeg` modulemap. `VERSION.txt` inside it records the FFmpeg tag, the profile and the exact configure flags.
@@ -53,8 +53,20 @@ swift test
 
 This runs on macOS against the macOS slice, with no simulator. The decoder tests compare against
 `AVAssetReader` using the committed fixtures in `Tests/PlaybackDecodeTests/Fixtures`. All tests
-must pass before tagging. Consumers run their own integration tests: Podcasts runs
-`xcodebuild test -scheme Playback-Package` and `scripts/spine-tests.sh`.
+must pass before tagging. Consumers run their own integration tests.
+
+The streaming tests also run on an iOS simulator, selected by UDID from
+`xcrun simctl list devices available` (`release.sh` does this, using `IOS_SIM_UDID` or the first
+available iPhone):
+
+```sh
+xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreamingTests \
+  -destination 'platform=iOS Simulator,id=<UDID>'
+```
+
+No test is skipped on either platform. (A short body is closed a beat late by `LoopbackMediaServer`:
+macOS URLSession drops a body's buffered bytes if the connection ends before the delegate has
+answered the response.)
 
 **Conformance suite.** `swift test --filter PlaybackDecodeConformance` (about 15 s) decodes every
 fixture in `Tests/PlaybackDecodeConformanceTests/Fixtures` (plus the three in

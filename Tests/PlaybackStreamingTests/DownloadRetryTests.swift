@@ -3,7 +3,7 @@ import Testing
 
 @testable import PlaybackStreaming
 
-/// **The download's retry budget, pinned without a network** (#412): answered failures spend
+/// **The download's retry budget, pinned without a network**: answered failures spend
 /// attempts, unanswered ones spend the link window, the backoff doubles to its cap, and only a
 /// response or a reset gives anything back. Times are literal seconds.
 struct DownloadRetryTests {

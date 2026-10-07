@@ -2,7 +2,7 @@ import XCTest
 @testable import PlaybackStreaming
 
 /// The growing-file store: partials, the rename on completion, LRU by modification date, the
-/// launch sweep and the low-disk eviction (plan §7).
+/// launch sweep and the low-disk eviction.
 final class GrowingFileStoreTests: XCTestCase {
 
     private var directory: URL!
@@ -56,7 +56,7 @@ final class GrowingFileStoreTests: XCTestCase {
         try cached(store, newest, bytes: 400, ageHours: 1)
 
         XCTAssertEqual(store.evict(toBudget: 900, excluding: oldest), 1)
-        XCTAssertNotNil(store.completedFile(for: oldest), "the playing episode is never evicted")
+        XCTAssertNotNil(store.completedFile(for: oldest), "the playing file is never evicted")
         XCTAssertNil(store.completedFile(for: middle))
         XCTAssertNotNil(store.completedFile(for: newest))
         XCTAssertEqual(store.evict(toBudget: 900), 0, "under budget: nothing goes")

@@ -5,7 +5,7 @@ import PlaybackDecode
 private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback", category: "download")
 
 /// **One download per transaction, to one file; the decoder reads the file and waits at the
-/// frontier** (plan §2-§4, #392). Unthrottled, no window, no run cache, no redirect cache.
+/// frontier**. Unthrottled, no window, no run cache, no redirect cache.
 ///
 /// - A transaction is `GET` with `Range: bytes=<base>-` and the caller's auth headers (on every hop
 ///   too). Each body chunk is written at its file offset and the frontier advances. A `200` to a
@@ -14,14 +14,14 @@ private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback
 ///   ``GrowingFileStore``'s cache.
 /// - A dropped connection, a silent body or a refused status is tried again after the backoff
 ///   ``DownloadRetry`` decides, until it says the read fails with `.transport`: a few attempts for
-///   failures the host answered, the link window for ones nothing answered (#412). A request
+///   failures the host answered, the link window for ones nothing answered. A request
 ///   nothing answers in time (``requestTimeoutSeconds`` for a transaction's first, the shorter
 ///   ``retryRequestTimeoutSeconds`` for a retry, neither past the link window's end) is ended as
 ///   one nothing answered, so a dead link fails about 30 s after it went quiet. A retry whose
 ///   file holds the decoder's position resumes it: `Range: bytes=<frontier>-` (with `If-Range`
 ///   when the host gave a strong ETag), appended to the same file under the same generation, so
 ///   nothing already on disk is fetched again. A resume the host answers with anything but a `206`
-///   from the frontier with the same total (a `200`, a re-stitch) is dropped for a restart at the
+///   from the frontier with the same total (a `200`, or a body the server has changed between requests) is dropped for a restart at the
 ///   decoder's position into a new file, as is a retry whose file does not hold that position.
 ///   Retries and resumes go straight to the redirect chain's remembered end, so a slow chain is
 ///   not walked again inside a retry's short wait. A request there that is refused (a `4xx`, a
@@ -40,23 +40,27 @@ private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback
 /// **``cancel()`` must be called**: a running task retains its delegate, this object.
 public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFileSnapshotSource, URLSessionDataDelegate {
 
-    static let throughputWindowSeconds: Double = 2
+    /// The window, in seconds, over which ``GrowingFileSnapshot/downloadBytesPerSecond`` is
+    /// averaged. A constant consumers may read.
+    public static let throughputWindowSeconds: Double = 2
     static let downloadEventSeconds: Double = 1
-    /// A parked read also looks again after this long. Load-bearing: the download rate decays while
+    /// A parked read also looks again after this many seconds. Load-bearing: the download rate decays while
     /// no bytes arrive and nothing broadcasts that, so a wait for a gap ahead of the frontier only
-    /// becomes the restart the read rule then asks for when the read looks again.
-    static let recheckSeconds: Double = 1
-    /// How many of a body's first bytes the media sniff needs (#226).
+    /// becomes the restart the read rule then asks for when the read looks again. A constant
+    /// consumers may read.
+    public static let recheckSeconds: Double = 1
+    /// How many of a body's first bytes the media sniff needs.
     static let sniffBytes = 12
     /// How long a body may go without a byte, once its response has arrived, before the source
     /// ends the transaction itself (``scheduleIdleCheckLocked(_:)``, on the clock). A connection
     /// that falls silent (a dead Wi-Fi, a host that stops sending without closing) is then an
     /// ordinary failure that ``DownloadRetry`` decides on. This is the player's only network
-    /// recovery; with URLSession's default 60 s a silent link held the read that long (#421).
-    static let idleTimeoutSeconds: TimeInterval = 6
+    /// recovery; with URLSession's default 60 s a silent link held the read that long. A constant
+    /// consumers may read, in seconds.
+    public static let idleTimeoutSeconds: TimeInterval = 6
     /// How long a transaction's first request waits for its response, on the clock
     /// (``sendLocked(_:for:timeout:)``); also the session's `timeoutIntervalForRequest`, a backstop
-    /// restarted on every redirect hop. Generous, so a cold origin or a chain of ad-stitching
+    /// restarted on every redirect hop. Generous, so a cold origin or a long chain of
     /// redirects (5.3 s to the first byte on a real host) is waited for rather than failed; the
     /// body's silence is ``idleTimeoutSeconds``'s alone.
     static let requestTimeoutSeconds: TimeInterval = 20
@@ -68,10 +72,10 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     /// end was refused or unanswered waits ``requestTimeoutSeconds``, within the window.
     static let retryRequestTimeoutSeconds: TimeInterval = 8
 
-    /// One process-wide session, so a host's connection stays warm between plays and restarts (#225).
+    /// One process-wide session, so a host's connection stays warm between plays and restarts.
     public static let sharedSession = makeSession(configuration: .default)
 
-    /// No URL cache: a host may re-stitch its media behind the same headers. Delegates are per task.
+    /// No URL cache: a host may change its media body behind the same headers. Delegates are per task.
     static func makeSession(configuration: URLSessionConfiguration) -> URLSession {
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.urlCache = nil
@@ -96,7 +100,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         /// The first response's strong ETag, the resume's `If-Range`.
         var entityTag: String?
         var base: Int64
-        /// This transaction's own, from its response; never inherited from an earlier stitch.
+        /// This transaction's own, from its response; never inherited from an earlier transaction's body.
         var totalLength: Int64?
         /// Bytes in the file.
         var written: Int64 = 0
@@ -341,7 +345,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     }
 
     /// Ends the download and deletes the partial (a cached complete file stays): a new load or
-    /// stop. Logs what was fetched and never read, the cost of whole-file fetches (plan §7).
+    /// stop. Logs what was fetched and never read, the cost of whole-file fetches.
     public func cancel() {
         locked {
             guard !cancelled else { return }
@@ -369,7 +373,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         }
     }
 
-    /// A backstop for an owner that never cancelled. Only reached once no task holds the source
+    /// A backstop for a creator that never cancelled. Only reached once no task holds the source
     /// as its delegate, so what is left is the file.
     deinit {
         if let tx = current, !tx.isCached, let file = tx.fileURL { store.discard(file) }
@@ -450,7 +454,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     ///
     /// An outage the host never answered spends no attempt while the link window lasts: the read
     /// waits through it, which the player shows as buffering, instead of failing a second into it
-    /// (#412). The window runs from when the link went quiet: `quietSince` when given (a silent
+    /// The window runs from when the link went quiet: `quietSince` when given (a silent
     /// body's last byte), else the start of the attempt nothing answered.
     ///
     /// `refused`: the host said no to this URL (a `4xx`, a page). That, or no answer at all, from
@@ -835,7 +839,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         return (start, Int64(parts[2].trimmingCharacters(in: .whitespaces)))
     }
 
-    /// Whether a body is media (#226). A page by its type, what a signed URL past its expiry
+    /// Whether a body is media. A page by its type, what a signed URL past its expiry
     /// answers with, never is; an audio or video type is. Otherwise (`application/octet-stream`
     /// names nothing) the body's first ``sniffBytes`` decide when given: an mp3 or ADTS frame sync,
     /// an ID3 tag, or a container's magic, which a page never starts with. Nil: undecided.

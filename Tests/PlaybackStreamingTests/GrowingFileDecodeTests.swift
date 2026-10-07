@@ -4,8 +4,8 @@ import PlaybackDecode
 import PlaybackStreamingTestSupport
 
 /// The decoder reads the growing file exactly as it reads the same bytes on disk: the same PCM,
-/// to the sample, under a drip, a `moov` at the end and a dropped connection (verification plan
-/// §3, the byte-source contract's decode-equality cases for this source).
+/// to the sample, under a drip, a `moov` at the end and a dropped connection (the byte-source
+/// contract's decode-equality cases for this source).
 final class GrowingFileDecodeTests: XCTestCase {
 
     static let testSession = GrowingFileByteSource.makeSession(configuration: .ephemeral)

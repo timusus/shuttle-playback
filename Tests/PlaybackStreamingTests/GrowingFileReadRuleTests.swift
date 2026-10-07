@@ -2,7 +2,7 @@ import XCTest
 @testable import PlaybackStreaming
 
 
-/// **The seek-wait rule** (growing-file plan §3-§4): what a read at a position of a growing file
+/// **The seek-wait rule**: what a read at a position of a growing file
 /// does, pinned with literals.
 final class GrowingFileReadRuleTests: XCTestCase {
 

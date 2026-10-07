@@ -3,8 +3,7 @@ import XCTest
 import PlaybackStreamingTestSupport
 import PlaybackDecode
 
-/// The growing-file byte source against a loopback origin and its fault knobs (plan §4, §6, §7;
-/// verification plan §3). Every read here is the decoder's: it blocks, and a 0 is the end.
+/// The growing-file byte source against a loopback origin and its fault knobs. Every read here is the decoder's: it blocks, and a 0 is the end.
 final class GrowingFileByteSourceTests: XCTestCase {
 
     static let testSession = GrowingFileByteSource.makeSession(configuration: .ephemeral)
@@ -220,9 +219,9 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertEqual(source.snapshot.transactionGeneration, 3, "the restart, then its base moved to 0")
     }
 
-    /// The host re-stitched between the drop and the resume (the total moved): its bytes are not
+    /// The host spliced different content in between the drop and the resume (the total moved): its bytes are not
     /// this file's end, so the retry is a restart at the decoder's position into a new file.
-    func testAResumeIntoADifferentStitchRestartsIntoANewFile() throws {
+    func testAResumeIntoADifferentSpliceRestartsIntoANewFile() throws {
         let first = makeBody(160_000)
         let second = makeBody(200_000, seed: 42)
         let server = try startServer(body: first)
@@ -233,7 +232,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertEqual(try read(source, 4096), first.prefix(4096))
         XCTAssertTrue(waitUntil { server.requestedRanges.count == 3 })
         XCTAssertEqual(server.requestedRanges, [0, 100_000, 4096])
-        XCTAssertEqual(try readToEnd(source), second.suffix(from: 4096), "the new stitch was spliced onto the old")
+        XCTAssertEqual(try readToEnd(source), second.suffix(from: 4096), "the new splice was spliced onto the old")
         XCTAssertEqual(source.snapshot.base, 4096)
         XCTAssertEqual(source.snapshot.transactionGeneration, 2)
         XCTAssertEqual(source.totalLength, 200_000)
@@ -349,7 +348,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertEqual(server.requestedRanges.count, 1 + DownloadRetry.maxAttempts)
     }
 
-    func testFeedHeadersRideEveryRequestAndRedirectHopAndRestartsGoStraightToTheEnd() throws {
+    func testAuthHeadersRideEveryRequestAndRedirectHopAndRestartsGoStraightToTheEnd() throws {
         let body = makeBody(128 * 1024)
         let server = try startServer(body: body)
         let source = makeSource(server.redirectingURL(hops: 2), authHeaders: ["Authorization": "Basic c2VjcmV0"])
@@ -471,7 +470,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertEqual(server.requestedRanges, [0, 0, 0])
     }
 
-    /// #421 arm 8c on the clock: the body falls silent and every request after it is swallowed.
+    /// On the clock:the body falls silent and every request after it is swallowed.
     /// The window runs from the body's last byte, so the read fails 30 s after the link went quiet.
     /// Behind a redirect chain too, where the walk back through the chain after its end went
     /// unanswered gets the generous header wait: still cut at the window's end.
@@ -497,9 +496,9 @@ final class GrowingFileByteSourceTests: XCTestCase {
         }
     }
 
-    /// #412: the link drops mid-body and nothing answers for seconds (airplane mode). The three
+    /// The link drops mid-body and nothing answers for seconds (airplane mode). The three
     /// attempts used to go in 0.7 s and the read failed, which the player took for the end of the
-    /// episode. A connect nothing answered spends no attempt: the read waits out the outage, and the
+    /// file. A connect nothing answered spends no attempt: the read waits out the outage, and the
     /// first request after it resumes the file from its frontier.
     func testAnOutageLongerThanTheRetriesIsWaitedOutAndResumesFromTheFrontier() throws {
         let body = makeBody(64 * 1024)
@@ -527,7 +526,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertEqual(source.snapshot.transactionGeneration, 1)
     }
 
-    /// #421: the connection falls silent mid-body, open but sending nothing (a dead Wi-Fi, a host
+    /// The connection falls silent mid-body, open but sending nothing (a dead Wi-Fi, a host
     /// that stopped). The source's idle check ends it like a drop once the body has been silent for
     /// the idle timeout on its clock, and not before; the retry is the source's, not a reconnect
     /// from the player.
@@ -611,7 +610,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
     }
 
     /// A host slower to its first byte than the body's idle timeout (a cold origin, a chain of
-    /// ad-stitching redirects) is waited for: the idle check starts with the response, and the
+    /// a long redirect chain) is waited for: the idle check starts with the response, and the
     /// session gives the headers ``GrowingFileByteSource/requestTimeoutSeconds``. Real time, on the
     /// system clock, because the session's timeout is real time.
     func testAResponseSlowerThanTheIdleTimeoutIsWaitedFor() throws {
@@ -661,7 +660,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
 
     // MARK: - Network cost
 
-    /// Plan §8: the whole episode is fetched on every network, and Low Data Mode is treated like
+    /// The whole file is fetched on every network, and Low Data Mode is treated like
     /// cellular, with no special case. A session that refused expensive or constrained paths
     /// would stop playback on cellular or in Low Data Mode instead.
     func testThePlaybackSessionFetchesOnCellularAndInLowDataModeAlike() {
@@ -711,7 +710,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertEqual(partials(), [])
     }
 
-    func testARestitchedBodyOnARestartIsReadWithItsOwnLength() throws {
+    func testASplicedBodyOnARestartIsReadWithItsOwnLength() throws {
         let first = makeBody(100_000)
         let second = makeBody(120_000, seed: 42)
         let server = try startServer(body: first)
@@ -728,7 +727,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertEqual(source.snapshot.transactionGeneration, 2)
     }
 
-    func testARestitchWithNoLengthIsReadPastTheEarlierStitchsLength() throws {
+    func testASpliceWithNoLengthIsReadPastTheEarlierSplicesLength() throws {
         let first = makeBody(100_000)
         let second = makeBody(120_000, seed: 42)
         let server = try startServer(body: first)
@@ -742,7 +741,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         server.respondsWholeBodyIgnoringRange = true
         server.omitsContentLength = true
         try source.seek(to: 0)
-        XCTAssertEqual(try readToEnd(source), second, "100 000 was the old stitch's length, not this one's")
+        XCTAssertEqual(try readToEnd(source), second, "100 000 was the old splice's length, not this one's")
         XCTAssertEqual(source.totalLength, 120_000)
     }
 
@@ -852,7 +851,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertNil(events.transactions.last?.seekGenerationForTest)
     }
 
-    /// #421: a download that has finished is never asked for again, however long the listener
+    /// A download that has finished is never asked for again, however long the listener
     /// sits on it: no retry, no idle timeout, no new transaction, and no seek generation spent.
     func testAFinishedDownloadNeverAsksAgainOrSeeks() throws {
         let body = makeBody(64 * 1024)
@@ -910,7 +909,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertEqual(heads.filter { $0.hasPrefix("GET /redirect/1/") }.count, 2, "the chain is walked again")
     }
 
-    /// An ad-stitching chain that is alive but slower than a retry's header wait, ending at a host
+    /// A long redirect chain that is alive but slower than a retry's header wait, ending at a host
     /// that answers at once: the resume after a mid-body drop goes straight to the end instead of
     /// walking the chain again, so the slow chain never fails the read.
     func testAResumeAfterADropGoesStraightToTheChainsEndPastASlowChain() throws {

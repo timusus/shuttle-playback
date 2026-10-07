@@ -38,6 +38,17 @@ fi
 echo "release.sh: swift test"
 swift test
 
+# The byte source runs on iOS URLSession in the apps, so its tests also run on a simulator,
+# picked by UDID (IOS_SIM_UDID, else the first available iPhone).
+udid="${IOS_SIM_UDID:-$(xcrun simctl list devices available | grep -E '^ +iPhone' | head -1 | grep -oE '[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}')}"
+if [[ -z "$udid" ]]; then
+    echo "release.sh: no available iPhone simulator; set IOS_SIM_UDID" >&2
+    exit 1
+fi
+echo "release.sh: PlaybackStreamingTests on iOS simulator $udid"
+xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreamingTests \
+    -destination "platform=iOS Simulator,id=$udid" -quiet
+
 git tag -a "$version" -m "shuttle-playback $version"
 git push origin main
 git push origin "$version"

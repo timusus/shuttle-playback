@@ -1,6 +1,6 @@
 import Foundation
 
-/// **Whether a failed download transaction is tried again, and after how long** (#412).
+/// **Whether a failed download transaction is tried again, and after how long**.
 ///
 /// The growing-file source's whole network recovery, without the source: it reports each failure
 /// and whether anything answered it, and does what the ``Decision`` says. Nothing here touches a

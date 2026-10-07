@@ -1,7 +1,7 @@
 import Foundation
 
 /// **The growing file's listener**: a host's view of the bytes the decoder plays
-/// (growing-file plan §5). It is handed the file rather than every chunk: the listener reads the
+/// It is handed the file rather than every chunk: the listener reads the
 /// bytes back from it (`GrowingFileSnapshot.fileURL`), so it can never see a byte the decoder did
 /// not have, nor run a second fetch. Nil for a local file.
 ///
