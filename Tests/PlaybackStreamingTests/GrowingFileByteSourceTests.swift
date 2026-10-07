@@ -409,28 +409,21 @@ final class GrowingFileByteSourceTests: XCTestCase {
         }
     }
 
-    func testThePinAcceptsAChainHoldingAPinnedCertificateAndRejectsOthers() {
-        let pinned = Data([1, 2, 3]), other = Data([9, 9])
-        let policy = GrowingFileConnectionPolicy(pinnedCertificates: [pinned])
-        XCTAssertTrue(policy.accepts(chain: [other, pinned]))
-        XCTAssertFalse(policy.accepts(chain: [other]))
-        XCTAssertFalse(policy.accepts(chain: []))
-        XCTAssertTrue(GrowingFileConnectionPolicy(headers: ["A": "b"]).accepts(chain: [other]), "no pin: the system decides")
-    }
-
-    func testAPinMismatchFailsTheReadAtOnceAndIsNotRetried() throws {
-        // The loopback server speaks no TLS, so the challenge itself cannot be driven end to end:
-        // the rejection a failed pin check makes is applied to a request in flight instead.
+    func testAnUntrustedCertificateFailsTheReadAtOnceAndIsNotRetried() throws {
+        // The loopback server speaks no TLS, so the challenge itself cannot be driven end to end: the
+        // trust decision is tested in GrowingFileConnectionPolicyTests, and the rejection it makes is
+        // applied to a request in flight here.
         let server = try startServer(body: makeBody(64 * 1024))
         server.delayForEveryRange = 30
-        let source = makeSource(server.url, connectionPolicy: GrowingFileConnectionPolicy(pinnedCertificates: [Data([1])]))
+        let policy = GrowingFileConnectionPolicy(trustedLeafSHA256: [String(repeating: "AB", count: 32)])
+        let source = makeSource(server.url, connectionPolicy: policy)
         let pending = readAsync(source, 100)
         XCTAssertTrue(waitUntil { server.requestHeads.count == 1 && source.currentTask != nil })
-        source.pinRejected(task: try XCTUnwrap(source.currentTask))
+        source.certificateRejected(task: try XCTUnwrap(source.currentTask))
 
-        XCTAssertTrue(pending.finished(within: 5), "a pin mismatch fails the read without waiting out a retry")
+        XCTAssertTrue(pending.finished(within: 5), "a refused certificate fails the read without waiting out a retry")
         guard case .transport(let reason)? = readerError(pending.result) else { return XCTFail("\(pending.result)") }
-        XCTAssertEqual(reason, GrowingFileConnectionPolicy.pinMismatchReason)
+        XCTAssertEqual(reason, GrowingFileConnectionPolicy.untrustedCertificateReason)
         Thread.sleep(forTimeInterval: 0.5)
         XCTAssertEqual(server.requestHeads.count, 1, "no retry")
     }

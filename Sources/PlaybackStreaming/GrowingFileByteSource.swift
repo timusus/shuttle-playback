@@ -186,7 +186,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     ///     token or session id which changes between plays. Pass the URL without them, and ask the
     ///     store for `completedFile(for:)` with the same key. The requests still go to `url`. Nil
     ///     (the default) keys the cache by `url`.
-    ///   - connectionPolicy: extra headers and an optional pinned certificate for `url`'s origin; nil
+    ///   - connectionPolicy: extra headers and the leaf certificates the user trusted for `url`'s origin; nil
     ///     (the default) is the system's trust and no extra headers. Like `authHeaders`, its headers
     ///     are sent only to that origin, never to another one a redirect lands on.
     ///   - onEvent: the `transaction`/`download` events.
@@ -621,7 +621,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         }
     }
 
-    /// The current transaction's task: what a test hands ``pinRejected(task:)``.
+    /// The current transaction's task: what a test hands ``certificateRejected(task:)``.
     var currentTask: URLSessionTask? { locked { current?.task } }
 
     private func downloadBytesPerSecondLocked(now: TimeInterval? = nil) -> Double? {
@@ -665,32 +665,39 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
+        // As Shuttle2 does: the system's evaluation first, and only a chain it refuses is checked
+        // against the leaves the user trusted, for the original origin only.
         let space = challenge.protectionSpace
         guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let trust = space.serverTrust, let policy, !policy.pinnedCertificates.isEmpty,
-              isOrigin(host: space.host, port: space.port)
+              let trust = space.serverTrust, let policy, !policy.trustedLeafSHA256.isEmpty,
+              isOrigin(space)
         else {
             completionHandler(.performDefaultHandling, nil)
             return
         }
-        if policy.accepts(trust: trust) {
+        switch policy.decision(for: trust) {
+        case .systemDefault:
+            completionHandler(.performDefaultHandling, nil)
+        case .acceptTrustedLeaf:
             completionHandler(.useCredential, URLCredential(trust: trust))
-        } else {
-            pinRejected(task: task)
+        case .reject:
+            certificateRejected(task: task)
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
     }
 
-    private func isOrigin(host: String, port: Int) -> Bool {
-        guard let originHost = url.host else { return false }
-        return host.lowercased() == originHost.lowercased() && port == (url.port ?? (url.scheme == "https" ? 443 : 80))
+    private func isOrigin(_ space: URLProtectionSpace) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else { return false }
+        let port = url.port ?? (scheme == "https" ? 443 : 80)
+        return space.protocol?.lowercased() == scheme && space.host.lowercased() == host && space.port == port
     }
 
-    /// The origin's certificate is not the pinned one: the read fails at once, with no retry.
-    func pinRejected(task: URLSessionTask) {
+    /// The system refused the origin's certificate and the user trusted no such leaf: the read fails
+    /// at once, with no retry.
+    func certificateRejected(task: URLSessionTask) {
         locked {
             guard !cancelled, let tx = current, tx.task === task, !tx.ended else { return }
-            endLocked(tx, GrowingFileConnectionPolicy.pinMismatchReason, retryable: false)
+            endLocked(tx, GrowingFileConnectionPolicy.untrustedCertificateReason, retryable: false)
         }
     }
 
