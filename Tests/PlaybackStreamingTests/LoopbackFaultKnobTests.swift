@@ -100,6 +100,59 @@ final class LoopbackFaultKnobTests: XCTestCase {
         return (data, response as! HTTPURLResponse)
     }
 
+    /// The head of the answer as it goes on the wire, read from a raw socket: `URLSession` would
+    /// normalise the header names, which is what the lower-case knob must not be judged through.
+    private func rawHead(of url: URL) throws -> String {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(descriptor, 0)
+        defer { close(descriptor) }
+        var timeout = timeval(tv_sec: 10, tv_usec: 0)
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(url.port ?? 80).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        XCTAssertEqual(connected, 0)
+        let request = "GET \(url.path) HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        _ = request.withCString { send(descriptor, $0, strlen($0), 0) }
+        var received = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while String(decoding: received, as: UTF8.self).range(of: "\r\n\r\n") == nil {
+            let got = recv(descriptor, &buffer, buffer.count, 0)
+            if got <= 0 { break }
+            received.append(contentsOf: buffer[0..<got])
+        }
+        let text = String(decoding: received, as: UTF8.self)
+        return text.range(of: "\r\n\r\n").map { String(text[..<$0.lowerBound]) } ?? text
+    }
+
+    func testLowercasesHeadersLowercasesTheNamesOnTheWire() throws {
+        let (origin, _) = try start(bodyBytes: 4096)
+        let normal = try rawHead(of: origin.url)
+        XCTAssertTrue(normal.contains("Content-Type: "), normal)
+        origin.lowercasesHeaders = true
+        let lower = try rawHead(of: origin.url)
+        XCTAssertTrue(lower.contains("\r\ncontent-type: audio/mpeg"), lower)
+        XCTAssertFalse(lower.contains("Content-Type"), lower)
+        XCTAssertTrue(lower.hasPrefix("HTTP/1.1 2"), "the status line is not a header: \(lower)")
+    }
+
+    func testUsesChunkedEncodingSendsChunkedInPlaceOfAContentLength() throws {
+        let (origin, _) = try start(bodyBytes: 4096)
+        let plain = try rawHead(of: origin.url)
+        XCTAssertTrue(plain.contains("Content-Length: 4096"), plain)
+        XCTAssertFalse(plain.contains("Transfer-Encoding"), plain)
+        origin.usesChunkedEncoding = true
+        let chunked = try rawHead(of: origin.url)
+        XCTAssertTrue(chunked.contains("Transfer-Encoding: chunked"), chunked)
+        XCTAssertFalse(chunked.lowercased().contains("content-length"), chunked)
+    }
+
     func testAnswers416AtOrAfterEndAnswers416OnlyForARangePastTheBody() async throws {
         let (origin, body) = try start(bodyBytes: 4096)
         origin.answers416AtOrAfterEnd = true

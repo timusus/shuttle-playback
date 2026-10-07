@@ -21,6 +21,12 @@ class GrowingFileContractCase: XCTestCase {
         var mimeType = "audio/mpeg"
         /// Number of redirect hops between the URL opened and the body.
         var redirectHops = 0
+        /// The origin answers a ranged request with `200` and the whole body.
+        var ignoresRange = false
+        /// The origin declares the body's length, so ``GrowingFileByteSource/totalLength`` is
+        /// known as soon as the first answer is read. False when the length is only learned at the
+        /// end of the body.
+        var declaresLength = true
         var configure: (LoopbackMediaServer) -> Void = { _ in }
         var url: (LoopbackMediaServer) -> URL = { $0.url }
     }
@@ -31,9 +37,15 @@ class GrowingFileContractCase: XCTestCase {
     static var defaultMatrix: [Resource] {
         var out: [Resource] = [
             Resource(name: "range-206"),
-            Resource(name: "range-ignored-200", configure: { $0.respondsWholeBodyIgnoringRange = true }),
+            Resource(name: "range-ignored-200", ignoresRange: true, configure: { $0.respondsWholeBodyIgnoringRange = true }),
             Resource(name: "no-content-length", configure: { $0.omitsContentLength = true }),
             Resource(name: "chunked", configure: { $0.usesChunkedEncoding = true }),
+            // media3's truly unbounded resource: `200` whatever the range, chunked, no length anywhere.
+            Resource(name: "unknown-length", ignoresRange: true, declaresLength: false, configure: {
+                $0.respondsWholeBodyIgnoringRange = true
+                $0.usesChunkedEncoding = true
+                $0.omitsContentLength = true
+            }),
             Resource(name: "lowercase-headers", configure: { $0.lowercasesHeaders = true; $0.etag = "\"v1\"" }),
             Resource(name: "etag", configure: { $0.etag = "\"v1\"" }),
             Resource(name: "gzip", configure: { $0.gzipsBody = true }),

@@ -10,7 +10,7 @@ final class GrowingFileContractTests: GrowingFileContractCase {
 
     // MARK: - Reading
 
-    /// media3 `unboundedRangeRequest` / `readAll`: open at 0, read to the end, and the end is a 0.
+    /// media3 `unboundedDataSpec_readUntilEnd`: open at 0, read to the end, and the end is a 0.
     func testTheWholeBodyIsReadAndThenEndsInAZero() throws {
         let body = makeBody()
         try forEachResource { resource in
@@ -24,7 +24,7 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         }
     }
 
-    /// media3 `positionedRangeRequest`: open at an offset, read to the end.
+    /// media3 `dataSpecWithPosition_readUntilEnd`: open at an offset, read to the end.
     func testASeekThenAReadToTheEndReturnsTheSuffix() throws {
         let body = makeBody()
         try forEachResource { resource in
@@ -37,7 +37,8 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         }
     }
 
-    /// media3 `boundedRangeRequest`: a window in the middle, and the position follows it.
+    /// media3 `dataSpecWithPositionAndLength_readExpectedRange`: a window in the middle, and the
+    /// position follows it. A length is a read size here; the source has no length-limited open.
     func testABoundedReadFromAPositionReturnsThatWindow() throws {
         let body = makeBody()
         try forEachResource { resource in
@@ -49,7 +50,8 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         }
     }
 
-    /// media3 `byteRangeReadsEqualWhole`: contiguous windows read in order add up to the body.
+    /// media3 `dataSpecWithLength_readUntilEndInTwoParts` (and `dataSpecWithLength_readExpectedRange`
+    /// from position 0): contiguous windows read in order add up to the body.
     func testContiguousWindowsAddUpToTheBody() throws {
         let body = makeBody()
         try forEachResource { resource in
@@ -62,7 +64,7 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         }
     }
 
-    /// media3 `reopenAfterSeek`-style: read on, seek back and forth, and the bytes stay the file's.
+    /// Ours, no media3 counterpart: read on, seek back and forth, and the bytes stay the file's.
     func testSeekingBackAndForwardReadsTheSameBytes() throws {
         let body = makeBody()
         try forEachResource { resource in
@@ -77,7 +79,7 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         }
     }
 
-    /// media3 `positionedRangeRequest` on the wire: a seek asks the host for exactly that offset.
+    /// Ours, no media3 counterpart (media3 checks the bytes, not the request): a seek asks the host for exactly that offset.
     func testASeekAsksTheHostForExactlyThatOffset() throws {
         let body = makeBody()
         try forEachResource { resource in
@@ -92,8 +94,8 @@ final class GrowingFileContractTests: GrowingFileContractCase {
 
     // MARK: - The end of the resource
 
-    /// media3 `positionAtEnd`: once the length is known, a position at the end is an end of
-    /// stream, not an error.
+    /// media3 `dataSpecWithPositionAtEnd_readsZeroBytes` (and `dataSpecWithPositionAtEndAndLength_readsZeroBytes`):
+    /// once the length is known, a position at the end is an end of stream, not an error.
     func testAPositionAtTheEndOfAKnownLengthIsEndOfStream() throws {
         let body = makeBody()
         try forEachResource { resource in
@@ -104,7 +106,7 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         }
     }
 
-    /// media3 `positionPastEnd`: a position beyond the end is a failed read, after the retries,
+    /// media3 `dataSpecWithPositionOutOfRange_throwsPositionOutOfRangeException`: a position beyond the end is a failed read, after the retries,
     /// whether the origin clamps the range to its last byte or answers `416`.
     func testAPositionPastTheEndFailsTheRead() throws {
         let body = makeBody()
@@ -122,7 +124,9 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         }
     }
 
-    /// The first byte past the end, before the length is known, is the same failure.
+    /// Pinned; a `416` with `Content-Range: bytes */N` could be read as end of stream (issue #39).
+    /// Today a seek to exactly the end, before the length is known, fails the read like a position
+    /// past the end; media3's `dataSpecWithPositionAtEnd_readsZeroBytes` expects zero bytes.
     func testAnOpenAtExactlyTheEndFailsTheReadBeforeTheLengthIsKnown() throws {
         let body = makeBody()
         for strict in [false, true] {
@@ -134,9 +138,44 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         }
     }
 
+    /// media3 `dataSpecWithEndPositionOutOfRange_readsToEnd`: asking for more bytes than remain
+    /// returns what remains, and the next read is the end.
+    func testAReadLongerThanWhatRemainsReturnsTheRest() throws {
+        let body = makeBody()
+        try forEachResource { resource in
+            let (_, source) = try open(resource, body: body)
+            try source.seek(to: Int64(body.count - 100))
+            XCTAssertEqual(try finish(readAsync(source, 1000), resource.name).get(), body.suffix(100), resource.name)
+            XCTAssertEqual(try read(source, 10), Data(), "\(resource.name): after the end")
+        }
+    }
+
     // MARK: - Failing to open
 
-    /// media3 `resourceNotFound`, and `HttpDataSourceTestEnv`'s error statuses: any non-success
+    /// media3 `uriSchemeIsCaseInsensitive`: `HTTP://` opens like `http://`, redirects included.
+    func testAnUpperCaseSchemeOpensLikeALowerCaseOne() throws {
+        let body = makeBody()
+        try forEachResource { resource in
+            let (server, _) = try open(resource, body: body)
+            let url = resource.url(server)
+            let shouted = URL(string: url.absoluteString.replacingOccurrences(of: "http://", with: "HTTP://"))!
+            XCTAssertTrue(shouted.absoluteString.hasPrefix("HTTP://"), resource.name)
+            let source = makeSource(shouted)
+            XCTAssertEqual(try finish(readAsync(source, Int.max), resource.name).get(), body, resource.name)
+        }
+    }
+
+    /// Nothing listening at all (a refused connection) is a transport error after the retries,
+    /// not a hang and not an empty body.
+    func testAConnectionRefusedFailsTheRead() throws {
+        let server = try startServer(body: makeBody())
+        let url = server.url
+        server.stop()
+        assertTransport(finish(readAsync(makeSource(url), 1), within: 30, "connection refused"), "connection refused")
+        XCTAssertEqual(partials(), [])
+    }
+
+    /// media3 `resourceNotFound`, and the error statuses of its `HttpDataSource` tests: any non-success
     /// status fails the read with a transport error after the retries, with or without an HTML
     /// error page behind it.
     func testErrorStatusesFailTheReadAfterTheRetries() throws {
@@ -171,7 +210,8 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         XCTAssertEqual(partials(), [])
     }
 
-    /// `HttpDataSourceTestEnv`'s request-header case: the caller's headers ride every request,
+    /// Ours (media3's `HttpDataSource` tests cover request properties, not in the contract test):
+    /// the caller's headers ride every request,
     /// the redirect hops too, whatever the case the host answers in.
     func testRequestHeadersRideEveryRequestIncludingRedirectHops() throws {
         let body = makeBody()
@@ -188,7 +228,7 @@ final class GrowingFileContractTests: GrowingFileContractCase {
 
     // MARK: - Life cycle
 
-    /// media3 `closeWithoutOpen` / `multipleCloseCalls`: cancelling a source never read from is
+    /// Ours, no media3 counterpart: cancelling a source never read from is
     /// harmless and starts nothing, twice over; a read after it is a cancellation.
     func testCancelBeforeAnyReadAndCancelTwiceAreHarmless() throws {
         let server = try startServer(body: makeBody())
@@ -200,7 +240,7 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         XCTAssertEqual(partials(), [])
     }
 
-    /// media3 `readAfterClose`: cancelled after bytes were read, the next read is a cancellation
+    /// Ours, no media3 counterpart: cancelled after bytes were read, the next read is a cancellation
     /// and so is a seek-and-read; nothing hangs.
     func testAReadAfterCancelThrowsCancelled() throws {
         let body = makeBody()
@@ -214,7 +254,7 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         }
     }
 
-    /// media3 `reopenAfterClose`: a new source on the same URL after a cancel reads the whole
+    /// Ours, no media3 counterpart: a new source on the same URL after a cancel reads the whole
     /// body again.
     func testANewSourceAfterACancelReadsTheWholeBodyAgain() throws {
         let body = makeBody()
@@ -229,17 +269,22 @@ final class GrowingFileContractTests: GrowingFileContractCase {
 
     // MARK: - What the first answer records
 
-    /// media3 `getResponseHeaders` / `getUri`: the source exposes no headers, but it records the
-    /// first answer's status, the hosts it passed through and the length it learned.
+    /// Ours, no media3 counterpart (`getResponseHeaders_*` and `getUri_*` are n/a: the source
+    /// exposes neither): it records the first answer's status, the hosts it passed through and the
+    /// length it learned. A resource that declares no length may leave the length unknown at this point.
     func testTheFirstAnswerRecordsItsStatusAndTheRedirectHops() throws {
         let body = makeBody()
         try forEachResource { resource in
             let (server, source) = try open(resource, body: body)
             _ = try finish(readAsync(source, 1), resource.name).get()
-            let ignoresRange = resource.name == "range-ignored-200"
-            XCTAssertEqual(source.startup.status, ignoresRange ? 200 : 206, resource.name)
+            XCTAssertEqual(source.startup.status, resource.ignoresRange ? 200 : 206, resource.name)
             XCTAssertEqual(source.startup.hosts.count, resource.redirectHops, resource.name)
-            XCTAssertEqual(source.totalLength, Int64(body.count), resource.name)
+            if resource.declaresLength {
+                XCTAssertEqual(source.totalLength, Int64(body.count), resource.name)
+            } else {
+                // Learned only at the end of the body: unknown, or exactly the body's size.
+                XCTAssertTrue(source.totalLength == nil || source.totalLength == Int64(body.count), "\(resource.name): \(String(describing: source.totalLength))")
+            }
             XCTAssertEqual(server.requestedRanges.count, 1, resource.name)
         }
     }

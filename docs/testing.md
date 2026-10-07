@@ -44,38 +44,48 @@ resource in every failure. A new server behaviour is one `Resource`; a later sui
 policy, path-change reopen, cache budget) subclasses the base, adds or overrides resources and
 reuses the helpers (`open`, `read`, `readAsync`, `finish`, `assertTransport`).
 
-The matrix: ranged `206`; range ignored (`200`); no `Content-Length`; chunked; lower-case header
-names; `ETag`; gzip; `application/octet-stream`; a 3-hop redirect chain; a `302` whose `Location` is
-absolute, rooted (`/fixture.mp3`), parent-relative (`../fixture.mp3`) or scheme-relative; `301`,
-`303`, `307` and `308`; and lower-case chunked behind a relative redirect. The server knobs added
-for it are `lowercasesHeaders`, `usesChunkedEncoding`, `htmlErrorBodies`, `redirectURL(status:location:)`
-and `missingURL`.
+The matrix: ranged `206`; range ignored (`200`); no `Content-Length`; chunked; a true unknown
+length (`200` whatever the range, chunked, no length anywhere, so `totalLength` is only learned at
+the end of the body and the cases that assert it allow that); lower-case header names; `ETag`; gzip;
+`application/octet-stream`; a 3-hop redirect chain; a `302` whose `Location` is absolute, rooted
+(`/fixture.mp3`), parent-relative (`../fixture.mp3`) or scheme-relative; `301`, `303`, `307` and
+`308`; and lower-case chunked behind a relative redirect. The server knobs added for it are
+`lowercasesHeaders`, `usesChunkedEncoding`, `htmlErrorBodies`, `redirectURL(status:location:)` and
+`missingURL`; `LoopbackFaultKnobTests` reads the raw response to check the first two change it.
 
-The mapping below was written from memory of media3's `library/test_utils` (the files could not be
-fetched), so the media3 names are approximate.
+The mapping uses media3's `DataSourceContractTest` case names. media3 has no close or reopen cases;
+ours are listed last.
 
 | media3 case | Here | Notes |
 |---|---|---|
-| `unboundedRangeRequest`, read all | `testTheWholeBodyIsReadAndThenEndsInAZero` | Also asserts length and position. |
-| `positionedRangeRequest` | `testASeekThenAReadToTheEndReturnsTheSuffix`, `testASeekAsksTheHostForExactlyThatOffset` | The second checks the `Range` header on the wire. |
-| `boundedRangeRequest` | `testABoundedReadFromAPositionReturnsThatWindow` | A bound is a read length; the source has no length-limited open. |
-| `byteRangeReadsEqualWhole` | `testContiguousWindowsAddUpToTheBody` | |
-| reopen / seek back | `testSeekingBackAndForwardReadsTheSameBytes` | |
-| `positionAtEnd` | `testAPositionAtTheEndOfAKnownLengthIsEndOfStream`, `testAnOpenAtExactlyTheEndFailsTheReadBeforeTheLengthIsKnown` | Before the length is known, the read fails after the retries; the source cannot tell an end from a bad range. |
-| `positionPastEnd` | `testAPositionPastTheEndFailsTheRead` | Clamping and `416` origins, with and without an HTML body. |
-| `resourceNotFound`, error statuses | `testErrorStatusesFailTheReadAfterTheRetries` | 400 to 503, with and without an HTML page, and a missing path. |
-| HTML / wrong content type | `testAPageServedAsAudioOrAsAPageFailsTheRead` | A page declared `audio/mpeg` is trusted. |
-| request headers, redirects (`HttpDataSourceTestEnv`) | `testRequestHeadersRideEveryRequestIncludingRedirectHops`, the redirect resources | Relative and absolute `Location`, every redirect status. |
-| lower-case response headers | the `lowercase-headers` resources | Run through every case. |
-| unknown length, chunked | the `no-content-length` and `chunked` resources | Run through every case. |
-| `closeWithoutOpen`, `multipleCloseCalls` | `testCancelBeforeAnyReadAndCancelTwiceAreHarmless` | |
-| `readAfterClose` | `testAReadAfterCancelThrowsCancelled` | |
-| `reopenAfterClose` | `testANewSourceAfterACancelReadsTheWholeBodyAgain` | A source is not reopened; a new one is made. |
-| `getResponseHeaders`, `getUri` | `testTheFirstAnswerRecordsItsStatusAndTheRedirectHops` | n/a for headers: the source exposes none; it records the status, hosts and length. |
-| `getUri` before open, `open` returns length | n/a | No such API. |
-| transfer listener events | n/a | The source reports `GrowingFileEvent`, covered in `GrowingFileByteSourceTests`. |
-| `FakeDataSet` scripted per-request behaviour | the server's per-request knobs and `bodies` | Covered by `GrowingFileByteSourceTests` and `LoopbackFaultKnobTests`; no separate scripting layer. |
-| cross-protocol redirect, timeouts, `Content-Type` predicate | n/a | Loopback is HTTP only; timeouts and idle checks have their own tests in `GrowingFileByteSourceTests`. |
+| `unboundedDataSpec_readUntilEnd` | `testTheWholeBodyIsReadAndThenEndsInAZero` | Also asserts length and position. |
+| `unboundedDataSpec_readExpectedBytesWithOffset` | `testASeekThenAReadToTheEndReturnsTheSuffix` | |
+| `dataSpecWithPosition_readUntilEnd` | `testASeekThenAReadToTheEndReturnsTheSuffix`, `testASeekAsksTheHostForExactlyThatOffset` | The second checks the `Range` header on the wire. |
+| `dataSpecWithLength_readExpectedRange` | `testContiguousWindowsAddUpToTheBody` | A length is a read size; the source has no length-limited open. |
+| `dataSpecWithLength_readUntilEndInTwoParts` | `testContiguousWindowsAddUpToTheBody` | |
+| `dataSpecWithPositionAndLength_readExpectedRange` | `testABoundedReadFromAPositionReturnsThatWindow` | |
+| `dataSpecWithPositionAtEnd_readsZeroBytes` | `testAPositionAtTheEndOfAKnownLengthIsEndOfStream` | Only once the length is known; see the next row. |
+| `dataSpecWithPositionAtEndAndLength_readsZeroBytes` | same | n/a as a separate case: no length-limited open. |
+| (`dataSpecWithPositionAtEnd_readsZeroBytes`, length not yet known) | `testAnOpenAtExactlyTheEndFailsTheReadBeforeTheLengthIsKnown` | Pinned; a `416` with `Content-Range: bytes */N` could be read as end of stream (issue #39). |
+| `dataSpecWithPositionOutOfRange_throwsPositionOutOfRangeException` | `testAPositionPastTheEndFailsTheRead` | A transport error after the retries, whether the origin clamps or answers `416`, with and without an HTML body. media3's exception type is n/a. |
+| `dataSpecWithEndPositionOutOfRange_readsToEnd` | `testAReadLongerThanWhatRemainsReturnsTheRest` | |
+| `unboundedDataSpecWithGzipFlag_readUntilEnd` | the `gzip` resource | Run through every case. |
+| `uriSchemeIsCaseInsensitive` | `testAnUpperCaseSchemeOpensLikeALowerCaseOne` | `HTTP://` across the whole matrix. |
+| `resourceNotFound` | `testErrorStatusesFailTheReadAfterTheRetries`, `testAConnectionRefusedFailsTheRead` | 400 to 503, with and without an HTML page, a missing path, and a refused connection. |
+| `transferListenerCallbacks`, `resourceNotFound_transferListenerCallbacks` | n/a | The source reports `GrowingFileEvent`, covered in `GrowingFileByteSourceTests`. |
+| `getUri_returnsExpectedValueOnlyWhileOpen`, `getUri_resourceNotFound_returnsNullIfNotOpened` | n/a | No `getUri`. `testTheFirstAnswerRecordsItsStatusAndTheRedirectHops` checks the hosts the source passed through. |
+| `getResponseHeaders_*` (5) | n/a | The source exposes no headers; it records the status, hosts and length. |
+| POST, `Content-Type` predicate, cross-protocol redirect | n/a | The source only GETs; loopback is HTTP only. |
+| Ours, no media3 counterpart | `testSeekingBackAndForwardReadsTheSameBytes` | Seek back and forth. |
+| Ours | `testAPageServedAsAudioOrAsAPageFailsTheRead` | A page declared `audio/mpeg` is trusted. |
+| Ours | `testRequestHeadersRideEveryRequestIncludingRedirectHops` | Caller headers on every hop. |
+| Ours | `testCancelBeforeAnyReadAndCancelTwiceAreHarmless`, `testAReadAfterCancelThrowsCancelled` | Cancel is the close. |
+| Ours | `testANewSourceAfterACancelReadsTheWholeBodyAgain` | A source is not reopened; a new one is made. |
+| Ours | `testTheFirstAnswerRecordsItsStatusAndTheRedirectHops` | |
+
+Scripted per-request behaviour (`FakeDataSet`) is the server's per-request knobs and `bodies`,
+covered by `GrowingFileByteSourceTests` and `LoopbackFaultKnobTests`; there is no separate scripting
+layer. Timeouts and idle checks have their own tests in `GrowingFileByteSourceTests`.
 
 ## The conformance suite
 
