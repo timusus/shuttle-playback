@@ -30,8 +30,15 @@ let package = Package(
             name: "CStreamDecode",
             dependencies: ["CFFmpeg"],
             // libavformat's ID3v2 reader and MP4 `cmov` path call zlib, and its metadata
-            // conversion calls iconv. Both ship with the system on iOS and macOS.
-            linkerSettings: [.linkedLibrary("z"), .linkedLibrary("iconv")]
+            // conversion calls iconv. Both ship with the system on iOS and macOS. libavutil's
+            // VideoToolbox hardware context (hwcontext_videotoolbox.o, built in although nothing
+            // here decodes video) calls CoreFoundation, CoreMedia, CoreVideo and VideoToolbox:
+            // without them a plain consumer target fails to link (issue #10).
+            linkerSettings: [
+                .linkedLibrary("z"), .linkedLibrary("iconv"),
+                .linkedFramework("CoreFoundation"), .linkedFramework("CoreMedia"),
+                .linkedFramework("CoreVideo"), .linkedFramework("VideoToolbox"),
+            ]
         ),
         .target(name: "PlaybackDecode", dependencies: ["CStreamDecode"]),
         .target(name: "PlaybackStreaming", dependencies: ["PlaybackDecode"]),

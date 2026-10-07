@@ -23,8 +23,10 @@ targets: [
 
 In Xcode, use File > Add Package Dependencies with the same URL.
 
-If a command-line or test target fails to link with undefined `CoreVideo`, `CoreMedia` or `VideoToolbox`
-symbols, add those frameworks to the target's `linkerSettings`. See the [tutorial](tutorial.md).
+`PlaybackDecode` links the system frameworks and libraries the static FFmpeg needs (CoreFoundation,
+CoreMedia, CoreVideo, VideoToolbox, zlib and iconv), so a target needs no linker settings of its
+own. A target that takes only the `FFmpeg` product gets none of them, because a binary target cannot
+carry linker settings: add them to that target's `linkerSettings`.
 
 Pin a tag, never a branch. The package needs iOS 17 or macOS 14. Add `PlaybackStreaming` only if
 you stream URLs. Add the `FFmpeg` product only if you have your own C code against libavformat, and

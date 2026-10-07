@@ -27,19 +27,11 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "first-file",
-            dependencies: [.product(name: "PlaybackDecode", package: "shuttle-playback")],
-            linkerSettings: [
-                .linkedFramework("CoreVideo"),
-                .linkedFramework("CoreMedia"),
-                .linkedFramework("VideoToolbox"),
-            ]
+            dependencies: [.product(name: "PlaybackDecode", package: "shuttle-playback")]
         ),
     ]
 )
 ```
-
-The three frameworks are there because the static FFmpeg refers to them, and a bare command-line
-target does not link them for you.
 
 ## Decode the file
 
