@@ -42,6 +42,9 @@ let package = Package(
             dependencies: ["PlaybackDecode", "CStreamDecode"],
             resources: [.copy("Fixtures")]
         ),
+        // Fault reader, fixture corpus and goldens for the decoder: every faulted decode must equal
+        // the clean one. Fixtures and goldens are read by path (see Golden.swift), not as resources.
+        .testTarget(name: "PlaybackDecodeConformanceTests", dependencies: ["PlaybackDecode"]),
         .testTarget(name: "SilenceGateTests", dependencies: ["SilenceGate"]),
         .testTarget(name: "VoiceEnhanceTests", dependencies: ["VoiceEnhance"]),
     ]

@@ -1,0 +1,58 @@
+{
+  "bytesBeforeFirstAudioMax" : 81920,
+  "channels" : 2,
+  "durationS" : 20,
+  "expect" : "decodes",
+  "fixture" : "tone_moov_last.m4a",
+  "frames" : 882688,
+  "pcmSha256PerSecondInt16" : [
+    "7cff18c9e02d1b80012b0185e482ad1c06557a6fe4f33d91f22f4f8add3d7ad5",
+    "5772648bc984338fc3c1115bc078d4806951ffa4c1f9ae034f3dbec29b2b392f",
+    "04141bb66524ce059b9f99835c618c77964a83ce9763c3d512a083e15b6f975e",
+    "e4384b77eda41df341cccc83e703b286aaa086512f81573fc4e7d106ad5ed1a1",
+    "4d23f0940d687951412d0faab5c0ed74d84069ea8dddd466bc3a89047a0a5820",
+    "f3d1e592d8ade2eba3799b06dc55f9abb5f4b754f12920ea088a544af1f7e7b0",
+    "d9fd5162af0c91de19a4a055e2fb47cf72c9f74594881333eba0295105652c29",
+    "2a6777504fe11bf2ae13e91c532bc0002d9a81c5fcb1d06a1de4f1da4a3afab9",
+    "0bd9bba5a7a3357c6f62846dd8e2abd65d2d3109dc284072ddd2f69140a61f5a",
+    "25b007bf7a80ade004a2a9af93c485bb91fe188615715a444aebc174ad90404f",
+    "777f7f726e9650ddee7e363650e3173391698f81cab6842d968d71fe41d6bff0",
+    "8de68c8c4573893efd3685ad372011f60bfd74ac35b2bf25be80b0f6f2c37c74",
+    "c9276b1a4a986d558fd7aa98cf6f0ac4cb4b990b20a3db9ccd874bc940dfaae9",
+    "a6fc91dcfb23eda4092758e5705b98d417f476c5174b6e9e016915f50f3ffbd7",
+    "af2f15e6841db8edac072a00ef4151cec28fc4e630b9bb7978ddbf5d880d8f32",
+    "96de67c1a9ee60b2c656a459c7a4e20fdd0bd001a706a33fddc94dbc1c087a5e",
+    "ae65b352a47c7a47fa6837d106c4134a390ce0ed2724d597b908852fd8784bae",
+    "4faa6d1d314cd8819fe08731252e99b3d7a5d45da5b7cbc33c1f7dd27caca78d",
+    "453a16c2fd847a7f5e14cc06c53db848e90542c444e8480c1901935e91ec2ac7",
+    "02a1294a55453ff368b4143ceaf62c0c87849ffaa9472212bf816abe7bc280df",
+    "08f208c11a8198cc23d6242ab9214d729c6ce395ffc175553c0b9d179a14077b"
+  ],
+  "sampleRate" : 44100,
+  "seeks" : [
+    {
+      "alignFrames" : 0,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 6.664,
+      "toS" : 6.672,
+      "tolS" : 0.03
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 13.328,
+      "toS" : 13.344,
+      "tolS" : 0.03
+    },
+    {
+      "landedS" : 19.992,
+      "toS" : 20.016,
+      "tolS" : 0.03
+    }
+  ],
+  "sha256" : "01d5414b8182bab4261543f760fa70dc3f61069261513ecb77e76518d968d865"
+}
