@@ -1149,7 +1149,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         assertTransport(rest.result)
         XCTAssertEqual(
             server.requestedRanges, [0] + Array(repeating: 20_000, count: DownloadRetry.maxAttempts),
-            "the path change spent no attempt"
+            "the path change did not spend an attempt: one resume too many, or too few (a second budget)"
         )
         XCTAssertLessThan(clock.now - 1_000, GrowingFileByteSource.idleTimeoutSeconds)
     }
@@ -1237,6 +1237,37 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertTrue(pending.finished(within: 30), "the read hung after a 416")
         assertTransport(pending.result)
         XCTAssertEqual(server.requestedRanges.prefix(3), [0, 100_000, 100_000])
+    }
+
+    /// A body of unknown length stalls after its last byte, and the reopen from the frontier (a
+    /// path change) is answered `416` with `bytes */N`, N being the frontier. As for a fresh
+    /// request, that is the end of the file, not a refused resume: the length is learned and the
+    /// read ends, with no restart. A different N is still a refused resume.
+    func testAResumeAtTheFrontierAnswered416WithTheTotalAtThatPositionIsTheEnd() throws {
+        // The first body is cut at 100 000 by the stall; the file that answers the reopen ends
+        // there, so its strict origin says `bytes */100000`.
+        let body = makeBody(160_000)
+        let server = try startServer(body: body)
+        server.bodies = [body, makeBody(100_000, seed: 42)]
+        server.answers416AtOrAfterEnd = true
+        // A plain `200` without a length: the total is not known when the reopen is answered.
+        server.respondsWholeBodyIgnoringRange = true
+        server.omitsContentLength = true
+        server.stallsAfterBodyBytes = 100_000
+        let clock = ManualGrowingFileClock()
+        let monitor = GrowingFilePathMonitor()
+        let source = makeSource(server.url, clock: clock, pathMonitor: monitor)
+
+        XCTAssertEqual(try read(source, 4096), body.prefix(4096))
+        XCTAssertTrue(waitUntil { source.snapshot.frontier == 100_000 })
+        let rest = readAsync(source, Int.max)
+        XCTAssertTrue(waitUntil { source.parkCount > 0 })
+        monitor.update(Self.wifi)
+        monitor.update(Self.cellular)
+        XCTAssertTrue(clock.drive(step: 0.1) { rest.finished(within: 0) }, "the read hung after a 416 at the frontier")
+        XCTAssertEqual(try rest.result.get(), body[4096..<100_000])
+        XCTAssertEqual(server.requestedRanges, [0, 100_000], "the end was taken for a refused resume")
+        XCTAssertEqual(source.totalLength, 100_000)
     }
 
     /// A gzip-encoded body is inflated by the session, and its `Content-Length` is the encoded
