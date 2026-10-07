@@ -29,6 +29,6 @@ in the apps, as PCM in and PCM out.
 
 - The decoder links a resampler and carries its tail and timing across a format change.
 - Seeking into a resampled section is timed by byte offset, never bit-identical (the `stitch_*` fixtures).
-- Seek accuracy at a non-native output rate is tracked in #27.
+- At a non-native output rate a seek is exact in time and frame count, but not bit-identical for its first few frames while the resampler warms up.
 
 Links: [ADR-0005](0005-shared-engine-repo.md), [architecture](../architecture.md).

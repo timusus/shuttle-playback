@@ -23,7 +23,7 @@ let package = Package(
         .library(name: "FFmpeg", targets: ["CFFmpeg"]),
     ],
     targets: [
-        // Committed, not downloaded: see docs/ffmpeg.md#what-is-committed. Rebuild with
+        // Committed, not downloaded: see CLAUDE.md, "Where the xcframework lives". Rebuild with
         // `scripts/build-ffmpeg.sh` (one music-superset build for both apps).
         .binaryTarget(name: "CFFmpeg", path: "Frameworks/FFmpeg.xcframework"),
         .target(

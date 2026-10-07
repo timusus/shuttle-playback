@@ -27,10 +27,17 @@ load ends and are swept at launch.
 
 ## Consequences
 
+- The window's footer *side-fetch* (a separate request for the tail) is gone. One footer rule remains
+  on purpose: FFmpeg's MP3 open seeks to the last 128 bytes for an ID3v1 tag. While the host has set
+  `isProbing` around `open()`, a read there past the frontier answers end of file at once, which FFmpeg
+  takes as "no footer", so the head download is not cancelled for a look at the tail
+  (`GrowingFileReadRule.footerBytes`). Outside the probe the same read waits, or the last frames would
+  be cut.
+
 - The whole resource is downloaded, on cellular and in Low Data Mode too, even if the listener
   stops early.
 - A killed app restarts the download from scratch.
 - A seek far past the frontier restarts the download at the target, into a new file.
 - Background URLSession cannot be used, because it hands over the file only when it is finished.
 
-Links: [architecture](../architecture.md#the-growing-file-byte-source).
+Links: [architecture](../architecture.md).

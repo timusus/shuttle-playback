@@ -12,14 +12,14 @@ sources would mean two recovery layers, two sets of retry rules and two sets of 
 ## Decision
 
 Both apps use `GrowingFileByteSource`. The range-window source does not move into this package
-(#23, closed). [ADR-0003](0003-growing-file-playback.md) rejected the window because its
+(#23). [ADR-0003](0003-growing-file-playback.md) rejected the window because its
 compensation rules were the bug surface, and [ADR-0004](0004-one-recovery-layer-in-the-byte-source.md)
-keeps one recovery layer. What Shuttle2 needs that is generic moves into `GrowingFileByteSource`:
+keeps one recovery layer. What Shuttle2 needed that is generic went into `GrowingFileByteSource`:
 
-- #29: connection policy, meaning pinning and headers scoped across redirects.
-- #30: cache keys that carry no token.
-- #31: reopening when the path changes.
-- #32: a cache budget per host.
+- A connection policy: trusted certificate fingerprints, and headers scoped to the origin across redirects.
+- Cache keys that carry no token.
+- Reopening when the network path changes.
+- A cache budget per `GrowingFileStore`, so each owner has its own directory and ceiling.
 
 ## Alternatives rejected
 
@@ -31,8 +31,8 @@ keeps one recovery layer. What Shuttle2 needs that is generic moves into `Growin
 
 - Music is downloaded whole, which costs cellular data on a track that is only sampled. Whether that
   is acceptable is measured first in shuttle2#958.
-- The single 1 GiB cache of ADR-0003 changes when #32 lands.
-- The four items above are open work, not behaviour of the package today.
+- The single 1 GiB cache of ADR-0003 is now per store: the default store keeps 1 GiB, and an owner
+  that needs a different ceiling makes its own.
 
 Links: [ADR-0003](0003-growing-file-playback.md), [ADR-0004](0004-one-recovery-layer-in-the-byte-source.md),
 [architecture](../architecture.md).

@@ -4,7 +4,7 @@ Public (GPL-3.0) Swift package holding the iOS decode layer shared by **Shuttle 
 (`timusus/podcasts`) and, later, **Shuttle2** (`timusus/shuttle2`). It holds only decode,
 byte-source and FFmpeg code (effects such as skip-silence and Voice Boost live in the apps). Anything about podcasts, ads, queues, players or UI stays in the apps.
 
-Full documentation (architecture, decisions, integration, FFmpeg, testing) is in `docs/`; start at `README.md`.
+Documentation is in `docs/` (usage, architecture, decisions, contributing); start at `README.md`.
 
 ## Layout
 

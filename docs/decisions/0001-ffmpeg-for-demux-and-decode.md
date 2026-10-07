@@ -32,6 +32,6 @@ format set shared by both apps (ADR-0006). FFmpeg stays statically linked.
 - Static linking against an LGPL library leaves the relinking question open for closed-source
   consumers. Revisit if it matters to one.
 - The shim stays codec-agnostic. A missing codec is FFmpeg saying no, never a branch of ours.
-- FFmpeg bugs the tag lacks are fixed with local patches. See [FFmpeg](../ffmpeg.md).
+- FFmpeg bugs the tag lacks are fixed with local patches. See [contributing](../contributing.md#ffmpeg).
 
-Links: [architecture](../architecture.md), [FFmpeg](../ffmpeg.md).
+Links: [architecture](../architecture.md), [contributing](../contributing.md#ffmpeg).

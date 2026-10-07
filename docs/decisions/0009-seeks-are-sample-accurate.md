@@ -14,7 +14,7 @@ cold produces wrong samples for a while. The first conformance goldens recorded 
 A seek starts a pre-roll before the target (by default 16384 samples, 32768 for Opus; MP3 is sized to the bit reservoir, HE-AAC with SBR uses 131072), decodes it and drops
 everything before the target sample, so every golden's `alignFrames` is 0. AAC reopens its codec at
 every seek, with a longer pre-roll for HE-AAC's SBR, and an MP3's pre-roll is sized from its unpadded
-main data. This replaced the frame-coarse landing (commits 8a30035, d3cd08d, ba2da36, 6b1c519).
+main data. This replaced the frame-coarse landing.
 
 ## Alternatives rejected
 
@@ -27,6 +27,5 @@ main data. This replaced the frame-coarse landing (commits 8a30035, d3cd08d, ba2
 - A seek decodes a pre-roll, so it costs more than a frame-coarse seek.
 - One landing is still inexact: a VBR MP3 seek further from a frame of known time than one seek's byte
   budget lands by the Xing TOC or a bitrate estimate, because no MP3 frame carries its time (#3).
-- Reporting whether a landing was exact is an idea, not a decision (#26).
 
-Links: [testing](../testing.md), [architecture](../architecture.md).
+Links: [contributing](../contributing.md), [architecture](../architecture.md).

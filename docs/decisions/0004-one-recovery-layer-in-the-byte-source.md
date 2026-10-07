@@ -18,7 +18,7 @@ restarts at the decoder's position. A 30 s link window covers connection attempt
 answers. The host only detects: it notices starvation and resumes playing.
 
 A new network path (Wi-Fi gone to cellular, the link back after none) ends the transaction in flight
-at once instead of waiting out the 6 s (#31). It is one more failure of this layer, not a second
+at once instead of waiting out the 6 s. It is one more failure of this layer, not a second
 recovery path: `DownloadRetry` decides on it from the same budget, and the retry resumes from the
 frontier as after any drop. The signal is one `NWPathMonitor` shared by every source.
 
@@ -38,12 +38,4 @@ frontier as after any drop. The signal is one `NWPathMonitor` shared by every so
 - The policy is a value type with no clock, lock or network (`DownloadRetry`), so each rule is tested
   with literal numbers, and the source is tested against a loopback server with fault knobs.
 
-## Outcome
-
-`PlaybackStreamingTests` runs the source against `LoopbackMediaServer` with its fault knobs and a
-manual clock. The tests show that a dropped connection resumes from the frontier without a new
-transaction, that a silent body is ended by the idle timeout and retried, that a host which ignores
-`Range` is waited on rather than restarted, and that a link that stays dead ends in a transport error
-once the 30 s window is spent.
-
-Links: [architecture](../architecture.md#recovery-and-retry).
+Links: [architecture](../architecture.md).

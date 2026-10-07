@@ -37,8 +37,8 @@ with no token.
   opt-in product, and its auth headers arrive already resolved. Both apps use it
   ([ADR-0007](0007-one-network-byte-source.md)).
 - The FFmpeg xcframework is committed to the repository, because SwiftPM does not run Git LFS and
-  there is no hosted CI to publish release assets. See [FFmpeg](../ffmpeg.md).
+  there is no hosted CI to publish release assets. See [contributing](../contributing.md#ffmpeg).
 - A public API change is a minor bump while the version is 0.x. A change that alters the PCM the
   decoder produces is at least a minor bump too.
 
-Links: [architecture](../architecture.md#package-layout), [testing](../testing.md).
+Links: [architecture](../architecture.md), [contributing](../contributing.md).

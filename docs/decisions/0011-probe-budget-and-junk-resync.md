@@ -30,4 +30,4 @@ RIFF, FORM, an MP4 `ftyp` box) or a text page (a leading `<` or `{`). A file tha
 - Junk longer than 1 MiB is not played.
 - Header-described formats (FLAC, ALAC, PCM WAV/AIFF) skip the probe altogether when the header gives the codec, rate, channels, format and (WAV aside) duration (#21); the decoder reports `skippedProbe`, and `forcesProbe: true` restores the probe. The budget above only governs the formats that still probe.
 
-Links: [architecture](../architecture.md), [testing](../testing.md).
+Links: [architecture](../architecture.md), [contributing](../contributing.md).

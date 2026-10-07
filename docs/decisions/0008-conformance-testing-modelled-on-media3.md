@@ -34,7 +34,7 @@ The conformance suite follows media3:
 - A decoder change that moves PCM shows as a golden diff to review, and a regenerated golden is
   written only if the fault matrix passes against it.
 - Some encoder outputs are not byte-reproducible, so `make-fixtures.sh` is re-run only on purpose.
-- Not done yet: #33 (finish the extractor-test port, with a table mapping media3's tests to ours) and
-  #34 (a `DataSourceContractTest` equivalent for the byte source).
+- The byte source has the same treatment: `GrowingFileContractTests` ports media3's
+  `DataSourceContractTest`. The extractor-test port is still partial (#33).
 
-Links: [testing](../testing.md), [ADR-0006](0006-one-superset-ffmpeg.md).
+Links: [contributing](../contributing.md), [ADR-0006](0006-one-superset-ffmpeg.md).
