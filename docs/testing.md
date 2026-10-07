@@ -127,10 +127,10 @@ Then review the JSON diff. The suite writes a golden only if the fault matrix pa
 `KnownIssues.swift`. A rule names the fixture, the kind of check, the exact fault combinations and
 the exact finding, with its GitHub issue, and runs under `XCTExpectFailure`. A different value, or a
 pinned finding that stops happening, fails the suite. When the bug is fixed, remove the rule. Rules
-exist at present for #28 and #36, and `alignFrames` is 0 in every seek of every golden because
-seeks land on
-the requested sample. A seek to the end lands where the clean decode ends, so its empty window
-counts as 0 too.
+exist at present for #36 only. `alignFrames` is 0 in every seek of every golden because seeks land
+on the requested sample, except `flac_stereo.flac`: it has no seek table, its bisection outruns the
+seek budget and the byte estimate lands inexactly (#38). A seek to the end lands where the clean
+decode ends, so its empty window counts as 0 too.
 
 **MP3 seeks.** `MP3SeekTests` checks what the goldens cannot, since they compare a seek's PCM after a
 warm-up: every MP3 fixture sought to seven places must decode bit-identically to the clean decode from

@@ -22,7 +22,12 @@ enum KnownIssues {
     }
 
     static let rules: [Rule] = [
-        // A 24-bit WAV with no known length buffers a second 32 KiB before the first audio.
+        // A 24-bit WAV with no known length buffers a second 32 KiB before the first audio. Inherent
+        // to FFmpeg's wav demuxer: its header loop skips past the data chunk to look for trailing
+        // chunks unless `avio_size()` shows the chunk ends the file. With no size it seeks to the end
+        // of the data (the read there meets EOF), and the `avio_seek` back to the data start drops the
+        // buffer, so the first packet refills it from byte 102. `avio_size()` cannot be answered
+        // honestly for such a source, and the demuxer has no option to skip the look.
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/36 (wav_s24 reads twice with unknown length)",
              fixture: "wav_s24.wav", kind: .bytes, switches: [.unknownLength, [.partialReads, .unknownLength]],
              messages: ["65546 bytes read before the first audio, golden allows 33792"]),
