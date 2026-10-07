@@ -156,7 +156,12 @@ flowchart TD
 
 - **Landing is on the requested sample.** The demuxer is put a pre-roll before the target (16384
   samples, 32768 for Opus, 131072 for HE-AAC), and the decoder decodes it eagerly and drops
-  everything before the target, so codec warm-up and partial frames never reach the caller. An AAC
+  everything before the target, so codec warm-up and partial frames never reach the caller. A
+  constant-bitrate MP3 gets only the frames its bit reservoir can reach plus two (about 1 KiB at
+  64 kbps), and every MP3 pre-roll is judged by the frames it actually feeds the codec: the frame two
+  before the target's must find its `main_data_begin` bytes in the main data fed before it, or the
+  seek is placed again four times further back (up to three times). That catches a VBR file with no
+  tag, taken for CBR on its first frame, whose frames near the target carry less main data. An AAC
   codec is replaced by a fresh one at every seek, because a flushed one keeps state from before it
   (the noise generator, and HE-AAC's SBR and PS state). A fresh HE-AAC codec has no SBR or PS header
   until the next one arrives, hence its long pre-roll. A stream counts as HE-AAC once its parameters

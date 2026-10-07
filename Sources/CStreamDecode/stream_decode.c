@@ -122,6 +122,14 @@ struct StreamDecoder {
     /* Where the last seek asked the demuxer to go (stream time base), which is also where the
      * decode starts if no frame after it carries a time (see `pump`). */
     int64_t      seek_from;
+    /* A Layer III seek's pre-roll, measured as it goes into the codec (see `mp3_measure_preroll`):
+     * whether it is still being watched, the frames and main data bytes fed so far, the time of the
+     * next frame, and whether it came up short of what the frames from the target need. */
+    int          mp3_watch;
+    int          mp3_watch_frames;
+    int64_t      mp3_watch_bytes;
+    int64_t      mp3_watch_next;
+    int          mp3_preroll_short;
     /* Tests only: see `stream_decoder_drop_timestamps_for_testing`. */
     int          drop_timestamps;
 
@@ -341,6 +349,8 @@ static int is_sbr(enum AVCodecID codec_id, int profile) {
         && (profile == AV_PROFILE_AAC_HE || profile == AV_PROFILE_AAC_HE_V2);
 }
 
+static void mp3_measure_preroll(StreamDecoder *d, const AVPacket *pkt);
+
 /*
  * Advance until `pending` holds audio, or the stream is over.
  *
@@ -460,6 +470,7 @@ static int pump(StreamDecoder *d) {
         d->last_pkt_dts = d->pkt->dts;
         d->has_last_pkt = d->pkt->pos >= 0 && d->pkt->dts != AV_NOPTS_VALUE;
         d->has_first_pkt = 0;
+        if (d->mp3_watch) mp3_measure_preroll(d, d->pkt);
         int sent = avcodec_send_packet(d->dec, d->pkt);
         av_packet_unref(d->pkt);
         /* A packet the decoder rejects is a corrupt frame, not the end of the stream: skip it and
@@ -935,6 +946,49 @@ static int mp3_frame_of(uint32_t h, MP3Frame *f) {
     return 1;
 }
 
+/*
+ * Judge a seek's pre-roll by the frames it actually fed the codec, one frame at a time as each goes
+ * in: `mp3_preroll_short` is set when the frames from the target on will not decode as an unbroken
+ * run decodes them, and `seek_to` then places the seek further back.
+ *
+ * A Layer III frame's main data begins `main_data_begin` bytes before the frame's own, inside the
+ * main data of the frames before it, and a codec that was never fed those bytes decodes the frame
+ * from nothing. Main data runs in frame order, so once one frame's begins inside what was fed, every
+ * later frame's does too. The output from the target depends on the frame the target falls in and
+ * the two before it (each frame's overlap into the next, and in MPEG-2 the overlap into that), so
+ * the frame two before the target's is the one judged: its `main_data_begin` against the main data
+ * of the frames fed before it, as read from their headers and side info, whatever the first frame's
+ * bitrate said. A pre-roll that starts on that frame or after it, with nothing before to overlap
+ * from, is short too, unless it starts on the first audio frame, where the decode is the unbroken
+ * one. A frame that is not Layer III, or is cut short, ends the watch unjudged: Layers I and II
+ * have no reservoir, and a free-format frame's header does not give its size.
+ */
+static void mp3_measure_preroll(StreamDecoder *d, const AVPacket *pkt) {
+    MP3Frame f;
+    int side = pkt->size >= 4 && mp3_frame_of(read_be(pkt->data, 4), &f)
+             ? 4 + ((pkt->data[1] & 1) ? 0 : 2) : -1;   /* the side info follows the CRC, if any */
+    if (side < 0 || pkt->size < side + f.side_info_bytes || d->discard_until == AV_NOPTS_VALUE) {
+        d->mp3_watch = 0;
+        return;
+    }
+    if (d->mp3_watch_frames == 0 && pkt->pos >= 0 && pkt->pos == d->first_pkt_pos) {
+        d->mp3_watch = 0;
+        return;
+    }
+    int begin = f.lsf ? pkt->data[side] : (pkt->data[side] << 1) | (pkt->data[side + 1] >> 7);
+    int64_t duration = av_rescale_q(f.spf, (AVRational){ 1, f.sample_rate }, d->time_base);
+    int64_t dts = pkt->dts != AV_NOPTS_VALUE ? pkt->dts
+                : d->mp3_watch_frames > 0 ? d->mp3_watch_next : d->seek_from;
+    if (dts != AV_NOPTS_VALUE && dts + 3 * duration > d->discard_until) {
+        d->mp3_preroll_short = d->mp3_watch_frames == 0 || begin > d->mp3_watch_bytes;
+        d->mp3_watch = 0;
+        return;
+    }
+    d->mp3_watch_frames++;
+    d->mp3_watch_bytes += pkt->size - side - f.side_info_bytes;
+    d->mp3_watch_next = dts == AV_NOPTS_VALUE ? AV_NOPTS_VALUE : dts + duration;
+}
+
 /* The header of the frames after the first in a constant-bitrate Layer III stream, 0 when that is
  * not known. With an Info frame the first audio frame may be a short one at another bitrate, so the
  * second frame is read from the prologue; with no tag frame only the first frame's twins are trusted
@@ -1025,6 +1079,11 @@ static void after_seek_reset(StreamDecoder *d) {
     d->discard_until = AV_NOPTS_VALUE;
     d->next_pts = AV_NOPTS_VALUE;
     d->seek_first_pts = AV_NOPTS_VALUE;
+    d->mp3_watch = 0;
+    d->mp3_watch_frames = 0;
+    d->mp3_watch_bytes = 0;
+    d->mp3_watch_next = AV_NOPTS_VALUE;
+    d->mp3_preroll_short = 0;
 }
 
 /*
@@ -1138,7 +1197,13 @@ static const int kSeekPlaced = 1000;
  * for its overlap to be right. So: the frames those bytes can span, the one before the target, and
  * one of margin; 5 frames at 64 kbps. With the frame placed exactly (`mp3_cbr_frame`), one fewer
  * still decoded every conformance fixture bit-identically to an unbroken run from the target on,
- * and two fewer did not. */
+ * and two fewer did not.
+ *
+ * That count is a first guess, from one frame. A stream with no tag frame is taken for
+ * constant-bitrate on its first frame's word, and a VBR one that opens loud and goes on quiet has
+ * frames carrying a third of the first one's main data where the seek lands. So every Layer III
+ * pre-roll is also judged by the frames it actually feeds the codec, and placed further back when
+ * they fall short (`mp3_measure_preroll`, `seek_to`). */
 static int64_t seek_preroll_samples(const StreamDecoder *d) {
     if (d->sbr) return 131072;
     if (d->dec->codec_id == AV_CODEC_ID_OPUS) return 32768;
@@ -1224,9 +1289,17 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
      * second of audio here, so seeks landed up to a second early, more at the end), an MP3 frame
      * after a byte estimate, an MP4 sample. Landing early costs a little decoding; what is heard
      * starts where it was asked for. One that lands AFTER its target (an Ogg bisection with no
-     * length to bound it) is placed again further back, then from the start. */
-    for (int attempt = 0;; attempt++) {
-        int64_t from = target - preroll * ((int64_t)1 << (2 * attempt));
+     * length to bound it) is placed again further back, then from the start.
+     *
+     * An MP3 pre-roll is placed again too when the frames it fed the codec turn out not to hold the
+     * bit reservoir the frames from the target need (`mp3_measure_preroll`), which the frame count
+     * `seek_preroll_samples` takes from one frame's bitrate cannot promise. Each placement goes four
+     * times further back; three re-placements reach 64 times the first pre-roll, 192 frames at the
+     * least, which covers frames carrying as little as 2 bytes of main data each (the least a
+     * Layer III frame without a CRC carries is 3, at 8 kbps and 24 kHz in stereo). */
+    int64_t back = preroll;
+    for (int attempt = 0;; attempt++, back *= 4) {
+        int64_t from = target - back;
         /* Never a decode from the start just to be exact: on a long file that is the whole
          * file (12 MB measured). After two re-placements the landing stands, reported as it is. */
         int last = attempt >= 2;
@@ -1239,6 +1312,9 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
         int status = land_exactly(decoder, target);
         if (status == STREAM_DECODE_OK && !from_start && !last && decoder->seek_first_pts != AV_NOPTS_VALUE
             && decoder->seek_first_pts > target) {
+            continue;
+        }
+        if (status == STREAM_DECODE_OK && !from_start && attempt < 3 && decoder->mp3_preroll_short) {
             continue;
         }
         if (status == STREAM_DECODE_OK && decoder->last_frame_pts != AV_NOPTS_VALUE) {
@@ -1347,6 +1423,7 @@ static int land_exactly(StreamDecoder *d, int64_t target) {
         }
     }
     d->discard_until = target;
+    d->mp3_watch = d->mp3_header_ok && d->dec->codec_id == AV_CODEC_ID_MP3;
     return pump(d);
 }
 
@@ -1381,7 +1458,11 @@ static int demux_seek(StreamDecoder *decoder, double seconds, int64_t target, do
             anchor_pos = -1;
         }
         /* Further than that, a constant-bitrate stream's frame is found where it has to be, which
-         * is exact and reads nothing before it (`mp3_cbr_frame`). */
+         * is exact and reads nothing before it (`mp3_cbr_frame`). When it is not there (a stream
+         * with no tag frame that is not constant-bitrate after all, or bytes that cannot be read),
+         * the seek goes by estimate with the same short pre-roll, and lands among frames nothing
+         * has measured. That pre-roll is judged by the frames it feeds the codec like any other
+         * (`mp3_measure_preroll`) and placed further back when it falls short. */
         if (anchor_pos < 0) {
             int found = mp3_cbr_frame(decoder, target, &anchor_pos, &anchor_dts);
             if (found != STREAM_DECODE_OK) return found;
