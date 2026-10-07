@@ -63,11 +63,12 @@ final class GrowingFileByteSourceTests: XCTestCase {
 
     private func makeSource(
         _ url: URL, store: GrowingFileStore? = nil, authHeaders: [String: String] = [:],
+        cacheKey: URL? = nil,
         clock: GrowingFileClock = SystemGrowingFileClock.shared, session: URLSession = GrowingFileByteSourceTests.testSession
     ) -> GrowingFileByteSource {
         let recorder = events
         let source = GrowingFileByteSource(
-            url: url, authHeaders: authHeaders, store: store ?? makeStore(), session: session,
+            url: url, authHeaders: authHeaders, cacheKey: cacheKey, store: store ?? makeStore(), session: session,
             clock: clock, onEvent: { recorder.append($0) }
         )
         sources.append(source)
@@ -691,6 +692,54 @@ final class GrowingFileByteSourceTests: XCTestCase {
 
         source.cancel()
         XCTAssertTrue(FileManager.default.fileExists(atPath: cached.path))
+    }
+
+    private func audioFiles() -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []).filter { $0.hasSuffix(".audio") }
+    }
+
+    private func tokenURL(_ base: URL, _ token: String) -> URL {
+        URL(string: base.absoluteString + "?api_key=\(token)")!
+    }
+
+    func testACacheKeyLetsTwoTokenURLsShareOneCompletedFile() throws {
+        let body = makeBody(48 * 1024)
+        let server = try startServer(body: body)
+        let key = server.url
+        let store = makeStore()
+
+        let first = makeSource(tokenURL(key, "session-one"), store: store, cacheKey: key)
+        XCTAssertEqual(try readToEnd(first), body)
+        XCTAssertTrue(waitUntil { first.snapshot.isComplete })
+        first.cancel()
+
+        // The second play's lookup, by the same key, finds the first play's file: no download.
+        let cached = try XCTUnwrap(store.completedFile(for: key))
+        XCTAssertEqual(try Data(contentsOf: cached), body)
+        XCTAssertNil(store.completedFile(for: tokenURL(key, "session-one")))
+        XCTAssertNil(store.completedFile(for: tokenURL(key, "session-two")))
+
+        // A second download under another token lands on the same file.
+        let second = makeSource(tokenURL(key, "session-two"), store: store, cacheKey: key)
+        XCTAssertEqual(try readToEnd(second), body)
+        XCTAssertTrue(waitUntil { second.snapshot.isComplete })
+        XCTAssertEqual(second.snapshot.fileURL, cached)
+        XCTAssertEqual(audioFiles().count, 1)
+    }
+
+    func testWithoutACacheKeyTokenURLsCacheSeparately() throws {
+        let body = makeBody(48 * 1024)
+        let server = try startServer(body: body)
+        let store = makeStore()
+
+        for token in ["session-one", "session-two"] {
+            let source = makeSource(tokenURL(server.url, token), store: store)
+            XCTAssertEqual(try readToEnd(source), body)
+            XCTAssertTrue(waitUntil { source.snapshot.isComplete })
+            source.cancel()
+        }
+        XCTAssertEqual(audioFiles().count, 2)
+        XCTAssertNil(store.completedFile(for: server.url))
     }
 
     /// A load that failed on bytes the download had already finished into the cache: those bytes

@@ -133,6 +133,8 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     }
 
     private let url: URL
+    /// What the completed-file cache knows this resource by: `url` unless the host gave a key.
+    private let cacheKey: URL
     private let authHeaders: [String: String]
     private let store: GrowingFileStore
     private let session: URLSession
@@ -179,16 +181,21 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
 
     /// - Parameters:
     ///   - authHeaders: resolved by the caller before construction; values are never logged.
+    ///   - cacheKey: names the resource in the store's completed-file cache, for a `url` that carries a
+    ///     token or session id which changes between plays. Pass the URL without them, and ask the
+    ///     store for `completedFile(for:)` with the same key. The requests still go to `url`. Nil
+    ///     (the default) keys the cache by `url`.
     ///   - onEvent: the `transaction`/`download` events.
     public convenience init(
         url: URL,
         authHeaders: [String: String],
+        cacheKey: URL? = nil,
         store: GrowingFileStore = .shared,
         session: URLSession = GrowingFileByteSource.sharedSession,
         onEvent: ((GrowingFileEvent) -> Void)? = nil
     ) {
         self.init(
-            url: url, authHeaders: authHeaders, store: store, session: session,
+            url: url, authHeaders: authHeaders, cacheKey: cacheKey, store: store, session: session,
             clock: SystemGrowingFileClock.shared, onEvent: onEvent
         )
     }
@@ -197,12 +204,14 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     init(
         url: URL,
         authHeaders: [String: String],
+        cacheKey: URL? = nil,
         store: GrowingFileStore = .shared,
         session: URLSession = GrowingFileByteSource.sharedSession,
         clock: GrowingFileClock,
         onEvent: ((GrowingFileEvent) -> Void)? = nil
     ) {
         self.url = url
+        self.cacheKey = cacheKey ?? url
         self.authHeaders = authHeaders
         self.store = store
         self.session = session
@@ -795,7 +804,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
             tx.isComplete = true
             if tx.totalLength == nil { tx.totalLength = tx.frontier }
             lastKnownTotalLength = tx.totalLength
-            if tx.base == 0, let file = tx.fileURL, let cached = store.promote(file, for: url) {
+            if tx.base == 0, let file = tx.fileURL, let cached = store.promote(file, for: cacheKey) {
                 tx.fileURL = cached
                 tx.isCached = true
                 promoted = true
@@ -804,7 +813,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
             event = .download(frontier: tx.frontier, downloadBytesPerSecond: downloadBytesPerSecondLocked(), complete: true)
             condition.broadcast()
         }
-        if promoted { store.evict(excluding: url) }
+        if promoted { store.evict(excluding: cacheKey) }
         if let event { onEvent?(event) }
     }
 

@@ -121,6 +121,8 @@ Notes:
 - **A completed download is cached.** Before streaming a URL, ask the store:
   `GrowingFileStore.shared.completedFile(for: url)`. If it returns a file, play that with
   `FileByteReader` and skip the network.
+  If your URL carries a token or session id that changes per play, pass `cacheKey:` (the URL without
+  it) to the source and use that same key for `completedFile(for:)`; otherwise every session caches a copy.
 - **The decoder blocks while it waits for bytes.** That is how buffering shows up. A body that goes quiet
   is retried by the source, and a read fails with `StreamByteReaderError.transport` only when
   retries and the 30 s link window are spent. See [Recovery and retry](architecture.md#recovery-and-retry).

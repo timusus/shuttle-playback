@@ -52,8 +52,11 @@ One thread drives a decoder. `open()`, `nextChunk()` and `read(into:maxFrames:)`
 
 ## `GrowingFileByteSource`
 
-`init(url:authHeaders:store:session:onEvent:)`. `authHeaders` arrive already resolved. `store` defaults
-to `GrowingFileStore.shared`, a directory under `Caches`.
+`init(url:authHeaders:cacheKey:store:session:onEvent:)`. `authHeaders` arrive already resolved. `store` defaults
+to `GrowingFileStore.shared`, a directory under `Caches`. `cacheKey` (default nil) is the URL the completed-file
+cache knows the resource by. Pass the URL without its token or session query parameters (Jellyfin, Emby,
+Subsonic) so each new session reuses the cached file instead of adding a duplicate; requests still go to `url`.
+Ask the store for `completedFile(for:)` with the same key. Nil keys the cache by `url`.
 
 | Member | Behaviour |
 |---|---|
