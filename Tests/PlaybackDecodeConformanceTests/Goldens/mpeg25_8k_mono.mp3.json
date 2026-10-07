@@ -1,0 +1,79 @@
+{
+  "bytesBeforeFirstAudioMax" : 24576,
+  "channels" : 1,
+  "durationS" : 24.19,
+  "expect" : "decodes",
+  "fixture" : "mpeg25_8k_mono.mp3",
+  "frames" : 193536,
+  "pcmSha256PerSecondInt16" : [
+    "02f4d3103a914685f4143853a3e4fc8eb04500b6318f5ed2f6063a21f138197d",
+    "3845a986b945eb3430e0c7bd1fe19832270b30f130e4fe3cfd9d75dcc0d64e44",
+    "2f50ad681aa0b0c179a1ff916682210e79848bf905437bf73de6f18ca920679a",
+    "4236366e4da5755f13acd736e40c390399baf202cca7da10b83e02894c9df582",
+    "be6d5c6fd9c60e679620d4d42fdcffc0608b462cd71e556c4251d66ea89ed8d5",
+    "7366d268a1edfbeaa7df84e76ebc32f058c066bb1d5e74cdf977dd9c885bb03b",
+    "8ab6a0f17a9d691db57ca36f752d4840a9c07547083064201b08fa73910f953f",
+    "bea73b7d68de914a4ed47f54bc73c38a228a3c48e88e701aa002b99d0a875c10",
+    "7b0dcdab046499a8218db9f3225bafbcd02924d5d11c41b758a418f45751b2d3",
+    "2e3628153aee9df6090e9fe0c39d7b1a64129ac5ae7437e0552b314fab16f191",
+    "f574c7e9d4b07137113ba8b70e558fda8c6587b919d01df94e069d51e98f566e",
+    "70bc30b539115327d845a9dcbaa75702e0a6b9a1e9123f6b64442c0aba0ef6dc",
+    "9a24ed2c4038552a89c15932d36fb53254ce07079e492b49cd6ee98ee8238f7b",
+    "100345b18e374fde000ace75f965d5c6041b2d480c28a454ceabf687000b500d",
+    "1dcf5b3f6067bd537ddaa202469290abe4f8aa12d3e58595e9703a569df69d93",
+    "5343830eb6c2cea948610757ef93a05fbd7d57e3453fe47aa334b54c69f20534",
+    "2c4f7d6aa5b8583e258b5e0caaf62a1128fab36c2ff199881a71a472591be12d",
+    "54f882ae975818a35f8c4cf6d99efa77e7ca126075ac72ac962003681ad53ff0",
+    "2bc4aeca6505af59c31d0a5af33f2b19c8d2c02c3b59c3ffaa72f56b45213201",
+    "79b14cf3f7a1d379b12c7ac91e16b1ffab583c73e2c88095a4f1e5c63cfce263",
+    "e5825991cb8ef36783a22ad69df84b89d2e712b643a556e8adaacebf756600f0",
+    "9f4512426dd833ba8b2d82103d8e5d37c011fb7a44139eca112aab5a4004c279",
+    "0b5f4b947b8f97008f5135fb9dc16d2299a508308748f828000b2ecc8e84bf20",
+    "ddf80e50fba6531a1c2e45bcfc98d3435b7bdd9dae11a85f33798ec32586965a",
+    "fd0980a454f3c2079cc0177eea872b71b55d2fffd5364f5a68a977be8f6e26dd"
+  ],
+  "sampleRate" : 8000,
+  "seeks" : [
+    {
+      "alignFrames" : 0,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "fb4066a34bbca910a8dd21cbdd0b21d65f75e4295bdc13146df71042340e162a"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 8.064,
+      "toS" : 8.064,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "797b36239b03b8b1b0e3bd1657bf345b2144bc7d0f26f27442014ce24e1a0129"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 16.128,
+      "toS" : 16.128,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "a0a1977599f0064ba3aa864cd0a88cfef29465746d6c3d2800a87475d74d980e"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 24.092,
+      "toS" : 24.092,
+      "tolS" : 0.03,
+      "windowFrames" : 256,
+      "windowSha256Int16" : "4984c859678164215f076594b4879b1daedfa133a9cd282c12578c60d835b0f3"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 24.192,
+      "toS" : 24.192,
+      "tolS" : 0.03,
+      "windowFrames" : 0,
+      "windowSha256Int16" : ""
+    }
+  ],
+  "sha256" : "d4c58ae9d46066f45b81b18bc00f439b553483d4cf40959813aae6ab447c78ca"
+}

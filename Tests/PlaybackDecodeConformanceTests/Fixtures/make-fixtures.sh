@@ -64,6 +64,30 @@ lame --quiet -b 32 --cbr "$TMP/s44.wav" "$TMP/a.mp3"
 lame --quiet -b 32 --cbr "$TMP/s48.wav" "$TMP/b.mp3"
 cat "$TMP/a.mp3" "$TMP/b.mp3" > stitch_44k_48k.mp3
 
+# Seeded noise, for MP3s that lean on the bit reservoir (a tone hardly does), each long enough that
+# a seek lands by frame placement rather than by decoding from the first frame.
+noise() { # seconds colour amplitude seedL seedR filter -> 44.1 kHz stereo wav
+    $FF -f lavfi -i "anoisesrc=d=$1:c=$2:r=44100:a=$3:seed=$4" -f lavfi -i "anoisesrc=d=$1:c=$2:r=44100:a=$3:seed=$5" \
+        -filter_complex "[0][1]amerge=inputs=2,$6" -c:a pcm_s16le "$7"
+}
+# 32 kbps at 44.1 kHz with no tag: a frame's main data reaches up to seven frames back.
+noise 10 pink 0.3 31 32 anull "$TMP/dense.wav"
+lame --quiet -t --cbr -b 32 --resample 44.1 "$TMP/dense.wav" cbr_32k_dense_reservoir.mp3
+# 64 kbps at 44.1 kHz with LAME's Info tag.
+noise 8 pink 0.3 51 52 anull "$TMP/info.wav"
+lame --quiet --cbr -b 64 --resample 44.1 "$TMP/info.wav" cbr_info_64k.mp3
+# 8 kbps MPEG-2.5 at 8 kHz, mono.
+$FF -f lavfi -i "anoisesrc=d=24:c=pink:r=8000:a=0.3:seed=41" -af "volume='0.4+0.6*abs(sin(2*PI*0.7*t))':eval=frame" \
+    -ac 1 -c:a pcm_s16le "$TMP/m25.wav"
+lame --quiet --cbr -b 8 -m m "$TMP/m25.wav" mpeg25_8k_mono.mp3
+# MP3SeekTests only (its seeks land by estimate, which the goldens do not take): VBR with no Xing
+# header, 0.4 s of loud noise at 112 kbps and then 14 s of quiet noise at 32 to 48 kbps, which
+# LAME encodes as MPEG-2 at 22.05 kHz.
+noise 0.4 white 0.9 11 12 anull "$TMP/loud.wav"
+noise 14 brown 0.02 5 6 "lowpass=f=1500" "$TMP/quiet.wav"
+$FF -i "$TMP/loud.wav" -i "$TMP/quiet.wav" -filter_complex "[0][1]concat=n=2:v=0:a=1" -c:a pcm_s16le "$TMP/drop.wav"
+lame --quiet -t -V 9 "$TMP/drop.wav" ../SeekFixtures/vbr_no_xing_bitrate_drop.mp3
+
 # --- AAC / MP4 ---------------------------------------------------------------------------------
 # ffmpeg's AAC-in-MP4 carries an edit list for the encoder priming.
 $FF -i "$TMP/s44.wav" -c:a aac -b:a 48k -movflags +faststart aac_edit_list.m4a

@@ -8,7 +8,7 @@ goldens and cut a release. The repository has no hosted CI. `swift test` locally
 | Test target | What it covers | Run with |
 |---|---|---|
 | `PlaybackDecodeTests` | The decoder against `AVAssetReader` on three committed 20 s tone fixtures (MP3, M4A with `moov` first, M4A with `moov` last). Also asserts how many bytes a trailing `moov` costs to open. | `swift test` |
-| `PlaybackDecodeConformanceTests` | Every fixture through a faulting reader, then seeks, compared against goldens. | `swift test --filter PlaybackDecodeConformance` (about 15 s) |
+| `PlaybackDecodeConformanceTests` | Every fixture through a faulting reader, then seeks, compared against goldens. | `swift test --filter PlaybackDecodeConformance` (about 30 s) |
 | `PlaybackStreamingTests` | `GrowingFileByteSource`, `DownloadRetry`, `GrowingFileReadRule`, `GrowingFileStore`, the loopback server and decode equality over a growing file, against two tone fixtures. | `swift test`, and on an iOS simulator |
 
 All of them run on macOS against the macOS slice of the FFmpeg xcframework, with no simulator. All
@@ -36,9 +36,10 @@ iPhone.
 
 ## The conformance suite
 
-**Fixtures.** 25 files in `Tests/PlaybackDecodeConformanceTests/Fixtures`, plus the three in
+**Fixtures.** 28 files in `Tests/PlaybackDecodeConformanceTests/Fixtures`, plus the three in
 `PlaybackDecodeTests/Fixtures`. They cover MP3 variants (Xing, VBRI, CBR, junk before the first frame,
-ID3v1 footer, a sample-rate change), AAC in ADTS and MP4 (including a fragmented MP4 with a `sidx`),
+ID3v1 footer, a sample-rate change, and noise that leans on the bit reservoir: 32 kbps CBR, an Info
+tagged CBR, 8 kHz MPEG-2.5), AAC in ADTS and MP4 (including a fragmented MP4 with a `sidx`),
 HE-AAC v1 and v2 in MP4 and in ADTS (where the header says AAC-LC), Opus and Vorbis. Three come from
 the androidx/media project and are listed in `Fixtures/NOTICE`. `Fixtures/make-fixtures.sh` makes the
 rest and needs `ffmpeg`, `lame` and `afconvert`. The HE-AAC, Opus and Vorbis files are not
@@ -76,6 +77,13 @@ pinned finding that stops happening, fails the suite. When the bug is fixed, rem
 are no rules at present, and `alignFrames` is 0 in every seek of every golden because seeks land on
 the requested sample. A seek to the end lands where the clean decode ends, so its empty window
 counts as 0 too.
+
+**MP3 seeks.** `MP3SeekTests` checks what the goldens cannot, since they compare a seek's PCM after a
+warm-up: every MP3 fixture sought to seven places must decode bit-identically to the clean decode from
+the target on, and a far CBR seek must read from at most 2 KiB before its target. A VBR MP3 with no
+Xing header that drops from 112 to 32 kbps (`SeekFixtures/`, kept out of the matrix because its far
+seeks land by estimate, issue #3) must decode a bit-exact stretch of the clean decode after each far
+seek: it fails with a pre-roll counted from the first frame's bitrate alone.
 
 **FFmpeg fixes.** Bugs in the pinned FFmpeg tag are fixed with patches that `build-ffmpeg.sh` applies. See
 [FFmpeg](ffmpeg.md#local-patches).

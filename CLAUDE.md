@@ -70,7 +70,7 @@ No test is skipped on either platform. (A short body is closed a beat late by `L
 macOS URLSession drops a body's buffered bytes if the connection ends before the delegate has
 answered the response.)
 
-**Conformance suite.** `swift test --filter PlaybackDecodeConformance` (about 15 s) decodes every
+**Conformance suite.** `swift test --filter PlaybackDecodeConformance` (about 30 s) decodes every
 fixture in `Tests/PlaybackDecodeConformanceTests/Fixtures` (plus the three in
 `PlaybackDecodeTests/Fixtures`) through `FaultyByteReader` under all 7 combinations of partial reads,
 one-shot I/O errors and unknown length, and requires each to be bit-identical to the clean decode in
