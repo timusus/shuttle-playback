@@ -334,7 +334,8 @@ static int init_swr_from(StreamDecoder *d, int in_rate, int in_fmt, const AVChan
     /* Mono is FC, which swresample spreads to FL/FR at -3 dB (hard-coded for a mono source, so
      * `center_mix_level` does not reach it). Mono on a stereo output plays as loud on each side as
      * it was on its one channel, so the matrix is given explicitly. Every other remix (5.1 to
-     * stereo, stereo to mono) is swresample's default matrix. */
+     * stereo, stereo to mono) is swresample's default matrix. The matrix array is 8 wide, so a
+     * mono source spread over more than 8 channels keeps swresample's default. */
     if (in_channels == 1 && out_channels > 1 && out_channels <= 8) {
         double matrix[8];
         for (int i = 0; i < out_channels; i++) matrix[i] = 1.0;

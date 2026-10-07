@@ -241,6 +241,7 @@ public final class FFmpegStreamDecoder {
                 return landed
             case Int32(STREAM_DECODE_EOF.rawValue):
                 reason = .eof
+                framesRead = Int64((landed * outputRate).rounded())
                 return landed
             case Int32(STREAM_DECODE_ERR_CANCELLED.rawValue):
                 reason = .cancelled
@@ -298,9 +299,13 @@ public final class FFmpegStreamDecoder {
     ///
     /// The same samples as ``nextChunk()``, without a per-chunk allocation: a real-time pull fills
     /// the player's own buffer. The two may be mixed on one decoder.
+    ///
+    /// `maxFrames` must be positive: a zero-sized request is a programming error rather than a
+    /// quiet 0, so that 0 only ever means the stream ended.
     public func read(into buffer: UnsafeMutablePointer<Float>, maxFrames: Int) -> Int {
+        precondition(maxFrames > 0, "read(into:maxFrames:) needs a positive maxFrames; 0 means the stream ended")
         #if canImport(CStreamDecode)
-            guard let handle, format != nil, reason == .running, maxFrames > 0 else { return 0 }
+            guard let handle, format != nil, reason == .running else { return 0 }
             return readFrames(handle, into: buffer, maxFrames: Int32(clamping: maxFrames))
         #else
             return 0
