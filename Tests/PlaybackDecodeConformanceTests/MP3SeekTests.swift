@@ -161,4 +161,88 @@ final class MP3SeekTests: XCTestCase {
             XCTAssertNotNil(found, "seek to \(target)s: the \(window / channels) frames after it are nowhere in the clean decode")
         }
     }
+
+    /// The frames of an MPEG-2 Layer III 22.05 kHz stream (the VBR fixture's), as byte ranges.
+    private func mp3Frames(_ data: Data) -> [Range<Int>] {
+        let kbps = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0]
+        var frames: [Range<Int>] = []
+        var pos = 0
+        while pos + 4 <= data.count {
+            let h = (UInt32(data[pos]) << 24) | (UInt32(data[pos + 1]) << 16) | (UInt32(data[pos + 2]) << 8) | UInt32(data[pos + 3])
+            let rate = Int((h >> 12) & 15)
+            guard h >> 20 == 0xFFF, (h >> 10) & 3 == 0, rate != 0, rate != 15 else { pos += 1; continue }
+            let size = 72000 * kbps[rate] / 22050 + Int((h >> 9) & 1)
+            guard pos + size <= data.count else { break }
+            frames.append(pos..<(pos + size))
+            pos += size
+        }
+        return frames
+    }
+
+    /// **A far seek into a VBR MP3 with no tag, onto frames that share the first frame's bitrate by
+    /// chance, is not placed as if the stream were constant-bitrate (issue #16).**
+    ///
+    /// With no tag frame, a stream was taken for constant-bitrate on its first frame's word alone, and
+    /// a far seek read where a constant-bitrate stream would have the frame it wanted and accepted any
+    /// frame there with the first frame's bitrate. A VBR file has such frames now and then; this one
+    /// has forty of them where the constant-bitrate estimate points, after quiet frames at a third of
+    /// the bitrate, so the seek landed there: some eleven seconds into the audio, reported as four.
+    /// The file opens with frames of several bitrates, which says it is not constant-bitrate, and its
+    /// seek goes by the demuxer's own estimate, which lands within half a second of the request here.
+    func testAFarSeekIntoAVBRMP3WithNoTagIsNotPlacedByTheFirstFramesBitrate() throws {
+        let source = try Data(contentsOf: GoldenStore.root.appendingPathComponent("SeekFixtures/vbr_no_xing_bitrate_drop.mp3"))
+        let frames = mp3Frames(source)
+        let first = frames[0]
+        let pool = Array(frames[17..<(frames.count - 1)])
+        let frameBytes = 576.0 / 8 * 112000 / 22050
+        let block = 40
+        var offsets = [first.count]
+        for n in 0..<(pool.count * 3) { offsets.append(offsets[n] + pool[n % pool.count].count) }
+        // Where a constant-bitrate stream would have frame `index`, a byte offset that is a frame
+        // boundary of the quiet frames laid out so far.
+        var found: (index: Int, count: Int)?
+        search: for index in 120..<400 {
+            let estimate = Double(first.count) + Double(index - 1) * frameBytes
+            for (n, at) in offsets.enumerated() where abs(Double(at) - estimate) <= 2 {
+                found = (index, n)
+                break search
+            }
+        }
+        let splice = try XCTUnwrap(found)
+        var data = source.subdata(in: first)
+        for n in 0..<(splice.count + 80) {
+            if n == splice.count {
+                // Frames of the first frame's bitrate, padded as a constant-bitrate stream pads them.
+                var carried = 0.0
+                for _ in 0..<block {
+                    carried += frameBytes
+                    let padded = Int(carried) > Int(carried - frameBytes) + first.count
+                    var frame = source.subdata(in: first)
+                    if padded { frame[2] |= 0x02; frame.append(0) }
+                    data += frame
+                }
+            }
+            data += source.subdata(in: pool[n % pool.count])
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("vbr-shares-first-bitrate-\(UUID().uuidString).mp3")
+        try data.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let (format, clean) = try decodeAll(url)
+        let channels = format.channelCount
+        let window = 2048 * channels
+        let target = (Double(splice.index) + Double(block) / 2) * 576 / format.sampleRate
+        let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
+        _ = try decoder.open()
+        let landed = try decoder.seek(toSeconds: target)
+        var got: [Float] = []
+        while got.count < window, let chunk = decoder.nextChunk() { got += chunk }
+        XCTAssertGreaterThanOrEqual(got.count, window)
+        guard got.count >= window else { return }
+        let found2 = stride(from: 0, through: clean.count - window, by: channels).first { start in
+            clean[start] == got[0] && (0..<window).allSatisfy { clean[start + $0] == got[$0] }
+        }
+        let played = try XCTUnwrap(found2.map { Double($0 / channels) / format.sampleRate }, "the audio after the seek is nowhere in the clean decode")
+        XCTAssertEqual(played, landed, accuracy: 0.5, "the seek to \(target)s reported \(landed)s and played from \(played)s")
+    }
 }

@@ -107,6 +107,7 @@ struct StreamDecoder {
     uint32_t     mp3_header;          /* its first four bytes, for "same stream" comparisons */
     int          mp3_spf;             /* samples per frame */
     int          mp3_tag;             /* MP3_TAG_*: what the frame before the first audio says */
+    int          mp3_untagged_cbr;    /* no tag frame, and the frames in `prologue` all share a bitrate */
     int          vbri_toc;            /* the VBRI table: its offset in `prologue`, and its shape */
     int          vbri_entries;        /* 0: no usable table */
     int          vbri_entry_size;
@@ -885,6 +886,8 @@ static int mp3_find_tag(StreamDecoder *d) {
     return MP3_TAG_NONE;
 }
 
+static int mp3_prologue_is_cbr(const StreamDecoder *d);
+
 /* Keep `d->held`, the first audio packet, for the decoder, and note what frame counting needs. */
 static void hold_first_packet(StreamDecoder *d) {
     d->has_held = 1;
@@ -900,6 +903,7 @@ static void hold_first_packet(StreamDecoder *d) {
                       | ((uint32_t)d->held->data[2] << 8) | d->held->data[3];
         d->mp3_spf = spf;
         d->mp3_tag = mp3_find_tag(d);
+        d->mp3_untagged_cbr = d->mp3_tag == MP3_TAG_NONE && mp3_prologue_is_cbr(d);
     }
 }
 
@@ -924,7 +928,7 @@ static const uint32_t kMP3SameStreamMask = 0xFFFEFCC0u;
  */
 static int64_t mp3_exact_dts(const StreamDecoder *d, const AVPacket *pkt) {
     if (!d->mp3_header_ok || d->mp3_tag == MP3_TAG_VBR) return AV_NOPTS_VALUE;
-    if (d->mp3_tag == MP3_TAG_NONE && d->cb.size(d->opaque) < 0) return AV_NOPTS_VALUE;
+    if (d->mp3_tag == MP3_TAG_NONE && (!d->mp3_untagged_cbr || d->cb.size(d->opaque) < 0)) return AV_NOPTS_VALUE;
     if (pkt->pos < 0 || pkt->dts == AV_NOPTS_VALUE || pkt->size < 4) return AV_NOPTS_VALUE;
     uint32_t h = ((uint32_t)pkt->data[0] << 24) | ((uint32_t)pkt->data[1] << 16)
                | ((uint32_t)pkt->data[2] << 8) | pkt->data[3];
@@ -958,6 +962,23 @@ static int mp3_frame_of(uint32_t h, MP3Frame *f) {
     f->lsf = ((h >> 19) & 3) != 3;
     f->bytes = (int)((int64_t)f->spf / 8 * f->bitrate / f->sample_rate) + (int)((h >> 9) & 1);
     return 1;
+}
+
+/*
+ * Whether a stream with no tag frame can be taken for constant-bitrate: the frames from the first
+ * on that the prologue holds (at least three) are all the first frame's twin. Nothing else in such a
+ * file says so. A VBR file that opens at one bitrate and moves on shows it within a few frames; one
+ * that does not is beyond what a seek can know, and gets no more than an estimate (issue #16).
+ */
+static int mp3_prologue_is_cbr(const StreamDecoder *d) {
+    int frames = 0;
+    for (int64_t pos = d->first_pkt_pos; pos >= 0 && pos + 4 <= d->prologue_len; frames++) {
+        MP3Frame f;
+        uint32_t h = read_be(d->prologue + pos, 4);
+        if ((h & kMP3SameStreamMask) != (d->mp3_header & kMP3SameStreamMask) || !mp3_frame_of(h, &f)) return 0;
+        pos += f.bytes;
+    }
+    return frames >= 3;
 }
 
 /*
@@ -1010,7 +1031,7 @@ static void mp3_measure_preroll(StreamDecoder *d, const AVPacket *pkt) {
 static uint32_t mp3_cbr_header(const StreamDecoder *d) {
     MP3Frame f;
     if (!d->mp3_header_ok || d->mp3_tag == MP3_TAG_VBR || !mp3_frame_of(d->mp3_header, &f)) return 0;
-    if (d->mp3_tag == MP3_TAG_NONE) return d->cb.size(d->opaque) < 0 ? 0 : d->mp3_header;
+    if (d->mp3_tag == MP3_TAG_NONE) return !d->mp3_untagged_cbr || d->cb.size(d->opaque) < 0 ? 0 : d->mp3_header;
     int64_t second = d->first_pkt_pos + d->first_pkt_size;
     if (second < 0 || second + 4 > d->prologue_len) return 0;
     uint32_t h = read_be(d->prologue + second, 4);
