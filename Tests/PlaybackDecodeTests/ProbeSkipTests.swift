@@ -60,6 +60,35 @@ final class ProbeSkipTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(probing.bytesConsumed, 4 * skipping.bytesConsumed)
     }
 
+    /// A streamed recorder leaves the RIFF and data sizes at 0 or 0xFFFFFFFF. With a known source
+    /// length the probe recovers the duration from the file size, so the skip must not lose it.
+    func testWAVWithUnsizedHeaderKeepsItsDurationWhenTheLengthIsKnown() throws {
+        try XCTSkipUnless(FFmpegStreamDecoder.isAvailable, "this build has no FFmpeg xcframework")
+        let original = try Data(contentsOf: url("wav_s16.wav"))
+        for fill: UInt32 in [0, 0xFFFF_FFFF] {
+            var data = original
+            let dataChunk = try XCTUnwrap(data.range(of: Data("data".utf8)), "no data chunk")
+            for offset in [4, dataChunk.upperBound] {
+                for i in 0..<4 { data[offset + i] = UInt8((fill >> (8 * UInt32(i))) & 0xFF) }
+            }
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("unsized-\(fill)-\(UUID().uuidString).wav")
+            try data.write(to: tmp)
+            defer { try? FileManager.default.removeItem(at: tmp) }
+
+            func decode(forcesProbe: Bool) throws -> (StreamAudioFormat, [Float]) {
+                let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: tmp), forcesProbe: forcesProbe)
+                let format = try decoder.open()
+                return (format, firstSamples(decoder, channels: format.channelCount, frames: 4096))
+            }
+            let (format, pcm) = try decode(forcesProbe: false)
+            let (probedFormat, probedPCM) = try decode(forcesProbe: true)
+            XCTAssertNotNil(probedFormat.duration, "fill \(fill): the probe should recover a duration")
+            XCTAssertNotNil(format.duration, "fill \(fill)")
+            XCTAssertEqual(format.duration, probedFormat.duration, "fill \(fill)")
+            XCTAssertEqual(pcm, probedPCM, "fill \(fill)")
+        }
+    }
+
     func testLossyFormatsStillProbe() throws {
         try XCTSkipUnless(FFmpegStreamDecoder.isAvailable, "this build has no FFmpeg xcframework")
         for name in ["cbr_info_64k.mp3", "aac_edit_list.m4a", "adts_id3.aac", "opus_stereo.opus", "vorbis_stereo.ogg"] {

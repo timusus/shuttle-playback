@@ -750,7 +750,7 @@ static void hold_first_packet(StreamDecoder *d);
  * everything: FLAC (STREAMINFO), ALAC (the moov `alac` atom) and PCM in WAV or AIFF. Lossy codecs
  * (MP3, AAC, Opus, Vorbis) keep the probe: their parameters and duration come from the frames.
  */
-static int header_described_audio_stream(const AVFormatContext *fmt) {
+static int header_described_audio_stream(const AVFormatContext *fmt, int length_known) {
     if (!fmt->iformat || !fmt->iformat->name) return -1;
     const char *container = fmt->iformat->name;
     int is_mp4 = strstr(container, "mp4") != NULL;
@@ -812,11 +812,13 @@ static int header_described_audio_stream(const AVFormatContext *fmt) {
         if (is_mp4 && par->extradata_size < 36) return -1;
     }
     /* The duration must already be known without the probe, from the stream or the format. A WAV
-     * without a total length is the exception: its demuxer cannot size the data chunk, so the
-     * duration is unknown with the probe too (it only reads on to the same nothing). */
-    if (!is_wav && (stream->duration == AV_NOPTS_VALUE || stream->duration <= 0)) {
-        if (fmt->duration == AV_NOPTS_VALUE || fmt->duration <= 0) return -1;
-    }
+     * from a source without a total length is the exception: its demuxer cannot size the data
+     * chunk, so the duration is unknown with the probe too (it only reads on to the same nothing).
+     * With a length, the probe recovers it from the file size and bit rate when the header's size
+     * fields are 0 or 0xFFFFFFFF (streamed recorders), so an unknown duration keeps the probe. */
+    int duration_known = (stream->duration != AV_NOPTS_VALUE && stream->duration > 0)
+        || (fmt->duration != AV_NOPTS_VALUE && fmt->duration > 0);
+    if (!duration_known && !(is_wav && !length_known)) return -1;
     return audio;
 }
 
@@ -883,7 +885,7 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
      * read-ahead is pure play-start latency there. `force_probe` restores the probe. */
     d->skipped_probe = 0;
     if (!(options && options->force_probe)) {
-        int header_audio = header_described_audio_stream(d->fmt);
+        int header_audio = header_described_audio_stream(d->fmt, d->cb.size(d->opaque) >= 0);
         if (header_audio >= 0) {
             d->skipped_probe = 1;
             /* av_find_best_stream ignores a FLAC stream whose rate and channels are still 0, so
