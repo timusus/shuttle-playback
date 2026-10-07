@@ -56,6 +56,20 @@ This runs on macOS against the macOS slice, with no simulator. The decoder tests
 must pass before tagging. Consumers run their own integration tests: Podcasts runs
 `xcodebuild test -scheme Playback-Package` and `scripts/spine-tests.sh`.
 
+**Conformance suite.** `swift test --filter PlaybackDecodeConformance` (about 15 s) decodes every
+fixture in `Tests/PlaybackDecodeConformanceTests/Fixtures` (plus the three in
+`PlaybackDecodeTests/Fixtures`) through `FaultyByteReader` under all 7 combinations of partial reads,
+one-shot I/O errors and unknown length, and requires each to be bit-identical to the clean decode in
+the same run. It then seeks to 0, 1/3, 2/3 and the end, and compares with `Goldens/<fixture>.json`
+(Int16 per-second PCM hashes, frame count, seek landings, the fixture's own sha256). After an
+intended decoder change, or a new fixture, regenerate with
+`GOLDEN_UPDATE=1 swift test --filter PlaybackDecodeConformance` and review the JSON diff. Fixtures
+are made by `Fixtures/make-fixtures.sh` (needs ffmpeg, lame, afconvert; the HE-AAC, Opus and Vorbis
+files are not byte-reproducible, so re-run it only on purpose); the three androidx/media files are
+listed in `Fixtures/NOTICE`. A decoder bug the suite found is listed in `KnownIssues.swift` with its
+issue number and runs under `XCTExpectFailure`; remove the entry when the issue is fixed.
+`CONFORMANCE_PLANT_DEFECT=1` drops a frame from the clean decode to prove the suite fails.
+
 ## Release
 
 Consumers pin a **tag** (`from: "0.1.0"`), never a branch. Releasing:
