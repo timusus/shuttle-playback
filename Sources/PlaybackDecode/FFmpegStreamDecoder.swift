@@ -57,7 +57,8 @@ public enum StreamDecoderError: Error, Equatable, CustomStringConvertible {
     /// The reader was cancelled while the decoder was waiting on it.
     case cancelled
     /// The call was ended early by ``FFmpegStreamDecoder/interrupt()`` so the caller could seek.
-    /// **Not terminal**: the decoder is still open, and the seek that follows clears it.
+    /// **Not terminal**: the decoder is still open, and the seek that follows clears it. When
+    /// `open()` throws it, nothing was opened: the caller opens again, with a fresh decoder.
     case interrupted
 
     public var description: String {
@@ -178,10 +179,19 @@ public final class FFmpegStreamDecoder {
                 max_analyze_duration_us: Int64((probeBudget.analyzeDuration * 1_000_000).rounded())
             )
             guard let opened = stream_decoder_open_with(&callbacks, opaque, &options, &info, &status) else {
-                reason = status == Int32(STREAM_DECODE_ERR_CANCELLED.rawValue) ? .cancelled : .failure
-                throw status == Int32(STREAM_DECODE_ERR_CANCELLED.rawValue)
-                    ? StreamDecoderError.cancelled
-                    : StreamDecoderError.failed(status: status)
+                // An interrupt is a seek arriving while the episode opens, not a format this build
+                // cannot play: `.failed` would send the caller to its `AVPlayer` fallback.
+                switch status {
+                case Int32(STREAM_DECODE_ERR_CANCELLED.rawValue):
+                    reason = .cancelled
+                    throw StreamDecoderError.cancelled
+                case Int32(STREAM_DECODE_ERR_INTERRUPTED.rawValue):
+                    reason = .interrupted
+                    throw StreamDecoderError.interrupted
+                default:
+                    reason = .failure
+                    throw StreamDecoderError.failed(status: status)
+                }
             }
             handle = opened
             let format = StreamAudioFormat(

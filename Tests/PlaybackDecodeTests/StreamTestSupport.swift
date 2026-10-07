@@ -204,6 +204,35 @@ final class ChunkedFileByteReader: StreamByteReader {
     func clearInterrupt() { inner.clearInterrupt() }
 }
 
+/// A chunked response (no length) whose connection breaks at `cutoff`: every read from there on
+/// fails with a transport error, which is not the end of the stream.
+final class TruncatedFileByteReader: StreamByteReader {
+    private let inner: FileByteReader
+    private let cutoff: Int64
+
+    init(url: URL, cutoff: Int64) throws {
+        self.inner = try FileByteReader(url: url, reportsTotalLength: false)
+        self.cutoff = cutoff
+    }
+
+    var totalLength: Int64? { nil }
+    var position: Int64 { inner.position }
+
+    func read(into buffer: UnsafeMutableRawPointer, maxLength: Int) throws -> Int {
+        let left = cutoff - inner.position
+        guard left > 0 else { throw URLError(.networkConnectionLost) }
+        return try inner.read(into: buffer, maxLength: min(maxLength, Int(left)))
+    }
+
+    func seek(to offset: Int64) throws { try inner.seek(to: offset) }
+
+    func cancel() { inner.cancel() }
+
+    func interrupt() { inner.interrupt() }
+
+    func clearInterrupt() { inner.clearInterrupt() }
+}
+
 /// A reader over an in-memory blob, for the garbage-input case.
 final class DataByteReader: StreamByteReader {
     private let data: Data

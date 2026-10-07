@@ -59,6 +59,9 @@ struct StreamDecoder {
      * after which the decoder carries on. Cleared by `stream_decoder_seek`. */
     volatile int interrupted;
     int64_t      bytes_read;
+    /* The reader itself said end of stream (`STREAM_READ_EOF`) since the last reader seek.
+     * libavformat reports a broken read as end of file too, and only this tells them apart. */
+    int          source_eof;
 
     /* Absolute source byte that FFmpeg's offset 0 maps to: the end of the leading ID3v2 tag(s).
      * See `probe_id3_offset`. Zero for everything without one. */
@@ -111,7 +114,7 @@ static int avio_read_packet(void *opaque, uint8_t *buf, int buf_size) {
     }
     /* Never 0: libavformat reads a 0 as "nothing yet, ask again" and spins on it forever. */
     switch (n) {
-        case STREAM_READ_EOF:       return AVERROR_EOF;
+        case STREAM_READ_EOF:       d->source_eof = 1; return AVERROR_EOF;
         /* Latch it. During `stream_decoder_open` there is no handle for the caller's `cancel` to
          * reach, so the reader's own refusal is the only evidence that this was a cancel and not a
          * broken file — and the two must not be reported the same way. */
@@ -155,7 +158,7 @@ static int64_t avio_seek_packet(void *opaque, int64_t offset, int whence) {
     if (target < 0) return AVERROR(EINVAL);
 
     int rc = d->cb.seek(d->opaque, target + d->base_offset);
-    if (rc == 0) return target;
+    if (rc == 0) { d->source_eof = 0; return target; }
     switch (rc) {
         case STREAM_READ_CANCELLED:   d->cancelled = 1; return AVERROR_EXIT;
         case STREAM_READ_INTERRUPTED: d->interrupted = 1; return AVERROR_EXIT;
@@ -190,10 +193,16 @@ static int64_t probe_id3_offset(StreamDecoder *d) {
         int got = 0;
         while (got < (int)sizeof(header)) {
             int n = d->cb.read(d->opaque, header + got, (int)sizeof(header) - got);
+            /* Latched as the AVIO glue latches them: a probe cut short is not "no tag". */
+            if (n == STREAM_READ_CANCELLED) d->cancelled = 1;
+            if (n == STREAM_READ_INTERRUPTED) d->interrupted = 1;
             if (n <= 0) { got = -1; break; }
             got += n;
         }
-        if (got != (int)sizeof(header)) break;
+        if (got != (int)sizeof(header)) {
+            if (d->cancelled || d->interrupted) return 0;
+            break;
+        }
         if (header[0] != 'I' || header[1] != 'D' || header[2] != '3') break;
         if (header[3] == 0xFF || header[4] == 0xFF) break;   /* not a version we can trust */
         /* Syncsafe: seven bits per byte, high bit always clear. */
@@ -401,6 +410,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
      * cover art that libavformat would otherwise consume in full. */
     d->base_offset = probe_id3_offset(d);
     if (d->cancelled) { local_status = STREAM_DECODE_ERR_CANCELLED; goto fail; }
+    if (d->interrupted) { local_status = STREAM_DECODE_ERR_INTERRUPTED; goto fail; }
 
     local_status = open_format(d, options);
     if (local_status != STREAM_DECODE_OK) goto fail;
@@ -519,7 +529,10 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
 
     if (avformat_open_input(&d->fmt, NULL, NULL, NULL) < 0) {
         d->fmt = NULL;   /* avformat_open_input freed it; the AVIO context is still ours */
-        return d->cancelled ? STREAM_DECODE_ERR_CANCELLED : STREAM_DECODE_ERR_OPEN;
+        if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+        /* Not "unsupported": the caller answers that with another player, and an interrupt is
+         * only a seek arriving while the episode opens. */
+        return d->interrupted ? STREAM_DECODE_ERR_INTERRUPTED : STREAM_DECODE_ERR_OPEN;
     }
     /* Best effort, as in spine_decode.c: some containers decode fine with thinner metadata. */
     (void)avformat_find_stream_info(d->fmt, NULL);
@@ -527,7 +540,7 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
      * an MP3's bitrate duration among it, and every later seek then takes another path and lands
      * somewhere else (issue #5). Such an open fails, and opening again costs only the probe. */
     if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-    if (d->interrupted) return STREAM_DECODE_ERR_OPEN;
+    if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
 
     d->audio_idx = av_find_best_stream(d->fmt, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
     if (d->audio_idx < 0) return STREAM_DECODE_ERR_NO_AUDIO;
@@ -539,6 +552,17 @@ static const int64_t kMP3JunkScanBytes = 64 * 1024;
 /* The largest MPEG audio frame (`MPA_MAX_CODED_FRAME_SIZE`); a first packet larger than this has
  * junk in it. */
 static const int kMP3MaxFrameBytes = 1792;
+
+/* Move the reader to `offset` for a reopen. A cancel or an interrupt is latched and reported as
+ * itself; any other refusal is STREAM_DECODE_ERR_IO. */
+static int reopen_seek(StreamDecoder *d, int64_t offset) {
+    switch (d->cb.seek(d->opaque, offset)) {
+        case 0:                       return STREAM_DECODE_OK;
+        case STREAM_READ_CANCELLED:   d->cancelled = 1; return STREAM_DECODE_ERR_CANCELLED;
+        case STREAM_READ_INTERRUPTED: d->interrupted = 1; return STREAM_DECODE_ERR_INTERRUPTED;
+        default:                      return STREAM_DECODE_ERR_IO;
+    }
+}
 
 /*
  * Step over junk before the first MP3 frame that libavformat itself did not.
@@ -565,7 +589,7 @@ static int skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *opti
         /* No packet at all is the decode's to report, not the open's; an interrupted or cancelled
          * read is the open's. */
         if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-        if (d->interrupted) return STREAM_DECODE_ERR_OPEN;
+        if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
         avio_clear_latched_error(d);
         return STREAM_DECODE_OK;
     }
@@ -584,9 +608,16 @@ static int skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *opti
     av_packet_unref(d->held);
     close_format(d);
     d->base_offset += junk;
-    rc = d->cb.seek(d->opaque, d->base_offset);
-    if (rc == STREAM_READ_CANCELLED) { d->cancelled = 1; return STREAM_DECODE_ERR_CANCELLED; }
-    if (rc != 0) return STREAM_DECODE_ERR_OPEN;
+    rc = reopen_seek(d, d->base_offset);
+    if (rc == STREAM_DECODE_ERR_IO) {
+        /* The reader cannot serve the frame's offset. Open where the demuxer first did and keep
+         * the junk: that decodes, as it did before this reopen existed, and only the byte
+         * estimates are off. */
+        d->base_offset -= junk;
+        rc = reopen_seek(d, d->base_offset);
+        if (rc == STREAM_DECODE_ERR_IO) return STREAM_DECODE_ERR_OPEN;
+    }
+    if (rc != STREAM_DECODE_OK) return rc;
     return open_format(d, options);
 }
 
@@ -739,6 +770,7 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
                                                              : kSeekBudgetBytes;
     decoder->seek_budget_blown = 0;
     decoder->seek_budget_armed = 1;
+    decoder->source_eof = 0;
     int rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, INT64_MIN, target, target,
                                 AVSEEK_FLAG_BACKWARD);
     int walked = decoder->seek_budget_blown;
@@ -760,8 +792,10 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
              *
              * A seek past the last frame comes back as end of file (mp3_seek places it and finds
              * no frame to sync to). The stream is over there, which is the answer the byte
-             * estimate gives a source that has a length. */
-            if (!walked && rc == AVERROR_EOF) {
+             * estimate gives a source that has a length. Only when the READER said so, though: a
+             * broken read comes back as end of file too, and a truncated chunked body is not the
+             * end of the episode. */
+            if (!walked && rc == AVERROR_EOF && decoder->source_eof) {
                 after_seek_reset(decoder);
                 decoder->ended = 1;
                 if (decoder->media_duration > 0 && seconds > decoder->media_duration) {

@@ -332,7 +332,64 @@ final class StreamDecodeTests: XCTestCase {
         XCTAssertNotNil(decoder.nextChunk(), "the decoder produced nothing after an interrupted read")
     }
 
+    /// A seek that arrives while the episode is still opening interrupts the open. That has to
+    /// throw `.interrupted`, never `.failed`: the app answers `.failed` with its `AVPlayer`
+    /// fallback, as if the format were unsupported. Stalls in the ID3 probe (0), in libavformat's
+    /// first read (10, past the ID3 header) and, where the open reads that far, deeper in its probe.
+    func testInterruptDuringOpenThrowsInterruptedNotFailed() throws {
+        try skipUnlessAvailable()
+        for name in Fixture.all {
+            for stallAfter: Int64 in [0, 10, 40 * 1024] {
+                let reader = try StallingFileByteReader(url: try Fixture.url(name), stallAfterBytes: stallAfter)
+                let decoder = FFmpegStreamDecoder(reader: reader)
+                var thrown: Error?
+                var opened = false
+                let done = DispatchSemaphore(value: 0)
+                DispatchQueue.global().async {
+                    do { _ = try decoder.open(); opened = true } catch { thrown = error }
+                    done.signal()
+                }
+                let deadline = Date().addingTimeInterval(5)
+                var finished = false
+                while !reader.isStalled, !finished, Date() < deadline {
+                    finished = done.wait(timeout: .now() + 0.002) == .success
+                }
+                guard !finished, reader.isStalled else {
+                    if !finished { _ = done.wait(timeout: .now() + 5) }
+                    /* The open needed fewer bytes than the stall point: nothing to interrupt. */
+                    XCTAssertTrue(opened, "\(name) @\(stallAfter): open neither stalled nor succeeded")
+                    XCTAssertGreaterThan(stallAfter, 10, "\(name): every open reads past its first 10 bytes")
+                    continue
+                }
+                decoder.interrupt()
+                XCTAssertEqual(done.wait(timeout: .now() + 5), .success, "\(name) @\(stallAfter): open never returned")
+                XCTAssertFalse(opened, "\(name) @\(stallAfter): an interrupted open reported success")
+                XCTAssertEqual(thrown as? StreamDecoderError, .interrupted, "\(name) @\(stallAfter): got \(String(describing: thrown))")
+                XCTAssertEqual(decoder.endReason, .interrupted, "\(name) @\(stallAfter)")
+            }
+        }
+    }
+
     // MARK: - No Content-Length
+
+    /// A seek into a chunked body whose connection broke is NOT the end of the episode: libavformat
+    /// reports the broken read as end of file, and only the reader knows otherwise. (A seek past
+    /// the real end of a length-less source is end of stream; the conformance suite's seek to the
+    /// end under `unknownLength` holds that.)
+    func testUnknownLengthSeekIntoATruncatedBodyIsNotEOF() throws {
+        try skipUnlessAvailable()
+        let url = try Fixture.url(Fixture.mp3)
+        let size = try XCTUnwrap(try FileByteReader(url: url).totalLength)
+        let decoder = FFmpegStreamDecoder(reader: try TruncatedFileByteReader(url: url, cutoff: size / 2))
+        _ = try decoder.open()
+        do {
+            _ = try decoder.seek(toSeconds: 25)
+            XCTFail("a seek into a broken body succeeded with endReason \(decoder.endReason)")
+        } catch {
+            XCTAssertEqual(error as? StreamDecoderError, .failed(status: Int32(STREAM_DECODE_ERR_SEEK.rawValue)))
+        }
+        XCTAssertNotEqual(decoder.endReason, .eof, "a truncated body read as the end of the episode")
+    }
 
     func testUnknownLengthStillDecodesMP3() throws {
         try skipUnlessAvailable()
