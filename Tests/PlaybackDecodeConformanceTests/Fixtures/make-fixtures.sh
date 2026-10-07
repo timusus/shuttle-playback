@@ -147,6 +147,9 @@ b = open('adts_id3.aac', 'rb').read()
 open('adts_id3_truncated.aac', 'wb').write(b[:int(len(b) * 0.55) + 3])
 "
 
+# Raw LATM in LOAS framing (no container): the loas demuxer, probed by its sync word.
+$FF -i "$TMP/s44.wav" -c:a aac -b:a 48k -f latm latm_loas.aac
+
 # --- Ogg ---------------------------------------------------------------------------------------
 $FF -i "$TMP/s48.wav" -c:a libopus -b:a 32k -map_metadata -1 opus_stereo.opus
 $FF -i "$TMP/s44.wav" -c:a vorbis -strict -2 -b:a 48k -map_metadata -1 vorbis_stereo.ogg
