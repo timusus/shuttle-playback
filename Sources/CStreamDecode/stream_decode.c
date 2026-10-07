@@ -578,6 +578,7 @@ static int  open_format(StreamDecoder *d, const StreamDecodeOptions *options);
 static void close_format(StreamDecoder *d);
 static int  skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *options);
 static void avio_clear_latched_error(StreamDecoder *d);
+static int  reopen_past_mp3_junk(StreamDecoder *d, const StreamDecodeOptions *options, int failed);
 
 StreamDecoder *stream_decoder_open(const StreamDecodeCallbacks *callbacks,
                                    void *opaque,
@@ -620,6 +621,9 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     if (d->interrupted) { local_status = STREAM_DECODE_ERR_INTERRUPTED; goto fail; }
 
     local_status = open_format(d, options);
+    if (local_status == STREAM_DECODE_ERR_NO_AUDIO || local_status == STREAM_DECODE_ERR_OPEN) {
+        local_status = reopen_past_mp3_junk(d, options, local_status);
+    }
     if (local_status != STREAM_DECODE_OK) goto fail;
     local_status = skip_unscanned_junk(d, options);
     if (local_status != STREAM_DECODE_OK) goto fail;
@@ -798,6 +802,95 @@ static int reopen_seek(StreamDecoder *d, int64_t offset) {
         case STREAM_READ_INTERRUPTED: d->interrupted = 1; return STREAM_DECODE_ERR_INTERRUPTED;
         default:                      return STREAM_DECODE_ERR_IO;
     }
+}
+
+/* How far past `base_offset` `reopen_past_mp3_junk` looks for audio. Each byte is read once, so the
+ * cap is what a hopeless file costs on top of the probe: 1 MiB is about 65 s of 128 kbps audio, far
+ * more junk than any real file carries, and a bounded few seconds of cellular data. */
+static const int64_t kMP3ResyncScanBytes = 1024 * 1024;
+/* Consecutive frame headers that must chain (each at the previous one's end) to call it audio. */
+static const int kMP3ResyncChain = 3;
+
+static int mp3_parse_header(const uint8_t *p, int *spf, int *bitrate, int *sample_rate,
+                            int *side_info_bytes);
+
+/* The byte length of the MPEG audio frame whose header is at `p`, or 0 if it is not one. */
+static int mp3_frame_length(const uint8_t *p, uint32_t *key) {
+    int spf, bitrate, rate, side;
+    if (!mp3_parse_header(p, &spf, &bitrate, &rate, &side)) return 0;
+    int pad = (p[2] >> 1) & 1;
+    int len = spf == 384 ? (12 * bitrate / rate + pad) * 4 : spf / 8 * bitrate / rate + pad;
+    /* What must not change from one frame to the next: version, layer, sample rate. */
+    *key = ((uint32_t)(p[1] & 0x1E) << 8) | (p[2] & 0x0C);
+    return len;
+}
+
+/*
+ * A probe that finds no audio behind more than its budget of junk (issue #24): look past the
+ * budget for the first run of `kMP3ResyncChain` MPEG audio frames that follow each other, and open
+ * there. A lone 0xFFE sync word in the junk does not chain, so it is not taken. Only runs after
+ * a failed open, so a file that opens is read exactly as before.
+ */
+static int reopen_past_mp3_junk(StreamDecoder *d, const StreamDecodeOptions *options, int failed) {
+    if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+    if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+    close_format(d);
+
+    enum { kChunk = 32 * 1024, kLook = 3 * 1792 + 4 };
+    uint8_t *buf = (uint8_t *)av_malloc(kChunk + kLook);
+    if (!buf) return STREAM_DECODE_ERR_ALLOC;
+    /* The probe has already looked at the first `kMP3JunkScanBytes` (mp3dec scans them for two
+     * chained frames), so start there, less the span a chain occupies in case one straddles it. */
+    int64_t found = -1, pos = kMP3JunkScanBytes - kLook;   /* `pos`: offset of buf[0] from base_offset */
+    /* The failed open read on through the junk to the audio, as far as libavformat's own buffer
+     * ahead of it: the first frame is within the last 64 KiB of what it read, so there is no need
+     * to read the junk again. */
+    if (d->io_pos - 64 * 1024 > pos) pos = d->io_pos - 64 * 1024;
+    int len = 0, rc = reopen_seek(d, d->base_offset + pos);
+    int scanned_to_end = 0;
+    if (rc != STREAM_DECODE_OK) { av_free(buf); return rc == STREAM_DECODE_ERR_IO ? failed : rc; }
+    while (found < 0 && pos < kMP3ResyncScanBytes && !scanned_to_end) {
+        int n = d->cb.read(d->opaque, buf + len, kChunk);
+        if (n > 0) { d->bytes_read += n; len += n; }
+        else if (n == STREAM_READ_EOF) scanned_to_end = 1;
+        else if (n == STREAM_READ_CANCELLED) { d->cancelled = 1; av_free(buf); return STREAM_DECODE_ERR_CANCELLED; }
+        else if (n == STREAM_READ_INTERRUPTED) { d->interrupted = 1; av_free(buf); return STREAM_DECODE_ERR_INTERRUPTED; }
+        else { av_free(buf); return failed; }
+        int i = 0;
+        for (; i + 4 <= len; i++) {
+            if (buf[i] != 0xFF || (buf[i + 1] & 0xE0) != 0xE0) continue;
+            int at = i, ok = 1;
+            uint32_t key0 = 0, key;
+            for (int k = 0; k < kMP3ResyncChain && ok; k++) {
+                if (at + 4 > len) {
+                    if (scanned_to_end) ok = 0;
+                    else goto need_more;   /* the chain runs past what is read */
+                    break;
+                }
+                int fl = mp3_frame_length(buf + at, &key);
+                if (!fl || (k && key != key0)) { ok = 0; break; }
+                key0 = key;
+                at += fl;
+            }
+            if (ok) { found = pos + i; break; }
+        }
+need_more:
+        if (found >= 0) break;
+        /* Keep from `i` on: what is before it cannot start a chain. */
+        memmove(buf, buf + i, (size_t)(len - i));
+        len -= i;
+        pos += i;
+    }
+    av_free(buf);
+    if (found < 0) return failed;
+
+    d->base_offset += found;
+    rc = reopen_seek(d, d->base_offset);
+    if (rc != STREAM_DECODE_OK) return rc == STREAM_DECODE_ERR_IO ? failed : rc;
+    d->io_pos = 0;
+    d->prologue_len = 0;
+    d->source_eof = 0;
+    return open_format(d, options);
 }
 
 /*

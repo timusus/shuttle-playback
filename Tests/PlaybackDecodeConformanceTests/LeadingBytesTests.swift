@@ -104,11 +104,26 @@ final class LeadingBytesTests: XCTestCase {
                   budget: StreamProbeBudget(bytes: 256 * 1024, analyzeDuration: 1))
     }
 
-    /// Under the default 64 KiB budget a 100 kB prefix is not recovered from (80 kB is: see
-    /// garbage_prefix_80k.mp3). Pinned: this is the behaviour wanted, and it fails today.
+    /// Under the default 64 KiB budget a 100 kB prefix is scanned past for the first run of chained
+    /// frames (#24).
     func testA100kBGarbagePrefixUnderTheDefaultProbeBudget() throws {
-        XCTExpectFailure("#24: a garbage prefix beyond the default probe budget fails to open")
         try check(prefix: garbage(100_000), label: "100 kB garbage, default probe",
                   maxBytesBeforeAudio: 100_000 + 128 * 1024)
+    }
+
+    func testA500kBGarbagePrefixUnderTheDefaultProbeBudget() throws {
+        try check(prefix: garbage(500_000), label: "500 kB garbage, default probe",
+                  maxBytesBeforeAudio: 500_000 + 128 * 1024)
+    }
+
+    /// Sync words in the garbage that are not followed by more frames are not the start of the audio.
+    func testFalseSyncWordsInGarbageAreNotTakenAsTheStart() throws {
+        var junk = garbage(150_000)
+        // A valid MPEG1 layer 3 128 kbps 44.1 kHz header (FF FB 90 00) whose next frame is junk, and
+        // a bare 0xFFE... that is no header at all.
+        for at in [20_000, 70_000, 120_000] { junk.replaceSubrange(at..<at + 4, with: [0xFF, 0xFB, 0x90, 0x00]) }
+        for at in [30_000, 90_000] { junk.replaceSubrange(at..<at + 2, with: [0xFF, 0xE3]) }
+        try check(prefix: junk, label: "150 kB garbage with false sync words, default probe",
+                  maxBytesBeforeAudio: 150_000 + 128 * 1024)
     }
 }
