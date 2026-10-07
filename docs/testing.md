@@ -138,9 +138,13 @@ Then review the JSON diff. The suite writes a golden only if the fault matrix pa
 the exact finding, with its GitHub issue, and runs under `XCTExpectFailure`. A different value, or a
 pinned finding that stops happening, fails the suite. When the bug is fixed, remove the rule. Rules
 exist at present for #36 only. `alignFrames` is 0 in every seek of every golden because seeks land
-on the requested sample, except `flac_stereo.flac`: it has no seek table, its bisection outruns the
-seek budget and the byte estimate lands inexactly (#38). A seek to the end lands where the clean
-decode ends, so its empty window counts as 0 too.
+on the requested sample. A seek to the end lands where the clean decode ends, so its empty window
+counts as 0 too.
+
+**FLAC seeks.** `FLACSeekTests` writes a 60 s FLAC with no seek table at test time, with fixed and
+with variable block sizes, whose bitrate jumps 700-fold between silent and noise stretches. Seeks
+far and near must land on the requested sample, decode bit-identically to the generated PCM, and
+read no more than the search's budget (#38) before their first audio.
 
 **MP3 seeks.** `MP3SeekTests` checks what the goldens cannot, since they compare a seek's PCM after a
 warm-up: every MP3 fixture sought to seven places must decode bit-identically to the clean decode from

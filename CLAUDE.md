@@ -87,7 +87,7 @@ combination. A decoder bug the suite found and nobody has fixed is pinned in `Kn
 fixture, kind, exact fault combinations and the exact finding, with its issue number, under
 `XCTExpectFailure`. A different value, or a pinned finding that stops happening, fails; update or
 remove the rule. Seeks are sample-accurate (a pre-roll before the target, decoded and dropped up to
-it), so `alignFrames` is 0 in every seek of every golden but `flac_stereo.flac` (no seek table, #38), the seek to the end included (it lands
+it, none for FLAC, whose seek finds a frame by its headers, #38), so `alignFrames` is 0 in every seek of every golden, the seek to the end included (it lands
 where the clean decode ends, with an empty window). The one inexact landing is outside the fixtures: a VBR
 MP3 seek further from a frame of known time than one seek's byte budget lands by Xing TOC or bitrate
 estimate (#3), covered by `testXingVBRMP3SeeksExactlyNearAndCheaplyFar`.

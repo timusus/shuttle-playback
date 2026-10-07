@@ -160,7 +160,11 @@ flowchart TD
     RS -- yes --> RE["resume: put the demuxer back on the last packet<br/>codec state kept, no flush"]
     RE -->|found| DONE
     RE -->|not found| TR
-    RS -- no --> TR["avformat_seek_file backward<br/>with a 64 KiB read budget"]
+    RS -- no --> FS{"native FLAC with a length?"}
+    FS -- yes --> FX["find a frame at most 32 KiB before t by its headers<br/>at most 10 probes, 128 KiB"]
+    FX -->|found| TR
+    FX -->|ended over 64 KiB away| BYTE
+    FS -- no --> TR["avformat_seek_file backward<br/>with a 64 KiB read budget"]
     TR -->|landed inside the budget| FL["flush codec, reset resampler"]
     TR -->|budget spent or seek failed| INT{"cancelled or interrupted?"}
     INT -- yes --> STOP["throw cancelled or interrupted"]
@@ -172,6 +176,8 @@ flowchart TD
     EOFQ -- yes --> EOFX["stream ends at the target<br/>endReason eof, seek returns normally"]
     EOFQ -- no --> ERR["throw seek failure"]
     BYTE --> FL2["flush codec, reset resampler"]
+    BYTE -->|nothing decoded before the declared end| BACK["demuxer seek within the budget,<br/>else the estimate 64 KiB earlier"]
+    BACK --> FL2
     WALK --> FL2
     FL --> PUMP["decode the pre-roll, drop it up to t"]
     FL2 --> PUMP
@@ -197,11 +203,24 @@ flowchart TD
   for CBR the byte offset. A VBR MP3 target further from one than a seek's byte budget is placed by
   its Xing TOC or bitrate instead, and that estimate is the landed time (issue #3). A caller that
   sets its position to the requested time instead of the returned one drifts from the audio there.
+- **A FLAC with no seek table is sought by its frame headers (issue #38).** FFmpeg bisects such a
+  file over its parser, which reads the tail and buffers ten frames per probe, and outran the budget
+  on anything longer than a few seconds; the byte estimate then landed on a frame thousands of
+  samples from the target while reporting the target. Every FLAC frame header carries its frame or
+  sample number, so the decoder probes the file itself: interpolating between frames of known place
+  and time (the first frame, verified index entries, the file's end), bisecting where the bitrate
+  jumps, and reading the header (CRC-8 checked) at each probe. It stops once it has a frame at most
+  32 KiB before the target, or after 10 probes or 128 KiB, places the demuxer on that frame through
+  an exact index entry, and drops the samples up to the target. A FLAC frame decodes on its own, so
+  there is no pre-roll. Only a search that ended more than 64 KiB away falls back to the estimate.
 - **The budget exists because of MP3 without a table of contents.** For those files FFmpeg's generic
   seek decodes forward from the start until timestamps reach the target. Measured on a fixture, one
   seek to 25 minutes read 12 MB. Once a seek has read 64 KiB, the next read is refused, the walk
   aborts, and the decoder places the seek by byte ratio instead. This is exact for constant bitrate
-  and close for the rest. The estimate is reported as the landed time.
+  and close for the rest. The estimate is reported as the landed time. An estimate past the last
+  frame's start (an ADTS stream sought to just before its declared end) decodes nothing; the
+  demuxer's own seek is then tried within the budget, and failing that the estimate steps back by
+  the budget (issue #28). Neither walks the file.
 - **A source with no length and no container duration has nothing to estimate from.** After a blown
   budget the walk is the only seek there is, so it is allowed to run. A seek that failed without
   blowing the budget is not walked. If the reader said end of stream (a seek past the last frame),
