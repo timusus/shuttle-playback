@@ -344,13 +344,9 @@ final class StreamDecodeTests: XCTestCase {
         let decoder = FFmpegStreamDecoder(reader: reader)
         let format = try decoder.open()
         XCTAssertEqual(format.sampleRate, 44100)
-        /* Duration is 0, and that is FFmpeg n7.1's answer rather than a gap here: mp3dec validates
-         * the Xing header's own file-size field against `avio_size()`, which a length-less source
-         * cannot answer, so the tag and its frame count are discarded. Measured both ways, with and
-         * without a seek callback (stream_decode.c says so at the duration fallback). The caller's
-         * answer is plan §5.3's third fallback, the feed's own duration. What must NOT degrade is
-         * playback, which is what the rest of this test measures. */
-        XCTAssertEqual(format.duration, 0, "a length-less source gets no container duration")
+        /* The Xing duration survives a length-less source: stock n7.1 mp3dec discarded the tag
+         * when `avio_size()` could not answer, which scripts/ffmpeg-patches/0001 fixes (issue #1). */
+        XCTAssertEqual(format.duration, 20, accuracy: 0.1, "the Xing frame count gives the duration")
         let pcm = decodeAll(decoder)
         XCTAssertEqual(Double(pcm.count / format.channelCount), 44100 * 20, accuracy: 4096)
         XCTAssertEqual(decoder.endReason, .eof)

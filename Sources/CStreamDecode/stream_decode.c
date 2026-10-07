@@ -416,13 +416,10 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     /* Format duration first, stream duration second (an MP3's Xing frame count reaches the stream
      * before it reaches the format).
      *
-     * A source with NO TOTAL LENGTH reports 0 here, and that is FFmpeg n7.1's behaviour rather
-     * than a gap in this file: mp3dec cross-checks the Xing header's own file-size field against
-     * `avio_size()`, and a size of "unknown" comes back as a negative error that fails the check,
-     * so the tag and its duration are discarded — measured both ways in
-     * `StreamDecodeTests.testUnknownLengthStillDecodesMP3`, with and without a seek callback. The
-     * caller's answer is plan §5.3's third fallback, the feed's own duration; playback itself is
-     * unaffected, which is what that test asserts. */
+     * A source with NO TOTAL LENGTH still gets the Xing duration: stock n7.1 mp3dec stored the
+     * negative "unknown" `avio_size()` in a uint64_t and discarded the tag, which the local patch
+     * scripts/ffmpeg-patches/0001 fixes (issue #1). A length-less MP3 with no Xing tag reports 0,
+     * and the caller falls back to the feed's own duration. */
     if (d->fmt->duration != AV_NOPTS_VALUE) {
         info->duration_sec = (double)d->fmt->duration / (double)AV_TIME_BASE;
     } else if (stream->duration != AV_NOPTS_VALUE) {
@@ -642,7 +639,19 @@ int stream_decoder_seek(StreamDecoder *decoder, double seconds, double *landed_s
         if (!can_estimate_bytes(decoder)) {
             /* Nothing to estimate FROM: a source with no length and no container duration, which
              * over HTTP is a chunked response. The walk is then the only seek there is, so it is
-             * paid for rather than refused — an expensive seek beats a seek that fails. */
+             * paid for rather than refused — an expensive seek beats a seek that fails.
+             *
+             * A seek past the last frame comes back as end of file (mp3_seek places it and finds
+             * no frame to sync to). The stream is over there, which is the answer the byte
+             * estimate gives a source that has a length. */
+            if (!walked && rc == AVERROR_EOF) {
+                after_seek_reset(decoder);
+                decoder->ended = 1;
+                if (decoder->media_duration > 0 && seconds > decoder->media_duration) {
+                    *landed_seconds = decoder->media_duration;
+                }
+                return STREAM_DECODE_EOF;
+            }
             if (!walked) return STREAM_DECODE_ERR_SEEK;
             rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, INT64_MIN, target, target,
                                     AVSEEK_FLAG_BACKWARD);

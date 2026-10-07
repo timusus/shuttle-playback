@@ -7,10 +7,6 @@
 /// Not listed because the golden pins it as measured instead: seek misalignment (issue #3) shows
 /// as `alignFrames` in the goldens. A fix there changes the golden, and the diff is the review.
 enum KnownIssues {
-    /// Issue #1: the frame-count assertion of a decode with `totalLength` nil.
-    static let unknownLengthTail = "https://github.com/timusus/shuttle-playback/issues/1 "
-        + "(totalLength nil: end padding of an MP3 with an Xing/Info header is not trimmed)"
-
     struct Rule {
         var issue: String
         var fixtures: Set<String>
@@ -19,11 +15,6 @@ enum KnownIssues {
     }
 
     static let rules: [Rule] = [
-        Rule(issue: unknownLengthTail,
-             fixtures: ["tone.mp3", "vbr_xing.mp3", "lame_info_delay_padding.mp3",
-                        "test-cbr-info-header-pcut-frame.mp3"],
-             kinds: [.frameCount],
-             applies: { $0.contains(.unknownLength) }),
         // A resume after an interrupt seeks the same decoder; where MP3 seeks land early the
         // stitched decode repeats audio (more frames, PCM shifted after the warm-up).
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/3 (MP3 seek lands before the reported time; a resume repeats audio)",
@@ -36,7 +27,7 @@ enum KnownIssues {
              kinds: [.outcome, .seekLanding, .seekPCM],
              applies: { $0.contains(.ioErrorOncePerPosition) }),
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/5 (MP3 seek retried after an interrupt lands on another frame)",
-             fixtures: ["lame_info_delay_padding.mp3", "garbage_trailing_4k.mp3"],
+             fixtures: ["garbage_trailing_4k.mp3"],
              kinds: [.seekLanding, .seekPCM],
              applies: { $0.contains(.ioErrorOncePerPosition) }),
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/6 (Ogg seek with totalLength nil lands early)",
