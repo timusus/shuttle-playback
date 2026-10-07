@@ -52,7 +52,8 @@ struct StreamDecoder {
 
     int64_t     last_frame_pts;   /* best_effort_timestamp of the most recent decoded frame */
     int         decode_errors;    /* consecutive `avcodec_receive_frame` errors, see `pump` */
-    int         flushing;        /* a NULL packet has been sent to the decoder */
+    int64_t     end_pts;          /* MP4: where the edit list ends the audio (stream time base), else NOPTS */
+    int         flushing;         /* a NULL packet has been sent to the decoder */
     int         ended;            /* the decoder and the resampler are both drained */
 
     /* Written by `stream_decoder_cancel` from another thread and only ever read, so a plain flag
@@ -435,7 +436,9 @@ static int pump(StreamDecoder *d) {
              * before it ended. */
             int64_t pts = d->frame->best_effort_timestamp;
             if (pts == AV_NOPTS_VALUE) pts = d->next_pts;
+            int pts_guessed = 0;   /* `pts` is the seek's start, not something the stream said */
             if (pts == AV_NOPTS_VALUE && d->discard_until != AV_NOPTS_VALUE) {
+                pts_guessed = 1;
                 /* No frame since the seek has said what time it is. The demuxer was asked for
                  * `seek_from` and seeks backward, so the decode starts there or at most one frame
                  * before it: the frames are timed from there and the pre-roll is dropped as
@@ -466,6 +469,16 @@ static int pump(StreamDecoder *d) {
                     d->discard_until = AV_NOPTS_VALUE;
                     landing = 1;
                 }
+            }
+            if (d->end_pts != AV_NOPTS_VALUE && pts != AV_NOPTS_VALUE && !pts_guessed) {
+                int64_t room = av_rescale_q(d->end_pts - pts, d->time_base,
+                                            (AVRational){ 1, rate });
+                if (d->next_pts > d->end_pts) d->next_pts = d->end_pts;   /* where the audio ends */
+                if (room <= cut) {   /* wholly past the edit list's end */
+                    av_frame_unref(d->frame);
+                    continue;
+                }
+                if (room < d->frame->nb_samples) d->frame->nb_samples = (int)room;
             }
             d->last_frame_pts = pts == AV_NOPTS_VALUE ? AV_NOPTS_VALUE
                 : pts + av_rescale_q(cut, (AVRational){ 1, rate }, d->time_base);
@@ -589,6 +602,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     d->cb = *callbacks;
     d->opaque = opaque;
     d->audio_idx = -1;
+    d->end_pts = AV_NOPTS_VALUE;
     d->last_frame_pts = AV_NOPTS_VALUE;
     d->discard_until = AV_NOPTS_VALUE;
     d->next_pts = AV_NOPTS_VALUE;
@@ -631,6 +645,13 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     d->sbr = is_sbr(par->codec_id, par->profile);
     d->time_base = stream->time_base;
     d->start_time = stream->start_time == AV_NOPTS_VALUE ? 0 : stream->start_time;
+    /* The mov demuxer trims the edit list's start (skip-samples side data) but leaves the codec's
+     * last frame whole, so the decode runs up to a frame past the duration the edit list declares
+     * (issue #13). AVAssetReader stops at that duration; so do we. */
+    if (d->fmt->iformat && d->fmt->iformat->name && strstr(d->fmt->iformat->name, "mov") &&
+        stream->duration != AV_NOPTS_VALUE && stream->duration > 0) {
+        d->end_pts = d->start_time + stream->duration;
+    }
 
     local_status = init_swr(d);
     if (local_status != STREAM_DECODE_OK) goto fail;

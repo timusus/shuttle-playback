@@ -4,13 +4,13 @@
   "durationS" : 4.02,
   "expect" : "decodes",
   "fixture" : "aac_fragmented_sidx.m4a",
-  "frames" : 178176,
+  "frames" : 177424,
   "pcmSha256PerSecondInt16" : [
     "049357b712b2f0b60b0d1db76a1e632baadd69096dc59e96dc17048637919644",
     "144143b00fa65b901e1a95d0704a8a3f330bb30b023253a75725975d7f2dfe56",
     "1e68ce2f9343307e43d8bcd4de49f6b350ae367cef00398b4df5c48afeb5043d",
     "fd092b5d8182a6e71c83f902db3744c99c48379fa9b1540d6b78af9283b7d872",
-    "2ac8b1c2f522b797bbff4122fd5a9c13e046a3b74dc25e217521b4e735fad94a"
+    "f3b7625ae6bb348c27b87bf518de5b97e186ffb42f51bb1d7eb62e0f0b91345e"
   ],
   "sampleRate" : 44100,
   "seeks" : [
@@ -24,32 +24,32 @@
     },
     {
       "alignFrames" : 0,
-      "landedS" : 1.347,
-      "toS" : 1.347,
+      "landedS" : 1.341,
+      "toS" : 1.341,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "6146f59d8b062858e8ec6cb65f3d51aea267bc901f3a1daa757fff47b279c32f"
+      "windowSha256Int16" : "eb6138beac0871300725d3e198a47ad2c5ab7f01505e95990405b1964da474e5"
     },
     {
       "alignFrames" : 0,
-      "landedS" : 2.694,
-      "toS" : 2.694,
+      "landedS" : 2.682,
+      "toS" : 2.682,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "d9a9abd972934f95c21c14a86c9e8d5351318a5d267890a6fb70d2e9bf77960b"
+      "windowSha256Int16" : "bed34d560aa5cc48633d35fb41a75476e1d180c370b6b659e8fcf97113ae8810"
     },
     {
       "alignFrames" : 0,
-      "landedS" : 3.94,
-      "toS" : 3.94,
+      "landedS" : 3.923,
+      "toS" : 3.923,
       "tolS" : 0.03,
       "windowFrames" : 256,
-      "windowSha256Int16" : "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      "windowSha256Int16" : "25b7f2b59841d85b002be98853dcac8609599f489c64561d4052747dc0af6ee3"
     },
     {
       "alignFrames" : 0,
-      "landedS" : 4.04,
-      "toS" : 4.04,
+      "landedS" : 4.023,
+      "toS" : 4.023,
       "tolS" : 0.03,
       "windowFrames" : 0,
       "windowSha256Int16" : ""

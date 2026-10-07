@@ -128,7 +128,9 @@ enum ConformanceMatrix {
     /// Measured: an AAC seek restart differs from the continuous decode by up to 5e-4 at exactly
     /// the right alignment, so 2e-4 (the old probe tolerance) cannot hold over a whole window. The
     /// exact PCM of each seek is pinned by `windowSha256Int16`; this only finds where it sits.
-    static let alignTolerance: Float = 1e-3
+    /// The last samples of an AAC-in-MP4 tone differ by up to 4e-3 (the edit-list trim ends the
+    /// audio inside the tone, where the restart's missing overlap shows most), hence 5e-3.
+    static let alignTolerance: Float = 5e-3
     static let alignSearchFrames = 65536
 
     /// Seeks to each fraction of the clean duration and records where it landed and the PCM after it.

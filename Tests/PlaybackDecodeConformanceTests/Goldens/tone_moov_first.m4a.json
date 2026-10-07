@@ -4,7 +4,7 @@
   "durationS" : 20,
   "expect" : "decodes",
   "fixture" : "tone_moov_first.m4a",
-  "frames" : 882688,
+  "frames" : 882000,
   "pcmSha256PerSecondInt16" : [
     "7cff18c9e02d1b80012b0185e482ad1c06557a6fe4f33d91f22f4f8add3d7ad5",
     "5772648bc984338fc3c1115bc078d4806951ffa4c1f9ae034f3dbec29b2b392f",
@@ -25,8 +25,7 @@
     "ae65b352a47c7a47fa6837d106c4134a390ce0ed2724d597b908852fd8784bae",
     "4faa6d1d314cd8819fe08731252e99b3d7a5d45da5b7cbc33c1f7dd27caca78d",
     "453a16c2fd847a7f5e14cc06c53db848e90542c444e8480c1901935e91ec2ac7",
-    "02a1294a55453ff368b4143ceaf62c0c87849ffaa9472212bf816abe7bc280df",
-    "08f208c11a8198cc23d6242ab9214d729c6ce395ffc175553c0b9d179a14077b"
+    "02a1294a55453ff368b4143ceaf62c0c87849ffaa9472212bf816abe7bc280df"
   ],
   "sampleRate" : 44100,
   "seeks" : [
@@ -40,32 +39,32 @@
     },
     {
       "alignFrames" : 0,
-      "landedS" : 6.672,
-      "toS" : 6.672,
+      "landedS" : 6.667,
+      "toS" : 6.667,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "b6f5c6be490ee3cb88d713790541cd715d4407fb6b63b63034dcbfc6a67f1731"
+      "windowSha256Int16" : "411236c0c607fb0a1993a01c1de3c3572215c7deb42c44798d6b3c5aac451cc0"
     },
     {
       "alignFrames" : 0,
-      "landedS" : 13.344,
-      "toS" : 13.344,
+      "landedS" : 13.333,
+      "toS" : 13.333,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "b8330bfc204975af8c3691b11f7bd3f0a35925ab96aec1e968e1719da0cb3026"
+      "windowSha256Int16" : "c7d25f90690ccb3253c6df645b2fe1464239887dd2a0c7ac6a7331b02fd15ff8"
     },
     {
       "alignFrames" : 0,
-      "landedS" : 19.916,
-      "toS" : 19.916,
+      "landedS" : 19.9,
+      "toS" : 19.9,
       "tolS" : 0.03,
       "windowFrames" : 256,
-      "windowSha256Int16" : "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      "windowSha256Int16" : "0233b219ac69cdb255488c3ba8c019e041e1ad1ca95f4f0aae1e5aa01f090307"
     },
     {
       "alignFrames" : 0,
-      "landedS" : 20.016,
-      "toS" : 20.016,
+      "landedS" : 20,
+      "toS" : 20,
       "tolS" : 0.03,
       "windowFrames" : 0,
       "windowSha256Int16" : ""

@@ -197,8 +197,8 @@ final class StreamDecodeTests: XCTestCase {
 
             let ourFrames = ours.count / format.channelCount
             let referenceFrames = reference.pcm.count / reference.channels
-            XCTAssertEqual(Double(ourFrames), Double(referenceFrames), accuracy: 2048,
-                           "\(name): frame counts differ by more than the two decoders' priming")
+            XCTAssertEqual(Double(ourFrames), Double(referenceFrames), accuracy: 0,
+                           "\(name): frame count differs from AVAssetReader's (the edit list's end is not honoured)")
 
             let a = PCMComparison.channel(ours, index: 0, of: format.channelCount)
             let b = PCMComparison.channel(reference.pcm, index: 0, of: reference.channels)
