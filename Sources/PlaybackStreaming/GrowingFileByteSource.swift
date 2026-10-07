@@ -27,6 +27,8 @@ private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback
 ///   not walked again inside a retry's short wait. A request there that is refused (a `4xx`, a
 ///   page) or unanswered forgets it, a signed hop may have expired, and the next request walks the
 ///   chain from the requested URL once with the generous wait (``chainEndForgotten``).
+/// - A new network path (``GrowingFilePathMonitor``) ends a transaction still on the network at
+///   once, as a drop the retry above decides on, instead of leaving it to the idle timeout.
 /// - A transaction whose answer says the resource ends exactly at its base (`416` with
 ///   `bytes */N`, or a range clamped to the last byte) is a zero-length open, as in media3: the
 ///   length is learned and the read is at its end (``totalEndingAt(_:status:contentRange:)``).
@@ -144,6 +146,9 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     private let session: URLSession
     private let onEvent: ((GrowingFileEvent) -> Void)?
     private let clock: GrowingFileClock
+    private let pathMonitor: GrowingFilePathMonitor
+    /// This source's observation of `pathMonitor`, nil once removed.
+    private var pathObserver: Int?
 
     // Behind `condition`.
     private let condition = NSCondition()
@@ -208,7 +213,9 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         )
     }
 
-    /// - Parameter clock: a test's steps through backoffs and windows; the system's otherwise.
+    /// - Parameters:
+    ///   - clock: a test's steps through backoffs and windows; the system's otherwise.
+    ///   - pathMonitor: a test's path changes; the shared `NWPathMonitor`'s otherwise.
     init(
         url: URL,
         authHeaders: [String: String],
@@ -217,6 +224,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         store: GrowingFileStore = .shared,
         session: URLSession = GrowingFileByteSource.sharedSession,
         clock: GrowingFileClock,
+        pathMonitor: GrowingFilePathMonitor = .shared,
         onEvent: ((GrowingFileEvent) -> Void)? = nil
     ) {
         self.url = url
@@ -226,9 +234,12 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         self.store = store
         self.session = session
         self.clock = clock
+        self.pathMonitor = pathMonitor
         self.retry = DownloadRetry()
         self.onEvent = onEvent
         super.init()
+        let observer = pathMonitor.addObserver { [weak self] in self?.networkPathChanged() }
+        locked { pathObserver = observer }
     }
 
     // MARK: - Published state
@@ -366,6 +377,11 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     /// Ends the download and deletes the partial (a cached complete file stays): a new load or
     /// stop. Logs what was fetched and never read, the cost of whole-file fetches.
     public func cancel() {
+        let observer: Int? = locked {
+            defer { pathObserver = nil }
+            return pathObserver
+        }
+        if let observer { pathMonitor.removeObserver(observer) }
         locked {
             guard !cancelled else { return }
             cancelled = true
@@ -395,6 +411,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     /// A backstop for a creator that never cancelled. Only reached once no task holds the source
     /// as its delegate, so what is left is the file.
     deinit {
+        if let pathObserver { pathMonitor.removeObserver(pathObserver) }
         if let tx = current, !tx.isCached, let file = tx.fileURL { store.discard(file) }
     }
 
@@ -477,13 +494,15 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     /// body's last byte), else the start of the attempt nothing answered.
     ///
     /// `refused`: the host said no to this URL (a `4xx`, a page). That, or no answer at all, from
-    /// the chain's remembered end forgets it: a signed hop may have expired.
+    /// the chain's remembered end forgets it: a signed hop may have expired. `pathChanged`: the
+    /// source ended the request itself for a new network path, so no answer yet is not the end's.
     private func endLocked(
-        _ tx: Transaction, _ reason: String, retryable: Bool, refused: Bool = false, quietSince: TimeInterval? = nil
+        _ tx: Transaction, _ reason: String, retryable: Bool, refused: Bool = false, pathChanged: Bool = false,
+        quietSince: TimeInterval? = nil
     ) {
         tx.ended = true
         tx.task?.cancel()
-        if tx.remembered, refused || !tx.answered, let end = finalURL {
+        if tx.remembered, refused || (!tx.answered && !pathChanged), let end = finalURL {
             finalURL = nil
             // Without a chain there is nothing to walk again, so no longer wait for it either.
             chainEndForgotten = end != url
@@ -602,6 +621,19 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
                 }
                 self.endLocked(tx, "idle_s=\(Int(silent)) at=\(tx.frontier)", retryable: true, quietSince: tx.lastByteAt)
             }
+        }
+    }
+
+    /// A usable network path replaced the one the transaction's connection is on (Wi-Fi gone to
+    /// cellular). That connection may never say another word, and the idle check would take
+    /// ``idleTimeoutSeconds`` to notice; the transaction is ended now instead, like a drop, and
+    /// ``DownloadRetry`` decides on it as on any other: a resume from the frontier after the
+    /// backoff, from the same budget. A transaction done with the network, or whose every byte is
+    /// in and only its completion is still on the way, is left alone.
+    private func networkPathChanged() {
+        locked {
+            guard !cancelled, let tx = current, !tx.ended, !tx.isComplete, tx.frontier != tx.totalLength else { return }
+            endLocked(tx, "path_changed at=\(tx.frontier)", retryable: true, pathChanged: true)
         }
     }
 

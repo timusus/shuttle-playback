@@ -64,13 +64,14 @@ final class GrowingFileByteSourceTests: XCTestCase {
     private func makeSource(
         _ url: URL, store: GrowingFileStore? = nil, authHeaders: [String: String] = [:],
         cacheKey: URL? = nil, connectionPolicy: GrowingFileConnectionPolicy? = nil,
-        clock: GrowingFileClock = SystemGrowingFileClock.shared, session: URLSession = GrowingFileByteSourceTests.testSession
+        clock: GrowingFileClock = SystemGrowingFileClock.shared, session: URLSession = GrowingFileByteSourceTests.testSession,
+        pathMonitor: GrowingFilePathMonitor = GrowingFilePathMonitor()
     ) -> GrowingFileByteSource {
         let recorder = events
         let source = GrowingFileByteSource(
             url: url, authHeaders: authHeaders, cacheKey: cacheKey, connectionPolicy: connectionPolicy,
             store: store ?? makeStore(), session: session,
-            clock: clock, onEvent: { recorder.append($0) }
+            clock: clock, pathMonitor: pathMonitor, onEvent: { recorder.append($0) }
         )
         sources.append(source)
         return source
@@ -1087,6 +1088,112 @@ final class GrowingFileByteSourceTests: XCTestCase {
             assertTransport(pending.result)
             XCTAssertEqual(server.requestHeads.count, 1 + DownloadRetry.maxAttempts, "\(status)")
         }
+    }
+
+    // MARK: - Network path changes
+
+    private static let wifi = GrowingFilePathMonitor.Path(satisfied: true, interface: "en0")
+    private static let cellular = GrowingFilePathMonitor.Path(satisfied: true, interface: "pdp_ip0")
+    private static let offline = GrowingFilePathMonitor.Path(satisfied: false, interface: nil)
+
+    /// Wi-Fi drops to cellular while the body is stalled on the old path: the transaction is
+    /// reopened from the frontier a backoff after the change, long before the idle timeout, and the
+    /// bytes are the file's. The path the monitor starts with, the same path again and a path that
+    /// cannot be used change nothing.
+    func testANewNetworkPathReopensAStalledBodyFromTheFrontierAtOnce() throws {
+        let body = makeBody(64 * 1024)
+        let server = try startServer(body: body)
+        server.stallsAfterBodyBytes = 20_000
+        let clock = ManualGrowingFileClock()
+        let monitor = GrowingFilePathMonitor()
+        let source = makeSource(server.url, clock: clock, pathMonitor: monitor)
+        XCTAssertEqual(try read(source, 10_000), body.prefix(10_000))
+        XCTAssertTrue(waitUntil { source.snapshot.frontier == 20_000 })
+
+        monitor.update(Self.wifi)
+        monitor.update(Self.wifi)
+        monitor.update(Self.offline)
+        clock.advance(by: 1)
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertEqual(server.requestedRanges, [0], "a path that was no change reopened the transaction")
+
+        server.stallsAfterBodyBytes = nil
+        monitor.update(Self.cellular)
+        clock.advance(by: DownloadRetry.firstBackoffSeconds + 0.01)
+        XCTAssertTrue(waitUntil { server.requestedRanges.count == 2 }, "the new path did not reopen the transaction")
+        XCTAssertLessThan(clock.now - 1_000, GrowingFileByteSource.idleTimeoutSeconds / 2)
+        XCTAssertEqual(try readToEnd(source), body.suffix(from: 10_000))
+        XCTAssertEqual(server.requestedRanges, [0, 20_000], "the reopen resumes from the frontier")
+        XCTAssertEqual(source.snapshot.transactionGeneration, 1)
+    }
+
+    /// A reopen for a path change is a failure the host answered like any other: it spends one of
+    /// ``DownloadRetry/maxAttempts``, the budget a refused resume spends too. With every resume
+    /// after it refused, the read fails one resume sooner than on refusals alone: no second budget.
+    func testAPathChangeReopenSpendsTheSameRetryBudget() throws {
+        let body = makeBody(64 * 1024)
+        let server = try startServer(body: body)
+        server.stallsAfterBodyBytes = 20_000
+        let clock = ManualGrowingFileClock()
+        let monitor = GrowingFilePathMonitor()
+        let source = makeSource(server.url, clock: clock, pathMonitor: monitor)
+        XCTAssertEqual(try read(source, 20_000), body.prefix(20_000))
+        let rest = readAsync(source, Int.max)
+        XCTAssertTrue(waitUntil { source.parkCount > 0 })
+
+        server.reject(host: "127.0.0.1:\(server.url.port!)", status: 503)
+        monitor.update(Self.wifi)
+        monitor.update(Self.cellular)
+        // The backoffs only: a body silent past the idle timeout would be ended by the idle check.
+        XCTAssertTrue(clock.drive(step: 0.1) { rest.finished(within: 0) }, "the read never failed")
+        assertTransport(rest.result)
+        XCTAssertEqual(
+            server.requestedRanges, [0] + Array(repeating: 20_000, count: DownloadRetry.maxAttempts),
+            "the path change spent no attempt"
+        )
+        XCTAssertLessThan(clock.now - 1_000, GrowingFileByteSource.idleTimeoutSeconds)
+    }
+
+    /// A completed download has nothing to reopen.
+    func testAPathChangeAfterTheBodyCompletedDoesNothing() throws {
+        let body = makeBody(32 * 1024)
+        let server = try startServer(body: body)
+        let monitor = GrowingFilePathMonitor()
+        let source = makeSource(server.url, clock: ManualGrowingFileClock(), pathMonitor: monitor)
+        XCTAssertEqual(try readToEnd(source), body)
+        XCTAssertTrue(waitUntil { source.snapshot.isComplete })
+        monitor.update(Self.wifi)
+        monitor.update(Self.cellular)
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertEqual(server.requestedRanges, [0])
+        XCTAssertTrue(source.snapshot.isComplete)
+    }
+
+    /// What counts as a change, with literal paths.
+    func testOnlyAUsablePathThatReplacesAnotherIsAChange() {
+        typealias Monitor = GrowingFilePathMonitor
+        XCTAssertFalse(Monitor.isChange(from: nil, to: Self.wifi), "the path the monitor starts with")
+        XCTAssertFalse(Monitor.isChange(from: Self.wifi, to: Self.wifi), "the same path again")
+        XCTAssertFalse(Monitor.isChange(from: Self.wifi, to: Self.offline), "a path that cannot be used")
+        XCTAssertTrue(Monitor.isChange(from: Self.wifi, to: Self.cellular), "Wi-Fi to cellular")
+        XCTAssertTrue(Monitor.isChange(from: Self.offline, to: Self.wifi), "back after none")
+    }
+
+    /// A cancelled source stops listening.
+    func testACancelledSourceNoLongerHearsPathChanges() throws {
+        let body = makeBody(64 * 1024)
+        let server = try startServer(body: body)
+        server.stallsAfterBodyBytes = 20_000
+        let clock = ManualGrowingFileClock()
+        let monitor = GrowingFilePathMonitor()
+        let source = makeSource(server.url, clock: clock, pathMonitor: monitor)
+        XCTAssertEqual(try read(source, 10_000), body.prefix(10_000))
+        source.cancel()
+        monitor.update(Self.wifi)
+        monitor.update(Self.cellular)
+        clock.advance(by: 1)
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertEqual(server.requestedRanges, [0])
     }
 
     // MARK: - 416, gzip and a changing resource
