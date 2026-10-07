@@ -92,7 +92,37 @@ struct StreamDecoder {
     int64_t      first_pkt_dts;
     int          has_first_pkt;
     int          resumable;
+
+    /* The sample-accurate seek (see `seek_to`). Frames that end before `discard_until` are decoded
+     * and dropped, and the one that straddles it is cut, so the next read starts exactly there.
+     * `next_pts` is where the last decoded frame ended, and `seek_first_pts` where the first frame
+     * after the last seek started. All in stream time base. */
+    int64_t      discard_until;
+    int64_t      next_pts;
+    int64_t      seek_first_pts;
+
+    /* MP3 only. The first audio frame, which every other frame's index is counted from. */
+    int64_t      first_pkt_size;
+    int          mp3_header_ok;
+    uint32_t     mp3_header;          /* its first four bytes, for "same stream" comparisons */
+    int          mp3_spf;             /* samples per frame */
+    int          mp3_tag;             /* MP3_TAG_*: what the frame before the first audio says */
+    int          vbri_toc;            /* the VBRI table: its offset in `prologue`, and its shape */
+    int          vbri_entries;        /* 0: no usable table */
+    int          vbri_entry_size;
+    int          vbri_scale;
+    int          vbri_frames_per_entry;
+    /* The last seek went to a frame whose time was known exactly (see `demux_seek`). */
+    int          anchored;
+
+    /* The first bytes of the media as libavformat read them (offset 0 is `base_offset`), kept so
+     * the Xing/Info/VBRI frame can be read without a second request. */
+    uint8_t      prologue[4096];
+    int          prologue_len;
+    int64_t      io_pos;             /* libavformat's read position */
 };
+
+enum { MP3_TAG_NONE = 0, MP3_TAG_INFO, MP3_TAG_VBR };
 
 /* ── AVIO glue ───────────────────────────────────────────────────────────── */
 
@@ -110,6 +140,14 @@ static int avio_read_packet(void *opaque, uint8_t *buf, int buf_size) {
     if (n > 0) {
         d->bytes_read += n;
         if (d->seek_budget_armed) d->seek_bytes += n;
+        /* Only a contiguous run from offset 0 is kept. */
+        if (d->io_pos <= d->prologue_len && d->io_pos < (int64_t)sizeof(d->prologue)) {
+            int keep = (int)sizeof(d->prologue) - (int)d->io_pos;
+            if (keep > n) keep = n;
+            memcpy(d->prologue + d->io_pos, buf, (size_t)keep);
+            if (d->io_pos + keep > d->prologue_len) d->prologue_len = (int)(d->io_pos + keep);
+        }
+        d->io_pos += n;
         return n;
     }
     /* Never 0: libavformat reads a 0 as "nothing yet, ask again" and spins on it forever. */
@@ -158,7 +196,7 @@ static int64_t avio_seek_packet(void *opaque, int64_t offset, int whence) {
     if (target < 0) return AVERROR(EINVAL);
 
     int rc = d->cb.seek(d->opaque, target + d->base_offset);
-    if (rc == 0) { d->source_eof = 0; return target; }
+    if (rc == 0) { d->source_eof = 0; d->io_pos = target; return target; }
     switch (rc) {
         case STREAM_READ_CANCELLED:   d->cancelled = 1; return AVERROR_EXIT;
         case STREAM_READ_INTERRUPTED: d->interrupted = 1; return AVERROR_EXIT;
@@ -305,11 +343,40 @@ static int pump(StreamDecoder *d) {
 
         int rc = avcodec_receive_frame(d->dec, d->frame);
         if (rc == 0) {
-            d->last_frame_pts = d->frame->best_effort_timestamp;
+            /* Where this frame starts: its timestamp, or, for a frame with none, where the one
+             * before it ended. */
+            int64_t pts = d->frame->best_effort_timestamp;
+            if (pts == AV_NOPTS_VALUE) pts = d->next_pts;
+            if (pts != AV_NOPTS_VALUE) {
+                d->next_pts = pts + av_rescale_q(d->frame->nb_samples,
+                                                 (AVRational){ 1, d->sample_rate }, d->time_base);
+                if (d->seek_first_pts == AV_NOPTS_VALUE) d->seek_first_pts = pts;
+            }
+            int64_t cut = 0;
+            if (d->discard_until != AV_NOPTS_VALUE) {
+                if (pts == AV_NOPTS_VALUE) {
+                    d->discard_until = AV_NOPTS_VALUE;   /* nothing to place it by: keep it all */
+                } else {
+                    cut = av_rescale_q(d->discard_until - pts, d->time_base,
+                                       (AVRational){ 1, d->sample_rate });
+                    if (cut >= d->frame->nb_samples) {   /* wholly before the seek target */
+                        av_frame_unref(d->frame);
+                        continue;
+                    }
+                    if (cut < 0) cut = 0;
+                    d->discard_until = AV_NOPTS_VALUE;
+                }
+            }
+            d->last_frame_pts = pts == AV_NOPTS_VALUE ? AV_NOPTS_VALUE
+                : pts + av_rescale_q(cut, (AVRational){ 1, d->sample_rate }, d->time_base);
             int ok = push_through_swr(d, d->frame);
             av_frame_unref(d->frame);
             if (!ok) return STREAM_DECODE_ERR_ALLOC;
-            if (d->pending_frames > 0) return STREAM_DECODE_OK;
+            /* Same rate in and out, so the resampler holds nothing back: frame sample N is
+             * pending frame N. */
+            d->pending_offset = cut < d->pending_frames ? (int)cut : d->pending_frames;
+            if (d->pending_frames > d->pending_offset) return STREAM_DECODE_OK;
+            pending_reset(d);
             continue;   /* the resampler is still filling; ask for another frame */
         }
         if (rc == AVERROR_EOF) {
@@ -405,6 +472,9 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     d->opaque = opaque;
     d->audio_idx = -1;
     d->last_frame_pts = AV_NOPTS_VALUE;
+    d->discard_until = AV_NOPTS_VALUE;
+    d->next_pts = AV_NOPTS_VALUE;
+    d->seek_first_pts = AV_NOPTS_VALUE;
 
     /* Before anything reads: hide the ID3v2 tag, which on a real podcast enclosure is megabytes of
      * cover art that libavformat would otherwise consume in full. */
@@ -429,6 +499,10 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     /* One thread: FFmpeg's audio decoders have no frame threading to gain from (plan §4), and the
      * pull loop is single-threaded by contract. */
     d->dec->thread_count = 1;
+    /* Without it the codec cannot move a frame's timestamp past the encoder delay it trims
+     * (decode.c discard_samples), and the first frame after the start is labelled as though the
+     * trimmed samples were still in it. */
+    d->dec->pkt_timebase = stream->time_base;
     if (avcodec_open2(d->dec, codec, NULL) < 0) { local_status = STREAM_DECODE_ERR_DECODER; goto fail; }
 
     d->sample_rate = d->dec->sample_rate > 0 ? d->dec->sample_rate : par->sample_rate;
@@ -489,6 +563,8 @@ static void close_format(StreamDecoder *d) {
     }
     d->audio_idx = -1;
 }
+
+static void hold_first_packet(StreamDecoder *d);
 
 /*
  * Open libavformat over the reader, starting at `base_offset`, and find the audio stream.
@@ -595,10 +671,7 @@ static int skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *opti
     }
     int64_t end = d->held->pos + d->held->size;
     if (d->held->pos < 0 || d->held->size <= kMP3MaxFrameBytes || end <= kMP3JunkScanBytes) {
-        d->has_held = 1;
-        d->first_pkt_pos = d->held->pos;
-        d->first_pkt_dts = d->held->dts;
-        d->has_first_pkt = d->held->pos >= 0 && d->held->dts != AV_NOPTS_VALUE;
+        hold_first_packet(d);
         return STREAM_DECODE_OK;
     }
     /* The parser hands the junk over glued to the first frame, so the frame is somewhere in the
@@ -618,7 +691,185 @@ static int skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *opti
         if (rc == STREAM_DECODE_ERR_IO) return STREAM_DECODE_ERR_OPEN;
     }
     if (rc != STREAM_DECODE_OK) return rc;
-    return open_format(d, options);
+    d->io_pos = 0;
+    d->prologue_len = 0;
+    rc = open_format(d, options);
+    if (rc != STREAM_DECODE_OK) return rc;
+    /* The first frame again, for the same reason as above: every seek counts frames from it. The
+     * decoder would read it next anyway, so this costs nothing. */
+    int read;
+    while ((read = av_read_frame(d->fmt, d->held)) >= 0 && d->held->stream_index != d->audio_idx) {
+        av_packet_unref(d->held);
+    }
+    if (read >= 0) {
+        hold_first_packet(d);
+    } else {
+        if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+        if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+        avio_clear_latched_error(d);
+    }
+    return STREAM_DECODE_OK;
+}
+
+/* ── MP3 frame counting ──────────────────────────────────────────────────── */
+
+/* Fill in what an MPEG audio frame header says. Returns 0 if `p` is not one. */
+static int mp3_parse_header(const uint8_t *p, int *spf, int *bitrate, int *sample_rate,
+                            int *side_info_bytes) {
+    static const int kbps[2][3][16] = {
+        { { 0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0 },
+          { 0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0 },
+          { 0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0 } },
+        { { 0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0 },
+          { 0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0 },
+          { 0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0 } },
+    };
+    static const int rates[3] = { 44100, 48000, 32000 };
+    uint32_t h = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+    if ((h & 0xFFE00000u) != 0xFFE00000u) return 0;
+    int version = (h >> 19) & 3;          /* 0: MPEG 2.5, 1: reserved, 2: MPEG 2, 3: MPEG 1 */
+    int layer = 4 - (int)((h >> 17) & 3); /* 4 is reserved */
+    int br = (h >> 12) & 15, sr = (h >> 10) & 3;
+    if (version == 1 || layer == 4 || br == 0 || br == 15 || sr == 3) return 0;
+    int lsf = version != 3;
+    *bitrate = kbps[lsf][layer - 1][br] * 1000;
+    *sample_rate = rates[sr] >> (version == 3 ? 0 : version == 2 ? 1 : 2);
+    *spf = layer == 1 ? 384 : (layer == 3 && lsf) ? 576 : 1152;
+    int mono = ((h >> 6) & 3) == 3;
+    *side_info_bytes = lsf ? (mono ? 9 : 17) : (mono ? 17 : 32);
+    return 1;
+}
+
+/* What the frame before the first audio frame declares: LAME's "Info" is a CBR stream, "Xing" and
+ * "VBRI" a VBR one. Read from the prologue, which holds those bytes already. */
+static uint32_t read_be(const uint8_t *p, int bytes) {
+    uint32_t v = 0;
+    for (int i = 0; i < bytes; i++) v = (v << 8) | p[i];
+    return v;
+}
+
+/*
+ * Keep a VBRI frame's table of contents, which mp3dec reads the frame count from and otherwise
+ * ignores (libavformat/mp3dec.c mp3_parse_vbri_tag). Unlike a Xing TOC, which gives a share of the
+ * file per percent of the duration, entry k is the exact byte length of `frames per entry` frames
+ * counted from the end of the VBRI frame, so the frame it ends on, and its time, are exact. A
+ * table whose entries add up to more bytes, or more frames, than the header says is not used.
+ */
+static void mp3_read_vbri_toc(StreamDecoder *d, const uint8_t *vbri, const uint8_t *end) {
+    uint32_t bytes = read_be(vbri + 10, 4), frames = read_be(vbri + 14, 4);
+    int entries = (int)read_be(vbri + 18, 2), scale = (int)read_be(vbri + 20, 2);
+    int size = (int)read_be(vbri + 22, 2), per_entry = (int)read_be(vbri + 24, 2);
+    if (size < 1 || size > 4 || scale < 1 || per_entry < 1 || entries < 1) return;
+    if (vbri + 26 + (int64_t)entries * size > end) return;
+    if ((int64_t)entries * per_entry > (int64_t)frames + per_entry) return;
+    int64_t sum = 0;
+    for (int k = 0; k < entries; k++) sum += (int64_t)read_be(vbri + 26 + k * size, size) * scale;
+    if (sum > bytes) return;
+    d->vbri_toc = (int)(vbri + 26 - d->prologue);
+    d->vbri_entries = entries;
+    d->vbri_entry_size = size;
+    d->vbri_scale = scale;
+    d->vbri_frames_per_entry = per_entry;
+}
+
+/*
+ * The last VBRI table entry at or before `ts`, as the byte position and exact timestamp of the
+ * frame it starts; before the first entry, the first frame. Returns 0 when there is no table.
+ */
+static int mp3_vbri_anchor(const StreamDecoder *d, int64_t ts, int64_t *pos, int64_t *dts) {
+    if (!d->vbri_entries || !d->mp3_header_ok) return 0;
+    int64_t samples = av_rescale_q(ts - d->first_pkt_dts, d->time_base, (AVRational){ 1, d->sample_rate });
+    int64_t k = samples / ((int64_t)d->vbri_frames_per_entry * d->mp3_spf);
+    if (k > d->vbri_entries) k = d->vbri_entries;
+    if (k < 0) k = 0;
+    int64_t at = d->first_pkt_pos;
+    for (int64_t i = 0; i < k; i++) {
+        at += (int64_t)read_be(d->prologue + d->vbri_toc + i * d->vbri_entry_size, d->vbri_entry_size)
+              * d->vbri_scale;
+    }
+    *pos = at;
+    *dts = d->first_pkt_dts + av_rescale_q(k * d->vbri_frames_per_entry * d->mp3_spf,
+                                           (AVRational){ 1, d->sample_rate }, d->time_base);
+    return 1;
+}
+
+static int mp3_find_tag(StreamDecoder *d) {
+    int64_t limit = d->first_pkt_pos < d->prologue_len ? d->first_pkt_pos : d->prologue_len;
+    for (int64_t p = 0; p + 4 <= limit; p++) {
+        int spf, br, sr, side;
+        if (!mp3_parse_header(d->prologue + p, &spf, &br, &sr, &side)) continue;
+        const uint8_t *xing = d->prologue + p + 4 + side;
+        const uint8_t *vbri = d->prologue + p + 36;
+        if (xing + 4 <= d->prologue + limit) {
+            if (!memcmp(xing, "Info", 4)) return MP3_TAG_INFO;
+            if (!memcmp(xing, "Xing", 4)) return MP3_TAG_VBR;
+        }
+        if (vbri + 26 <= d->prologue + limit && !memcmp(vbri, "VBRI", 4)) {
+            mp3_read_vbri_toc(d, vbri, d->prologue + limit);
+            return MP3_TAG_VBR;
+        }
+    }
+    return MP3_TAG_NONE;
+}
+
+/* Keep `d->held`, the first audio packet, for the decoder, and note what frame counting needs. */
+static void hold_first_packet(StreamDecoder *d) {
+    d->has_held = 1;
+    d->first_pkt_pos = d->held->pos;
+    d->first_pkt_dts = d->held->dts;
+    d->first_pkt_size = d->held->size;
+    d->has_first_pkt = d->held->pos >= 0 && d->held->dts != AV_NOPTS_VALUE;
+    int spf, br, sr, side;
+    if (d->has_first_pkt && d->held->size >= 4
+        && mp3_parse_header(d->held->data, &spf, &br, &sr, &side)) {
+        d->mp3_header_ok = 1;
+        d->mp3_header = ((uint32_t)d->held->data[0] << 24) | ((uint32_t)d->held->data[1] << 16)
+                      | ((uint32_t)d->held->data[2] << 8) | d->held->data[3];
+        d->mp3_spf = spf;
+        d->mp3_tag = mp3_find_tag(d);
+    }
+}
+
+/* The header fields that make two frames the same stream: version, layer, bitrate, sample rate
+ * and channel mode. Padding, CRC and the mode extension change frame to frame and do not count. */
+static const uint32_t kMP3SameStreamMask = 0xFFFEFCC0u;
+
+/*
+ * The true timestamp of `pkt`, the first packet after an estimated MP3 seek; AV_NOPTS_VALUE when
+ * there is no better answer than the demuxer's.
+ *
+ * An MP3 frame carries no timestamp. `mp3_seek` places a seek by the Xing TOC or by bitrate,
+ * syncs to the next frame after that byte and labels the frame with the time it was ASKED for
+ * (or, with an Info frame count, a rounded share of it), not the time of the frame it found
+ * (issue #3). In a constant-bitrate stream the frame's index follows from its byte offset: frames
+ * after the first are spf * bitrate / (8 * rate) bytes long on average and padding keeps each
+ * within one byte of that, so the offset from the end of the first frame, divided and rounded, counts them exactly
+ * (the first frame is measured, not assumed, because it is the one an encoder cuts short). A
+ * stream is constant-bitrate when its Info frame says so, or when it has no tag frame, every
+ * estimate this decoder makes already assumes it and the landed frame is the first one's twin.
+ * A VBR stream has no such relation and keeps the demuxer's estimate.
+ */
+static int64_t mp3_exact_dts(const StreamDecoder *d, const AVPacket *pkt) {
+    if (!d->mp3_header_ok || d->mp3_tag == MP3_TAG_VBR) return AV_NOPTS_VALUE;
+    if (d->mp3_tag == MP3_TAG_NONE && d->cb.size(d->opaque) < 0) return AV_NOPTS_VALUE;
+    if (pkt->pos < 0 || pkt->dts == AV_NOPTS_VALUE || pkt->size < 4) return AV_NOPTS_VALUE;
+    uint32_t h = ((uint32_t)pkt->data[0] << 24) | ((uint32_t)pkt->data[1] << 16)
+               | ((uint32_t)pkt->data[2] << 8) | pkt->data[3];
+    /* An Info frame vouches for the bitrate of the frames after the first, which may itself be a
+     * short one at another bitrate; with no tag, only the first frame's twin is trusted. */
+    uint32_t mask = d->mp3_tag == MP3_TAG_INFO ? (kMP3SameStreamMask & ~0xF000u) : kMP3SameStreamMask;
+    int spf, br, sr, side;
+    if ((h & mask) != (d->mp3_header & mask) || !mp3_parse_header(pkt->data, &spf, &br, &sr, &side)) {
+        return AV_NOPTS_VALUE;
+    }
+    int64_t index = 0;
+    if (pkt->pos != d->first_pkt_pos) {
+        int64_t second = d->first_pkt_pos + d->first_pkt_size;
+        if (pkt->pos < second) return AV_NOPTS_VALUE;
+        index = 1 + llround((double)(pkt->pos - second) * 8.0 * sr / ((double)spf * br));
+    }
+    return d->first_pkt_dts + av_rescale_q(index * d->mp3_spf,
+                                           (AVRational){ 1, d->sample_rate }, d->time_base);
 }
 
 /* Bytes one `avformat_seek_file` may read before it is judged to be walking the file. Two AVIO
@@ -638,6 +889,9 @@ static void after_seek_reset(StreamDecoder *d) {
     d->flushing = 0;
     d->ended = 0;
     d->last_frame_pts = AV_NOPTS_VALUE;
+    d->discard_until = AV_NOPTS_VALUE;
+    d->next_pts = AV_NOPTS_VALUE;
+    d->seek_first_pts = AV_NOPTS_VALUE;
 }
 
 /*
@@ -664,6 +918,14 @@ static int resume_after_last_packet(StreamDecoder *d) {
      * packets already read but may have thinned them, so the entry is added back; a container's
      * own index (mov) has the sample already and must not have it rewritten. A demuxer with
      * neither (ogg) seeks by bisection, which lands on a page, not a packet. */
+    /* An Ogg packet's position is its page's, shared with every packet on the page, so (pos, dts)
+     * names no single packet. With a length, the seek bisects and labels packets from the pages'
+     * granules, and the packet is found. Without one it goes by the index, which labels the
+     * page's first packet with `dts`: the "found" packet was the page's first and the resume
+     * repeated up to a page of audio. The ordinary seek lands on the sample exactly instead. */
+    if (d->media_bytes <= 0 && d->fmt->iformat->name && strcmp(d->fmt->iformat->name, "ogg") == 0) {
+        return STREAM_DECODE_ERR_SEEK;
+    }
     int at = av_index_search_timestamp(st, dts, AVSEEK_FLAG_ANY);
     const AVIndexEntry *entry = at >= 0 ? avformat_index_get_entry(st, at) : NULL;
     if (!entry || entry->timestamp != dts) {
@@ -720,6 +982,43 @@ static void avio_clear_latched_error(StreamDecoder *d) {
 }
 
 static int seek_to(StreamDecoder *decoder, double seconds, double *landed_seconds);
+static int demux_seek(StreamDecoder *decoder, double seconds, int64_t target, double *landed_seconds);
+static int land_exactly(StreamDecoder *d, int64_t target);
+
+/* `demux_seek`'s "the demuxer is placed, land by the timestamps" result; no STREAM_DECODE_ code. */
+static const int kSeekPlaced = 1000;
+
+/* How far before its target a seek puts the demuxer, in samples, so the codec has converged by the
+ * target: an MP3's bit reservoir spans a few frames (more at a low VBR quality), and Opus's CELT
+ * state takes about 30000 samples after a reset to decode bit-identically to an unbroken run. */
+static int64_t seek_preroll_samples(const StreamDecoder *d) {
+    return d->dec->codec_id == AV_CODEC_ID_OPUS ? 32768 : 16384;
+}
+
+/* The furthest before its target an exact MP3 anchor is used from: about 1.5 s at 44.1 kHz. */
+static const int64_t kMaxAnchorGapSamples = 65536;
+
+/*
+ * Whether to decode forward from an exact MP3 anchor `gap` (stream time base) before the target
+ * rather than seek by estimate.
+ *
+ * A constant-bitrate stream lands exactly by its estimate (see `mp3_exact_dts`), so its anchors only
+ * serve the first second or so. A VBR stream has no exact landing but this one (issue #3): a Xing
+ * TOC places a time to 1/256 of the file and a bitrate guess worse, and mp3dec labels the frame it
+ * finds there with the time asked for. Nothing in an MP3 frame says what time it is, so the only
+ * true time is one counted frame by frame from a frame whose time is known. That count is taken
+ * whenever it reads no more than a seek is allowed to (`kSeekBudgetBytes`), a few seconds at a
+ * podcast bitrate; further than that, the estimate is all there is.
+ */
+static int mp3_anchor_in_reach(const StreamDecoder *d, int64_t gap) {
+    int64_t samples = av_rescale_q(gap, d->time_base, (AVRational){ 1, d->sample_rate });
+    if (samples <= kMaxAnchorGapSamples) return 1;
+    if (d->mp3_tag != MP3_TAG_VBR) return 0;
+    int64_t bit_rate = d->fmt->bit_rate > 0 ? d->fmt->bit_rate
+                                            : d->fmt->streams[d->audio_idx]->codecpar->bit_rate;
+    if (bit_rate <= 0) return 0;
+    return (double)samples / d->sample_rate * (double)bit_rate / 8.0 <= (double)kSeekBudgetBytes;
+}
 
 int stream_decoder_seek(StreamDecoder *decoder, double seconds, double *landed_seconds) {
     if (!decoder || !landed_seconds) return STREAM_DECODE_ERR_ARGS;
@@ -755,6 +1054,202 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
 
     double tb = av_q2d(decoder->time_base);
     int64_t target = decoder->start_time + (int64_t)llround(seconds / (tb > 0 ? tb : 1.0));
+    int64_t preroll = av_rescale_q(seek_preroll_samples(decoder),
+                                   (AVRational){ 1, decoder->sample_rate }, decoder->time_base);
+
+    /* Sample-accurate (issues #3 and #6). The demuxer is put down a pre-roll BEFORE the target and
+     * the decode runs forward from there, dropping what comes before the target and cutting the
+     * frame that straddles it, so the next read starts on the requested sample and the codec has
+     * converged by then. A demuxer only lands on what it can find: an Ogg page start (each about a
+     * second of audio here, so seeks landed up to a second early, more at the end), an MP3 frame
+     * after a byte estimate, an MP4 sample. Landing early costs a little decoding; what is heard
+     * starts where it was asked for. One that lands AFTER its target (an Ogg bisection with no
+     * length to bound it) is placed again further back, then from the start. */
+    for (int attempt = 0;; attempt++) {
+        int64_t from = target - preroll * ((int64_t)1 << (2 * attempt));
+        /* Never a decode from the start just to be exact: on a long episode that is the whole
+         * file (12 MB measured). After two re-placements the landing stands, reported as it is. */
+        int last = attempt >= 2;
+        int from_start = from <= decoder->start_time;
+        if (from_start) from = decoder->start_time;
+        int placed = demux_seek(decoder, seconds, from, landed_seconds);
+        if (placed != kSeekPlaced) return placed;
+
+        int status = land_exactly(decoder, target);
+        if (status == STREAM_DECODE_OK && !from_start && !last && decoder->seek_first_pts != AV_NOPTS_VALUE
+            && decoder->seek_first_pts > target) {
+            continue;
+        }
+        if (status == STREAM_DECODE_OK && decoder->last_frame_pts != AV_NOPTS_VALUE) {
+            *landed_seconds = (double)(decoder->last_frame_pts - decoder->start_time) * tb;
+        } else if (status == STREAM_DECODE_EOF && decoder->media_duration > 0
+                   && seconds >= decoder->media_duration - 1.0 / decoder->sample_rate) {
+            /* At or past the declared end, and the stream agrees: it is over there. That length
+             * (an MP3's Xing frame count, a container's duration) is exact where a VBR MP3's
+             * timestamps after a TOC or bitrate estimate are not. */
+            *landed_seconds = seconds < decoder->media_duration ? seconds : decoder->media_duration;
+        } else if (status == STREAM_DECODE_EOF && decoder->next_pts != AV_NOPTS_VALUE
+                   && decoder->next_pts < target) {
+            /* The target is past the last sample: the stream is over where the audio ends. */
+            *landed_seconds = (double)(decoder->next_pts - decoder->start_time) * tb;
+        }
+        if (*landed_seconds < 0) *landed_seconds = 0;
+        return status;
+    }
+}
+
+/*
+ * Replace the codec with a freshly opened one.
+ *
+ * `avcodec_flush_buffers` does not put every codec back where opening left it: AAC's noise
+ * substitution draws from a generator seeded once, in init (aacdec.c `random_state`), and flush
+ * leaves it running. Two seeks to the same place then decoded differently, by the history before
+ * them (a seek retried after an interruption decoded other noise than one that was not). A new
+ * codec makes a seek's audio depend on nothing but where it went.
+ *
+ * Only plain AAC-LC is reopened. HE-AAC's SBR and PS headers come every so many frames, not in
+ * each, and a codec opened mid-stream has none until the next one arrives: it decoded v2 as
+ * nonsense for over half a second. The other codecs' flush leaves nothing behind that matters.
+ */
+static int codec_outlives_flush(const StreamDecoder *d) {
+    return d->dec->codec_id == AV_CODEC_ID_AAC && d->dec->profile == AV_PROFILE_AAC_LOW;
+}
+
+static int reopen_codec(StreamDecoder *d) {
+    AVStream *stream = d->fmt->streams[d->audio_idx];
+    const AVCodec *codec = d->dec->codec;
+    AVCodecContext *dec = avcodec_alloc_context3(codec);
+    if (!dec) return STREAM_DECODE_ERR_ALLOC;
+    if (avcodec_parameters_to_context(dec, stream->codecpar) < 0) {
+        avcodec_free_context(&dec);
+        return STREAM_DECODE_ERR_DECODER;
+    }
+    dec->thread_count = 1;
+    dec->pkt_timebase = stream->time_base;
+    if (avcodec_open2(dec, codec, NULL) < 0) {
+        avcodec_free_context(&dec);
+        return STREAM_DECODE_ERR_DECODER;
+    }
+    avcodec_free_context(&d->dec);
+    d->dec = dec;
+    return STREAM_DECODE_OK;
+}
+
+/* Set the decoder going from where the demuxer was just put: a clean codec, the MP3 anchor, and
+ * every frame before `target` dropped. Returns `pump`'s status. */
+static int land_exactly(StreamDecoder *d, int64_t target) {
+    int index_seek = d->anchored;
+    after_seek_reset(d);
+    if (codec_outlives_flush(d)) {
+        int codec_rc = reopen_codec(d);
+        if (codec_rc != STREAM_DECODE_OK) return codec_rc;
+    }
+    int swr_rc = init_swr(d);   /* drop whatever the resampler still held from before */
+    if (swr_rc != STREAM_DECODE_OK) return swr_rc;
+    if (d->mp3_header_ok && !index_seek) {
+        int rc;
+        while ((rc = av_read_frame(d->fmt, d->held)) >= 0 && d->held->stream_index != d->audio_idx) {
+            av_packet_unref(d->held);
+        }
+        /* Otherwise the pump reads again and meets the same end, error or interruption. */
+        if (rc >= 0) d->has_held = 1;
+        int64_t dts = rc >= 0 ? mp3_exact_dts(d, d->held) : AV_NOPTS_VALUE;
+        if (dts != AV_NOPTS_VALUE && dts != d->held->dts) {
+            /* The demuxer is told the frame's real time the one way it takes one: an index entry,
+             * sought to exactly. Every timestamp after it, and the encoder padding it trims at the
+             * end by those timestamps, then follows from the truth. */
+            AVStream *st = d->fmt->streams[d->audio_idx];
+            int64_t pos = d->held->pos;
+            av_packet_unref(d->held);
+            d->has_held = 0;
+            av_add_index_entry(st, pos, dts, 0, 0, AVINDEX_KEYFRAME);
+            int flags = d->fmt->flags;
+            d->fmt->flags &= ~AVFMT_FLAG_FAST_SEEK;
+            rc = avformat_seek_file(d->fmt, d->audio_idx, dts, dts, dts, AVSEEK_FLAG_ANY);
+            d->fmt->flags = flags;
+            if (rc < 0) {
+                if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+                if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+                return STREAM_DECODE_ERR_SEEK;
+            }
+        }
+    }
+    d->discard_until = target;
+    return pump(d);
+}
+
+/*
+ * Put the demuxer at or before `target` (stream time base), within the seek byte budget.
+ *
+ * Returns `kSeekPlaced` when the packets that follow carry timestamps to land by, and otherwise
+ * the seek's final status with `*landed_seconds` set: a byte estimate (no timestamps to land by),
+ * the end of the stream, or an error. `seconds` is the caller's request, which the estimate uses.
+ */
+static int demux_seek(StreamDecoder *decoder, double seconds, int64_t target, double *landed_seconds) {
+    /* An MP3 frame whose place and time are both known exactly is sought to directly rather than
+     * by the TOC or bitrate estimate FAST_SEEK picks: the first frame (which `mp3_sync` skips when
+     * an encoder cut it short, playing a seek to the start from the second), or a VBRI table
+     * entry. The frame goes into the index with its time and the generic seek, which
+     * AVSEEK_FLAG_ANY and an exact timestamp make go straight to it, takes the time from there.
+     * Only that entry is trusted: mp3dec fills the index with its Xing TOC, a percent of the file
+     * per entry, whose positions are not frames and whose times are not theirs. */
+    int fmt_flags = decoder->fmt->flags;
+    int64_t seek_min = INT64_MIN, seek_ts = target;
+    int seek_flags = AVSEEK_FLAG_BACKWARD;
+    int64_t anchor_pos = -1, anchor_dts = AV_NOPTS_VALUE;
+    decoder->anchored = 0;
+    if (decoder->mp3_header_ok) {
+        if (!mp3_vbri_anchor(decoder, target, &anchor_pos, &anchor_dts)) {
+            anchor_pos = decoder->first_pkt_pos;
+            anchor_dts = decoder->first_pkt_dts;
+        }
+        /* An anchor far before the target (a long episode's start, or a coarse table) would cost a
+         * long decode to it; the estimate is cheaper. */
+        if (target > decoder->start_time && !mp3_anchor_in_reach(decoder, target - anchor_dts)) {
+            anchor_pos = -1;
+        }
+    }
+    if (anchor_pos >= 0 && anchor_dts != AV_NOPTS_VALUE) {
+        av_add_index_entry(decoder->fmt->streams[decoder->audio_idx], anchor_pos, anchor_dts, 0, 0,
+                           AVINDEX_KEYFRAME);
+        decoder->fmt->flags &= ~AVFMT_FLAG_FAST_SEEK;
+        seek_min = seek_ts = anchor_dts;
+        seek_flags = AVSEEK_FLAG_ANY;
+        decoder->anchored = 1;
+    } else if (decoder->fmt->iformat->name && strcmp(decoder->fmt->iformat->name, "ogg") == 0) {
+        /* oggdec gives every packet the position of the page it starts in, so the generic index
+         * holds one entry per packet and several share a position, each with its own time. A
+         * seek by the index (the Ogg fallback when there is no length to bisect) can pick one
+         * from the middle of a page: it goes to the page and labels the page's FIRST packet with
+         * that later time, and every packet after it follows. On most pages the Vorbis and Opus
+         * parsers relabel from the page's granule and hide it; on the last page (EOS set) they do
+         * not, and a seek to the end landed 25600 samples early while labelled as the target
+         * (issue #6). Seeking to the earliest entry at that position labels the page truly.
+         *
+         * An Ogg seek also starts one page further back. The parsers trim the encoder padding
+         * off the last page by the time the page before it ended; a seek straight onto the last
+         * page has no such time, and decoded the padding (704 samples here) as audio.
+         *
+         * Only where the index reaches the target. Past its end the nearest entry is merely as far
+         * as the decode has got, and seeking there instead (so decoding from it to the target)
+         * walked 12 MB of a long file on one seek; the anchor gap bounds it as it does an MP3's. */
+        AVStream *st = decoder->fmt->streams[decoder->audio_idx];
+        int pages = 2;
+        int at = av_index_search_timestamp(st, target, AVSEEK_FLAG_BACKWARD);
+        const AVIndexEntry *entry = at >= 0 ? avformat_index_get_entry(st, at) : NULL;
+        if (entry && av_rescale_q(target - entry->timestamp, decoder->time_base,
+                                  (AVRational){ 1, decoder->sample_rate }) > kMaxAnchorGapSamples) {
+            entry = NULL;
+        }
+        while (entry && at > 0) {
+            const AVIndexEntry *before = avformat_index_get_entry(st, at - 1);
+            if (!before) break;
+            if (before->pos != entry->pos && --pages == 0) break;
+            entry = before;
+            at--;
+        }
+        if (entry && entry->timestamp < seek_ts) seek_ts = entry->timestamp;
+    }
 
     /* Backward-leaning: land at or before the request so nothing between the request and the
      * landing is skipped unheard. Where it actually lands is what the caller's position becomes.
@@ -771,10 +1266,11 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
     decoder->seek_budget_blown = 0;
     decoder->seek_budget_armed = 1;
     decoder->source_eof = 0;
-    int rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, INT64_MIN, target, target,
-                                AVSEEK_FLAG_BACKWARD);
+    int rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, seek_min, seek_ts, seek_ts,
+                                seek_flags);
     int walked = decoder->seek_budget_blown;
     decoder->seek_budget_armed = 0;
+    decoder->fmt->flags = fmt_flags;
 
     /* The refusal that abandoned the walk is latched in the AVIO context; the fallback below has
      * to read, so clear it here rather than after the seek that would already have failed. */
@@ -804,22 +1300,16 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
                 return STREAM_DECODE_EOF;
             }
             if (!walked) return STREAM_DECODE_ERR_SEEK;
+            decoder->anchored = 0;
             rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, INT64_MIN, target, target,
                                     AVSEEK_FLAG_BACKWARD);
             if (rc < 0) {
                 if (decoder->cancelled) return STREAM_DECODE_ERR_CANCELLED;
                 return STREAM_DECODE_ERR_SEEK;
             }
-            after_seek_reset(decoder);
-            int unbudgeted_swr = init_swr(decoder);
-            if (unbudgeted_swr != STREAM_DECODE_OK) return unbudgeted_swr;
-            int unbudgeted = pump(decoder);
-            if (unbudgeted == STREAM_DECODE_OK && decoder->last_frame_pts != AV_NOPTS_VALUE) {
-                *landed_seconds = (double)(decoder->last_frame_pts - decoder->start_time) * tb;
-                if (*landed_seconds < 0) *landed_seconds = 0;
-            }
-            return unbudgeted;
+            return kSeekPlaced;
         }
+        decoder->anchored = 0;
 
         /* The byte estimate. Exact for CBR, which is what a container with neither an index nor a
          * TOC almost always is; a VBR file that reaches here lands within its own bitrate swing,
@@ -845,19 +1335,7 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
         *landed_seconds = ratio * decoder->media_duration;
         return status;
     }
-
-    after_seek_reset(decoder);
-    int swr_rc = init_swr(decoder);   /* drop whatever the resampler still held from before */
-    if (swr_rc != STREAM_DECODE_OK) return swr_rc;
-
-    /* Decode eagerly to the first frame so the landed time is the audio's, not an estimate. The
-     * PCM is kept in `pending`, so the next read starts exactly where the timestamp says. */
-    int status = pump(decoder);
-    if (status == STREAM_DECODE_OK && decoder->last_frame_pts != AV_NOPTS_VALUE) {
-        *landed_seconds = (double)(decoder->last_frame_pts - decoder->start_time) * tb;
-        if (*landed_seconds < 0) *landed_seconds = 0;
-    }
-    return status;
+    return kSeekPlaced;
 }
 
 int stream_decoder_read(StreamDecoder *decoder, float *out, int max_frames, int *frames) {

@@ -22,28 +22,28 @@
       "windowSha256Int16" : "c0e3e8a39cff1398f4f18ddcb5dbe863a84840a57ac5701e7fc6d98f37803055"
     },
     {
-      "alignFrames" : null,
-      "landedS" : 0.993,
+      "alignFrames" : 0,
+      "landedS" : 1.333,
       "toS" : 1.333,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "b8a8f01cea9a9e24274ffd563555e8b14353424db750b787e7179e92b36e2a1b"
+      "windowSha256Int16" : "2ba2071d56aebb15926ed4acd86d79569f1d7b9d914fa25dda8a8b5865a35035"
     },
     {
-      "alignFrames" : null,
-      "landedS" : 1.993,
+      "alignFrames" : 0,
+      "landedS" : 2.667,
       "toS" : 2.667,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "1461df8d3dc4467410cf728856410cec75715d78a19d429a80187f4ceb3cf9c6"
+      "windowSha256Int16" : "596b36670182794d3031e17c5951f6d8fcc82c76dd4c1b48a369359dba029427"
     },
     {
       "alignFrames" : null,
-      "landedS" : 2.994,
+      "landedS" : 4,
       "toS" : 4,
       "tolS" : 0.03,
-      "windowFrames" : 4096,
-      "windowSha256Int16" : "184471442fe71380a534f388af9267a2ab360124bcbb077e3fd5d583309a66fb"
+      "windowFrames" : 0,
+      "windowSha256Int16" : ""
     }
   ],
   "sha256" : "93163ee00418ab06155552cd904faef29a5e4378e2a60b327b5f929e1b04f128"

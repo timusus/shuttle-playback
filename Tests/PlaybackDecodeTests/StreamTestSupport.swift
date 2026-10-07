@@ -445,7 +445,21 @@ enum GeneratedFixture {
     ///
     /// Cached between runs: `ffmpeg` takes five seconds and the bytes are deterministic.
     static func largeCBRMP3() throws -> URL {
-        let url = directory.appendingPathComponent("cbr-no-xing-1800s.mp3")
+        try generate("cbr-no-xing-1800s.mp3", encoding: ["-b:a", "64k", "-write_xing", "0"])
+    }
+
+    /// 5 minutes of VBR MP3 with a Xing header and TOC, about 1.6 MB: a frame's time is known only
+    /// by counting from the first one, and the TOC places a time to 1/256 of the file (3 s per
+    /// percent entry here). Every other second has noise over the tone, so frame sizes really vary
+    /// (a plain tone encodes as near-constant frames and an estimate lands on the right one by luck).
+    static func xingVBRMP3() throws -> URL {
+        try generate("vbr-xing-varied-300s.mp3", encoding: ["-q:a", "6"],
+                     source: "aevalsrc=0.3*sin(440*2*PI*t)+0.2*mod(floor(t)\\,2)*(2*random(0)-1):d=300:s=44100")
+    }
+
+    private static func generate(_ name: String, encoding: [String],
+                                 source: String = "sine=frequency=440:duration=1800") throws -> URL {
+        let url = directory.appendingPathComponent(name)
         if FileManager.default.fileExists(atPath: url.path) { return url }
         guard FileManager.default.isExecutableFile(atPath: ffmpeg) else {
             throw XCTSkip("no ffmpeg at \(ffmpeg); this test generates its own fixture")
@@ -456,10 +470,9 @@ enum GeneratedFixture {
         process.executableURL = URL(fileURLWithPath: ffmpeg)
         process.arguments = [
             "-y", "-loglevel", "error",
-            "-f", "lavfi", "-i", "sine=frequency=440:duration=1800",
-            "-c:a", "libmp3lame", "-b:a", "64k", "-write_xing", "0",
-            url.path,
-        ]
+            "-f", "lavfi", "-i", source,
+            "-c:a", "libmp3lame",
+        ] + encoding + [url.path]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()

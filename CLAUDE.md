@@ -86,7 +86,10 @@ warm-ups (MP3 and MP4 resume bit-exactly), and bytes before the first audio are 
 combination. A decoder bug the suite found and nobody has fixed is pinned in `KnownIssues.swift`:
 fixture, kind, exact fault combinations and the exact finding, with its issue number, under
 `XCTExpectFailure`. A different value, or a pinned finding that stops happening, fails; update or
-remove the rule. MP3 seek misalignment (#3) is pinned as `alignFrames` in the goldens instead.
+remove the rule. Seeks are sample-accurate (a pre-roll before the target, decoded and dropped up to
+it), so `alignFrames` is 0 in every golden. The one inexact landing is outside the fixtures: a VBR
+MP3 seek further from a frame of known time than one seek's byte budget lands by Xing TOC or bitrate
+estimate (#3), covered by `testXingVBRMP3SeeksExactlyNearAndCheaplyFar`.
 `CONFORMANCE_FIXTURE=<file name>` runs one fixture. `CONFORMANCE_PLANT_DEFECT=1` drops a frame from
 the clean decode to prove the suite fails. FFmpeg fixes the tag lacks live in
 `scripts/ffmpeg-patches/`, applied by `build-ffmpeg.sh` and listed in `VERSION.txt`.

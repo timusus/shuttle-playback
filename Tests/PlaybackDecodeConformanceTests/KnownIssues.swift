@@ -5,8 +5,11 @@
 /// combination, or a pinned finding that stops happening (remove its rule when its issue is fixed).
 /// The issue number is on timusus/shuttle-playback.
 ///
-/// Not listed because the golden pins it as measured instead: MP3 seek misalignment (issue #3)
-/// shows as `alignFrames` in the goldens. A fix there changes the golden, and the diff is the review.
+/// Seeks are sample-accurate: the decoder starts a pre-roll before the target and drops what
+/// comes before it, so `alignFrames` is 0 in every golden. The one landing that cannot be exact is
+/// outside these fixtures: a seek in a VBR MP3 further from a frame of known time than one seek's
+/// byte budget (`kSeekBudgetBytes`, a few seconds of audio) is placed by its Xing TOC or bitrate,
+/// and nothing in an MP3 frame says what time it is (issue #3).
 enum KnownIssues {
     struct Rule {
         var issue: String
@@ -23,28 +26,6 @@ enum KnownIssues {
     ]
 
     static let rules: [Rule] = [
-        // ff_seek_frame_binary bisects between 0 and the file size; with no size it cannot, and the
-        // Ogg seek lands on an earlier page.
-        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/6 (Ogg seek with totalLength nil lands early)",
-             fixture: "opus_stereo.opus", kind: .seekLanding, switches: unknownLengthSets,
-             messages: ["seek to 1.3333333333333333s landed 0.9934999999999999s",
-                        "seek to 2.6666666666666665s landed 1.9934999999999998s"]),
-        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/6 (Ogg seek with totalLength nil lands early)",
-             fixture: "vorbis_stereo.ogg", kind: .seekLanding, switches: unknownLengthSets,
-             messages: ["seek to 1.3336961451247165s landed 1.0216780045351475s",
-                        "seek to 2.667392290249433s landed 2.043356009070295s"]),
-        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/6 (Ogg seek with totalLength nil lands early)",
-             fixture: "vorbis_stereo.ogg", kind: .seekPCM, switches: unknownLengthSets,
-             messages: ["seek to 4.001088435374149s: PCM after the landing at 4.017052154195011s sits -41984 frames off, clean seek 0"]),
-        // Ogg has no index to resume by, so its resume is that same seek, and landing early
-        // repeats audio.
-        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/6 (Ogg seek with totalLength nil lands early)",
-             fixture: "vorbis_stereo.ogg", kind: .frameCount,
-             switches: [[.ioErrorOncePerPosition, .unknownLength], [.partialReads, .ioErrorOncePerPosition, .unknownLength]],
-             messages: ["218432 frames, clean 176448"]),
-        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/8 (seek to the end of an MP3 with trailing garbage)",
-             fixture: "garbage_trailing_4k.mp3", kind: .seekPCM, switches: unknownLengthSets,
-             messages: ["seek to 4.048979591836734s: PCM after the landing at 4.048979591836734s is not in the clean decode"]),
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/9 (moov-first M4A reads the whole probe budget when totalLength is nil)",
              fixture: "tone_moov_first.m4a", kind: .bytes, switches: unknownLengthSets,
              messages: ["65546 bytes read before the first audio, golden allows 33792"]),

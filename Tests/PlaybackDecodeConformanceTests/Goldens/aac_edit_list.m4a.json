@@ -24,27 +24,27 @@
     },
     {
       "alignFrames" : 0,
-      "landedS" : 1.324,
+      "landedS" : 1.339,
       "toS" : 1.339,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "1de87a13b67d8da9ca2debee4c5e4fbd1d9ab70b5f17aca9577257d0e6024398"
+      "windowSha256Int16" : "f158f282033db21baef1b98e6592ddc006e0b6aa72363d188f23a72b0bc82e29"
     },
     {
       "alignFrames" : 0,
-      "landedS" : 2.67,
+      "landedS" : 2.678,
       "toS" : 2.678,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "d7bb5d91c7644523605fd8458697f1b0709dbf384ddc06a090d95b7833f3c906"
+      "windowSha256Int16" : "22a84af9019d5aaa377742331d9a2a268317c3a126df9aee9b72c53ca9d56e3c"
     },
     {
-      "alignFrames" : 0,
-      "landedS" : 3.994,
+      "alignFrames" : null,
+      "landedS" : 4,
       "toS" : 4.017,
       "tolS" : 0.03,
-      "windowFrames" : 256,
-      "windowSha256Int16" : "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      "windowFrames" : 0,
+      "windowSha256Int16" : ""
     }
   ],
   "sha256" : "cce8fe9fee257327d25f3891ead34326d0d4df2184373e4611dca58e6073d058"

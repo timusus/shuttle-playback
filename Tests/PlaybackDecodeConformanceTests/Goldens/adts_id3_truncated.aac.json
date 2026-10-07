@@ -22,19 +22,19 @@
     },
     {
       "alignFrames" : 0,
-      "landedS" : 0.72,
+      "landedS" : 0.735,
       "toS" : 0.735,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "aec807183838e8954e589f13173bbc7a16a275b6624f65b9e53ed4cac8f8bfd9"
+      "windowSha256Int16" : "fc02d36d4d1f6732153df0c60f0e61b12f6300183e52981ad764c34e530f876d"
     },
     {
       "alignFrames" : 0,
-      "landedS" : 1.463,
+      "landedS" : 1.471,
       "toS" : 1.471,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "d033d31882c526d3b44c80beb093c455506eb0c9399634d503aa18b514dd1ff1"
+      "windowSha256Int16" : "00ae3f44432cf2c79a5123b01b809609269575fc00a6b499b0303658ffe90ff3"
     },
     {
       "alignFrames" : null,

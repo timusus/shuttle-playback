@@ -40,11 +40,11 @@
     },
     {
       "alignFrames" : null,
-      "landedS" : 4.008,
+      "landedS" : 4.032,
       "toS" : 4.032,
       "tolS" : 0.03,
-      "windowFrames" : 256,
-      "windowSha256Int16" : "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      "windowFrames" : 0,
+      "windowSha256Int16" : ""
     }
   ],
   "sha256" : "249c3be6b1843244b9ebcef9e31ee1d048fac6d96c49e7f57af492f1ba36dfbd"

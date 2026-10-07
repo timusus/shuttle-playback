@@ -247,6 +247,48 @@ final class StreamDecodeTests: XCTestCase {
         XCTAssertGreaterThan(peak, 0.1, "the post-seek audio is silence, not the tone")
     }
 
+    /// **A VBR MP3 seek is exact as far as a seek's byte budget reaches, and bounded beyond it.**
+    ///
+    /// A Xing TOC places a time to 1/256 of the file and mp3dec labels the frame it finds with the
+    /// time asked for (issue #3). Near a frame of known time the decoder counts frames instead, so
+    /// the landing is the requested sample; far from one, the count would walk the file, so the
+    /// TOC's landing stands and the seek still costs a window.
+    func testXingVBRMP3SeeksExactlyNearAndCheaplyFar() throws {
+        try skipUnlessAvailable()
+        let url = try GeneratedFixture.xingVBRMP3()
+        let counting = CountingByteReader(try FileByteReader(url: url))
+        let decoder = FFmpegStreamDecoder(reader: counting)
+        let format = try decoder.open()
+        XCTAssertEqual(format.duration, 300, accuracy: 1)
+
+        /* The audio after the near seek must be the continuous decode's at the same sample. The
+         * landed time alone proves nothing: a TOC landing is labelled with the time asked for. At
+         * 7 s the TOC lands on its third entry, an estimate; the first frame is within reach. */
+        let channels = format.channelCount
+        let seconds = 7, at = seconds * Int(format.sampleRate), window = 4096
+        var continuous: [Float] = []
+        let reference = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
+        _ = try reference.open()
+        while continuous.count < (at + window) * channels, let chunk = reference.nextChunk() {
+            continuous.append(contentsOf: chunk)
+        }
+        let near = try decoder.seek(toSeconds: Double(seconds))
+        XCTAssertEqual(near, Double(seconds), accuracy: 0.5 / format.sampleRate)
+        var afterNear: [Float] = []
+        while afterNear.count < window * channels, let chunk = decoder.nextChunk() { afterNear.append(contentsOf: chunk) }
+        XCTAssertGreaterThanOrEqual(afterNear.count, window * channels)
+        let expected = continuous[(at * channels)..<((at + window) * channels)]
+        let worst = zip(afterNear, expected).map { abs($0 - $1) }.max() ?? 1
+        XCTAssertLessThan(worst, 1e-4, "the near seek's audio is not the continuous decode's at \(seconds) s")
+
+        let before = counting.bytesRead
+        let far = try decoder.seek(toSeconds: 250)
+        let seekCost = counting.bytesRead - before
+        XCTAssertLessThan(seekCost, 512 * 1024, "the seek read \(seekCost) bytes — it is walking the file")
+        XCTAssertEqual(far, 250, accuracy: 5, "landed \(far)")
+        XCTAssertNotNil(decoder.nextChunk(), "nothing decoded after the far seek")
+    }
+
     /// **A megabyte-sized ID3v2 tag must be stepped over, not downloaded.**
     ///
     /// `mp3_read_header` parses every APIC frame, so a tag carrying cover art is READ in full
