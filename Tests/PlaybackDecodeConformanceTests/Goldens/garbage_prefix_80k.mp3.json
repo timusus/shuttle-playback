@@ -1,47 +1,48 @@
 {
-  "bytesBeforeFirstAudioMax" : 96256,
+  "bytesBeforeFirstAudioMax" : 113664,
   "channels" : 2,
-  "durationS" : 12,
+  "durationS" : 2,
   "expect" : "decodes",
   "fixture" : "garbage_prefix_80k.mp3",
-  "frames" : 87552,
+  "frames" : 88704,
   "pcmSha256PerSecondInt16" : [
-    "61e0d8f7d461107191d075caa0109a3d77b8f83e280b78a575e8258f955e0d3c",
-    "107f4c1382e34bc8323a2f270318823398ba604a5ed5bea0c6a5725122ebbb75"
+    "249ac156d7b579c3c7defce7d8000c58571a66f6cc604fb2c0a67be3cd8a3e32",
+    "fc72d0b33e73329f718ee15ccd29813b4962dcdd3bbf336c21b10b395f59295f",
+    "5334174c8237251ba36087d5409cce79a130b208396bb08a9edffa16a73b9597"
   ],
   "sampleRate" : 44100,
   "seeks" : [
     {
-      "alignFrames" : -1152,
-      "landedS" : 0.026,
+      "alignFrames" : 0,
+      "landedS" : 0,
       "toS" : 0,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "7e3fd1d0df1c6718287000df3874a357977f38d20b50f1e6ca3f2ef97385f44f"
+      "windowSha256Int16" : "5138f23241224ddef3bcd559127226624aa6032349177c9358b6e065e9dccf48"
     },
     {
-      "alignFrames" : -30336,
-      "landedS" : 0.688,
-      "toS" : 0.662,
+      "alignFrames" : -768,
+      "landedS" : 0.67,
+      "toS" : 0.67,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "7e3fd1d0df1c6718287000df3874a357977f38d20b50f1e6ca3f2ef97385f44f"
+      "windowSha256Int16" : "bda9fa0c145eefe25221362b739bc30f0259701e1da975ae50e6cad8a9a3724e"
     },
     {
-      "alignFrames" : -59520,
-      "landedS" : 1.35,
-      "toS" : 1.324,
+      "alignFrames" : -384,
+      "landedS" : 1.341,
+      "toS" : 1.341,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "7e3fd1d0df1c6718287000df3874a357977f38d20b50f1e6ca3f2ef97385f44f"
+      "windowSha256Int16" : "56a4c38155e28fe5e799cb8624d5b7486b3d9f54f9921df45bd1b802fe741292"
     },
     {
       "alignFrames" : null,
-      "landedS" : 2.011,
-      "toS" : 1.985,
+      "landedS" : 1.994,
+      "toS" : 2.011,
       "tolS" : 0.03,
-      "windowFrames" : 4096,
-      "windowSha256Int16" : "7e3fd1d0df1c6718287000df3874a357977f38d20b50f1e6ca3f2ef97385f44f"
+      "windowFrames" : 256,
+      "windowSha256Int16" : "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     }
   ],
   "sha256" : "b4b106b72a7c4ecdbb45c65ee4d676de0c808a629671f3eedc840fa45c30dc8d"

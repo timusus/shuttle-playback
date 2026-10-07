@@ -408,6 +408,11 @@ final class ConformanceMatrixTests: XCTestCase {
     /// A known decoder bug is expected only at the one assertion it shows in (see `KnownIssues`).
     func testEveryFixtureDecodesIdenticallyUnderEveryFault() throws {
         try XCTSkipUnless(FFmpegStreamDecoder.isAvailable, "no FFmpeg in this build")
+        // CONFORMANCE_FIXTURE=<file name> runs one fixture, for debugging a single finding.
+        if let only = ProcessInfo.processInfo.environment["CONFORMANCE_FIXTURE"] {
+            try ConformanceMatrix.run(fixture: try XCTUnwrap(GoldenStore.fixtureURLs().first { $0.lastPathComponent == only }))
+            return
+        }
         let urls = GoldenStore.fixtureURLs()
         XCTAssertEqual(urls.count, 25, "fixture corpus changed: update the count with the goldens")
         for url in urls {

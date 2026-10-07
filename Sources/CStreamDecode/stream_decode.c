@@ -29,6 +29,9 @@ struct StreamDecoder {
     SwrContext      *swr;
     AVPacket        *pkt;
     AVFrame         *frame;
+    /* A packet read during open (see `skip_unscanned_junk`) that the decoder has not had yet. */
+    AVPacket        *held;
+    int              has_held;
 
     int         audio_idx;
     int         sample_rate;
@@ -304,7 +307,13 @@ static int pump(StreamDecoder *d) {
             return d->pending_frames > 0 ? STREAM_DECODE_OK : STREAM_DECODE_EOF;
         }
 
-        int read = av_read_frame(d->fmt, d->pkt);
+        int read = 0;
+        if (d->has_held) {
+            av_packet_move_ref(d->pkt, d->held);
+            d->has_held = 0;
+        } else {
+            read = av_read_frame(d->fmt, d->pkt);
+        }
         if (read < 0) {
             av_packet_unref(d->pkt);
             if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
@@ -330,6 +339,11 @@ static int pump(StreamDecoder *d) {
 }
 
 /* ── public API ──────────────────────────────────────────────────────────── */
+
+static int  open_format(StreamDecoder *d, const StreamDecodeOptions *options);
+static void close_format(StreamDecoder *d);
+static int  skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *options);
+static void avio_clear_latched_error(StreamDecoder *d);
 
 StreamDecoder *stream_decoder_open(const StreamDecodeCallbacks *callbacks,
                                    void *opaque,
@@ -360,53 +374,16 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     d->audio_idx = -1;
     d->last_frame_pts = AV_NOPTS_VALUE;
 
-    const int avio_buf_size = 32 * 1024;
-    uint8_t *avio_buf = (uint8_t *)av_malloc(avio_buf_size);
-    if (!avio_buf) goto fail;
-
-    /* Read AND seek: with a NULL seek callback `pb->seekable` is 0 and the mov demuxer walks the
-     * whole `mdat` to find a trailing `moov` (header, and plan §3). */
-    d->avio = avio_alloc_context(avio_buf, avio_buf_size, 0, d, avio_read_packet, NULL,
-                                 avio_seek_packet);
-    if (!d->avio) { av_free(avio_buf); goto fail; }
-
     /* Before anything reads: hide the ID3v2 tag, which on a real podcast enclosure is megabytes of
      * cover art that libavformat would otherwise consume in full. */
     d->base_offset = probe_id3_offset(d);
     if (d->cancelled) { local_status = STREAM_DECODE_ERR_CANCELLED; goto fail; }
 
-    d->fmt = avformat_alloc_context();
-    if (!d->fmt) goto fail;
-    d->fmt->pb = d->avio;
-    /* Bound what probing costs in BYTES, because for this decoder bytes are cellular data (plan
-     * §4). The defaults are a 5 MB probe and 5 s of analysis, and libavformat spends them eagerly:
-     * measured on `tone_moov_last.m4a`, open() alone read 42% of the file, all of it before a
-     * single frame was played. Podcast audio is one stream in a container the first packets
-     * already describe, so a 64 KiB probe and 1 s of analysis identify it just as well. Those are
-     * the defaults; a caller with a different trade-off passes `StreamDecodeOptions`. */
-    d->fmt->probesize = (options && options->probe_bytes > 0)
-        ? options->probe_bytes : STREAM_DECODE_DEFAULT_PROBE_BYTES;
-    d->fmt->max_analyze_duration = (options && options->max_analyze_duration_us > 0)
-        ? options->max_analyze_duration_us : STREAM_DECODE_DEFAULT_MAX_ANALYZE_US;
-    /* Seek by the table of contents the container carries rather than by binary search. Without
-     * this `mp3_seek` only trusts a Xing TOC on a file it has decided is CBR, and for everything
-     * else it runs `ff_seek_frame_binary`, which probes and re-syncs its way through the file: on
-     * the 160 KB tone fixture one seek to 10 s read 72 KB, and on an enclosure it is the walk the
-     * budget below exists to stop. The TOC is a coarser landing (a percent of the file per entry)
-     * and the caller's position follows the frame that is actually decoded, so the cost of taking
-     * it is nothing this player can observe. */
-    d->fmt->flags |= AVFMT_FLAG_FAST_SEEK;
-
-    if (avformat_open_input(&d->fmt, NULL, NULL, NULL) < 0) {
-        d->fmt = NULL;   /* avformat_open_input freed it; the AVIO context is still ours */
-        local_status = d->cancelled ? STREAM_DECODE_ERR_CANCELLED : STREAM_DECODE_ERR_OPEN;
-        goto fail;
-    }
-    /* Best effort, as in spine_decode.c: some containers decode fine with thinner metadata. */
-    (void)avformat_find_stream_info(d->fmt, NULL);
-
-    d->audio_idx = av_find_best_stream(d->fmt, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
-    if (d->audio_idx < 0) { local_status = STREAM_DECODE_ERR_NO_AUDIO; goto fail; }
+    local_status = open_format(d, options);
+    if (local_status != STREAM_DECODE_OK) goto fail;
+    local_status = skip_unscanned_junk(d, options);
+    if (local_status != STREAM_DECODE_OK) goto fail;
+    local_status = STREAM_DECODE_ERR_ALLOC;
 
     AVStream *stream = d->fmt->streams[d->audio_idx];
     AVCodecParameters *par = stream->codecpar;
@@ -431,9 +408,8 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     local_status = init_swr(d);
     if (local_status != STREAM_DECODE_OK) goto fail;
 
-    d->pkt = av_packet_alloc();
     d->frame = av_frame_alloc();
-    if (!d->pkt || !d->frame) { local_status = STREAM_DECODE_ERR_ALLOC; goto fail; }
+    if (!d->frame) { local_status = STREAM_DECODE_ERR_ALLOC; goto fail; }
 
     info->sample_rate = d->sample_rate;
     info->channel_count = d->channels;
@@ -472,6 +448,120 @@ fail:
     return NULL;
 }
 
+/* Undo `open_format`: the format context and the AVIO context it reads through. */
+static void close_format(StreamDecoder *d) {
+    if (d->fmt) avformat_close_input(&d->fmt);
+    /* avformat_close_input frees the format context but not the AVIO one, and libavformat may have
+     * replaced the buffer we handed it, so free the CURRENT pointer. */
+    if (d->avio) {
+        av_freep(&d->avio->buffer);
+        avio_context_free(&d->avio);
+    }
+    d->audio_idx = -1;
+}
+
+/*
+ * Open libavformat over the reader, starting at `base_offset`, and find the audio stream.
+ * Returns a StreamDecodeStatus.
+ */
+static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
+    const int avio_buf_size = 32 * 1024;
+    uint8_t *avio_buf = (uint8_t *)av_malloc(avio_buf_size);
+    if (!avio_buf) return STREAM_DECODE_ERR_ALLOC;
+
+    /* Read AND seek: with a NULL seek callback `pb->seekable` is 0 and the mov demuxer walks the
+     * whole `mdat` to find a trailing `moov` (header, and plan §3). */
+    d->avio = avio_alloc_context(avio_buf, avio_buf_size, 0, d, avio_read_packet, NULL,
+                                 avio_seek_packet);
+    if (!d->avio) { av_free(avio_buf); return STREAM_DECODE_ERR_ALLOC; }
+
+    d->fmt = avformat_alloc_context();
+    if (!d->fmt) return STREAM_DECODE_ERR_ALLOC;
+    d->fmt->pb = d->avio;
+    /* Bound what probing costs in BYTES, because for this decoder bytes are cellular data (plan
+     * §4). The defaults are a 5 MB probe and 5 s of analysis, and libavformat spends them eagerly:
+     * measured on `tone_moov_last.m4a`, open() alone read 42% of the file, all of it before a
+     * single frame was played. Podcast audio is one stream in a container the first packets
+     * already describe, so a 64 KiB probe and 1 s of analysis identify it just as well. Those are
+     * the defaults; a caller with a different trade-off passes `StreamDecodeOptions`. */
+    d->fmt->probesize = (options && options->probe_bytes > 0)
+        ? options->probe_bytes : STREAM_DECODE_DEFAULT_PROBE_BYTES;
+    d->fmt->max_analyze_duration = (options && options->max_analyze_duration_us > 0)
+        ? options->max_analyze_duration_us : STREAM_DECODE_DEFAULT_MAX_ANALYZE_US;
+    /* Seek by the table of contents the container carries rather than by binary search. Without
+     * this `mp3_seek` only trusts a Xing TOC on a file it has decided is CBR, and for everything
+     * else it runs `ff_seek_frame_binary`, which probes and re-syncs its way through the file: on
+     * the 160 KB tone fixture one seek to 10 s read 72 KB, and on an enclosure it is the walk the
+     * budget below exists to stop. The TOC is a coarser landing (a percent of the file per entry)
+     * and the caller's position follows the frame that is actually decoded, so the cost of taking
+     * it is nothing this player can observe. */
+    d->fmt->flags |= AVFMT_FLAG_FAST_SEEK;
+
+    if (avformat_open_input(&d->fmt, NULL, NULL, NULL) < 0) {
+        d->fmt = NULL;   /* avformat_open_input freed it; the AVIO context is still ours */
+        return d->cancelled ? STREAM_DECODE_ERR_CANCELLED : STREAM_DECODE_ERR_OPEN;
+    }
+    /* Best effort, as in spine_decode.c: some containers decode fine with thinner metadata. */
+    (void)avformat_find_stream_info(d->fmt, NULL);
+
+    d->audio_idx = av_find_best_stream(d->fmt, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
+    if (d->audio_idx < 0) return STREAM_DECODE_ERR_NO_AUDIO;
+    return STREAM_DECODE_OK;
+}
+
+/* How far `mp3_read_header` looks for the first frame (`for (i = 0; i < 64 * 1024; i++)`). */
+static const int64_t kMP3JunkScanBytes = 64 * 1024;
+/* The largest MPEG audio frame (`MPA_MAX_CODED_FRAME_SIZE`); a first packet larger than this has
+ * junk in it. */
+static const int kMP3MaxFrameBytes = 1792;
+
+/*
+ * Step over junk before the first MP3 frame that libavformat itself did not.
+ *
+ * mp3dec looks 64 KiB past its start for two consecutive frames and, finding none, takes byte 0 as
+ * the start of the audio. Decoding still works, because the parser resyncs on the first real frame,
+ * but every byte-based estimate is then wrong: the duration counts the junk as audio, and a seek
+ * puts its bitrate guess inside the junk and plays from the start of the file (issue #2). The first
+ * packet says where the audio really starts; reopening there gives the demuxer the file it should
+ * have seen, with its duration and its seeks. Otherwise the packet is kept for the decoder, so
+ * nothing is read twice.
+ */
+static int skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *options) {
+    d->pkt = av_packet_alloc();
+    d->held = av_packet_alloc();
+    if (!d->pkt || !d->held) return STREAM_DECODE_ERR_ALLOC;
+    if (!d->fmt->iformat || strcmp(d->fmt->iformat->name, "mp3") != 0) return STREAM_DECODE_OK;
+
+    int rc;
+    while ((rc = av_read_frame(d->fmt, d->held)) >= 0 && d->held->stream_index != d->audio_idx) {
+        av_packet_unref(d->held);
+    }
+    if (rc < 0) {
+        /* No packet at all is the decode's to report, not the open's; an interrupted or cancelled
+         * read is the open's. */
+        if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+        if (d->interrupted) return STREAM_DECODE_ERR_OPEN;
+        avio_clear_latched_error(d);
+        return STREAM_DECODE_OK;
+    }
+    int64_t end = d->held->pos + d->held->size;
+    if (d->held->pos < 0 || d->held->size <= kMP3MaxFrameBytes || end <= kMP3JunkScanBytes) {
+        d->has_held = 1;
+        return STREAM_DECODE_OK;
+    }
+    /* The parser hands the junk over glued to the first frame, so the frame is somewhere in the
+     * packet's last `kMP3MaxFrameBytes`. Reopening there leaves less junk than mp3dec's own scan
+     * covers, and that scan finds the frame exactly. */
+    int64_t junk = end - kMP3MaxFrameBytes;
+    av_packet_unref(d->held);
+    close_format(d);
+    d->base_offset += junk;
+    rc = d->cb.seek(d->opaque, d->base_offset);
+    if (rc == STREAM_READ_CANCELLED) { d->cancelled = 1; return STREAM_DECODE_ERR_CANCELLED; }
+    if (rc != 0) return STREAM_DECODE_ERR_OPEN;
+    return open_format(d, options);
+}
+
 /* Bytes one `avformat_seek_file` may read before it is judged to be walking the file. Two AVIO
  * refills: enough for a mov index landing or an mp3 TOC landing, and small enough that the walk it
  * exists to stop is cut off after a fraction of a second of audio rather than the 12 MB a single
@@ -482,6 +572,8 @@ static const int64_t kSeekBudgetBytes = 64 * 1024;
 static void after_seek_reset(StreamDecoder *d) {
     avcodec_flush_buffers(d->dec);
     pending_reset(d);
+    av_packet_unref(d->held);
+    d->has_held = 0;
     d->flushing = 0;
     d->ended = 0;
     d->last_frame_pts = AV_NOPTS_VALUE;
@@ -662,15 +754,10 @@ void stream_decoder_close(StreamDecoder *decoder) {
     if (!decoder) return;
     av_frame_free(&decoder->frame);
     av_packet_free(&decoder->pkt);
+    av_packet_free(&decoder->held);
     swr_free(&decoder->swr);
     avcodec_free_context(&decoder->dec);
-    if (decoder->fmt) avformat_close_input(&decoder->fmt);
-    /* avformat_close_input frees the format context but not the AVIO one, and libavformat may have
-     * replaced the buffer we handed it, so free the CURRENT pointer. */
-    if (decoder->avio) {
-        av_freep(&decoder->avio->buffer);
-        avio_context_free(&decoder->avio);
-    }
+    close_format(decoder);
     free(decoder->pending);
     free(decoder);
 }

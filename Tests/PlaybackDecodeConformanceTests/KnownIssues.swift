@@ -4,9 +4,8 @@
 /// assertion on the fixture, including every other fault combination, counts as a real failure.
 /// The issue number is on timusus/shuttle-playback.
 ///
-/// Not listed because the golden pins them as measured instead: seek misalignment (issue #3) shows
-/// as `alignFrames` in the goldens, and the garbage-prefix seek (issue #2) as its large negative
-/// `alignFrames`. A fix there changes the golden, and the diff is the review.
+/// Not listed because the golden pins it as measured instead: seek misalignment (issue #3) shows
+/// as `alignFrames` in the goldens. A fix there changes the golden, and the diff is the review.
 enum KnownIssues {
     /// Issue #1: the frame-count assertion of a decode with `totalLength` nil.
     static let unknownLengthTail = "https://github.com/timusus/shuttle-playback/issues/1 "
