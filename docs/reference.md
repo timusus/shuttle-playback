@@ -81,8 +81,9 @@ A read fails with `StreamByteReaderError.transport` when retries and the 30 s li
 | Member | Behaviour |
 |---|---|
 | `headers` | Extra request headers, sent after `authHeaders` (these win a clash). Dropped on a redirect to another origin, like `authHeaders`. |
-| `pinnedCertificates` | DER certificates. When not empty, the origin's TLS connection is accepted if and only if a certificate of its chain is byte-identical to one of them; the system's trust evaluation is replaced for that origin (this is how a self-signed server is trusted). Other origins, such as a CDN redirect, use the system's trust. |
-| `pinMismatchReason` | `"certificate_pin_mismatch"`: the `StreamByteReaderError.transport` reason of a read whose certificate failed the pin. It fails at once and is never retried. |
+| `trustedLeafSHA256` | `Set<String>`: SHA-256 fingerprints of whole leaf certificates (DER) the user trusted for the origin, a trust exception rather than a restriction (this is how a self-signed server is trusted). The origin's chain is first evaluated by the system: if it is trusted, default handling applies whatever these hold. If it is refused, it is accepted only when its leaf (the first certificate, the one whose key the handshake proves) has one of these fingerprints, waiving the system's roots, expiry and host name check for that leaf; a matching certificate further up the chain counts for nothing. Otherwise the challenge is cancelled and the read fails with `untrustedCertificateReason`. Hex in any case, with or without separators; kept upper-case without separators. Empty (the default) leaves the system's evaluation alone. Other origins, such as a CDN redirect, always use the system's trust. Matches Shuttle2's `handleServerTrust`. |
+| `leafSHA256(of:)` | Static. The fingerprint of a DER certificate in the form `trustedLeafSHA256` keeps: SHA-256 of the whole certificate, upper-case hex, no separators (Shuttle2's `fingerprintOf`). |
+| `untrustedCertificateReason` | `"untrusted_certificate"`: the `StreamByteReaderError.transport` reason of a read whose certificate the system refused and whose leaf is not trusted. It fails at once and is never retried. |
 
 The challenge is answered by the source as the task's delegate, so one shared `URLSession` serves sources
 with different policies.
