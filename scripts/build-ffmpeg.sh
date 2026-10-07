@@ -140,6 +140,18 @@ if [ ! -f "$FFMPEG/configure" ]; then
 fi
 [ -f "$FFMPEG/configure" ] || { echo "ERROR: no FFmpeg source at $FFMPEG"; exit 1; }
 
+# ── local patches ────────────────────────────────────────────────────────────
+# Fixes the decoder needs that the FFmpeg tag lacks, each a small diff with its reason in its
+# header. Applied once (a patch that already reverse-applies is in place) and listed in VERSION.txt.
+PATCHES=()
+for PATCH in "$SCRIPT_DIR"/ffmpeg-patches/*.patch; do
+    [ -e "$PATCH" ] || continue
+    PATCHES+=("$(basename "$PATCH")")
+    if git -C "$FFMPEG" apply --reverse --check "$PATCH" 2>/dev/null; then continue; fi
+    log "Applying $(basename "$PATCH")"
+    git -C "$FFMPEG" apply "$PATCH"
+done
+
 # ── one platform ─────────────────────────────────────────────────────────────
 # $1 slice name (device|simulator|macos), $2 SDK, $3 clang -target triple
 build_slice() {
@@ -216,6 +228,7 @@ cp "$FFMPEG/COPYING.LGPLv2.1" "$OUT/COPYING.LGPLv2.1"
     echo "$FFMPEG_TAG"
     echo "profile: $PROFILE"
     echo "configured: ${CONFIGURE_FLAGS[*]}"
+    echo "patches: ${PATCHES[*]:-none}"
 } > "$OUT/VERSION.txt"
 
 log "Done"

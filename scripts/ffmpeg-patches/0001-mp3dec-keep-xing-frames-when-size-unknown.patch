@@ -1,0 +1,20 @@
+mp3dec: keep the Xing/Info frame count when the stream size is unknown
+
+avio_size() returns a negative error for a source with no length, and
+mp3_parse_info_tag stored it in a uint64_t, so "unknown" became a huge size
+that failed the cross-check against the tag's own byte count. The frame count
+was then dropped, and with it the gapless end trim and the duration: a decode
+with no length carried the encoder's end padding (shuttle-playback issue #1).
+An unknown size now skips the cross-check, as a zero size already did.
+
+--- a/libavformat/mp3dec.c
++++ b/libavformat/mp3dec.c
+@@ -172,7 +172,7 @@ static void mp3_parse_info_tag(AVFormatContext *s, AVStream *st,
+
+     MP3DecContext *mp3 = s->priv_data;
+     static const int64_t xing_offtbl[2][2] = {{32, 17}, {17,9}};
+-    uint64_t fsize = avio_size(s->pb);
++    int64_t fsize = avio_size(s->pb);
+     int64_t pos = avio_tell(s->pb);
+     fsize = fsize >= pos ? fsize - pos : 0;
+
