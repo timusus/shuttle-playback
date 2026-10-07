@@ -1,7 +1,7 @@
 # Testing and releasing
 
-Reference for the test suites, how to run them, how the conformance goldens work, and how a release
-is cut. The repository has no hosted CI. `swift test` locally plus `scripts/release.sh` is the gate.
+Reference for the test suites and how to run them, with the steps to regenerate the conformance
+goldens and cut a release. The repository has no hosted CI. `swift test` locally plus `scripts/release.sh` is the gate.
 
 ## Suites
 
@@ -11,12 +11,12 @@ is cut. The repository has no hosted CI. `swift test` locally plus `scripts/rele
 | `PlaybackDecodeConformanceTests` | Every fixture through a faulting reader, then seeks, compared against goldens. | `swift test --filter PlaybackDecodeConformance` (about 15 s) |
 | `PlaybackStreamingTests` | `GrowingFileByteSource`, `DownloadRetry`, `GrowingFileReadRule`, `GrowingFileStore`, the loopback server and decode equality over a growing file, against two tone fixtures. | `swift test`, and on an iOS simulator |
 
-All of them run on macOS against the macOS slice of the FFmpeg xcframework, with no simulator. No
-test is skipped on either platform. All tests must pass before tagging.
-
-`DownloadRetry` and `GrowingFileReadRule` take no clock, lock or network, so their tests use literal
-numbers. The byte source's tests drive time with a manual clock, so backoffs and the 30 s link
-window run in milliseconds.
+All of them run on macOS against the macOS slice of the FFmpeg xcframework, with no simulator. All
+tests must pass before tagging. A test that needs a 30-minute MP3 with no Xing header generates it
+with a host `ffmpeg` binary (the path is in `StreamTestSupport.swift`). It is skipped where there is
+no such binary, and always on an iOS device or simulator. A test whose committed fixture file is
+missing is skipped too. For why the suites are built this way, see
+[Architecture](architecture.md#why-the-tests-are-shaped-this-way).
 
 `LoopbackMediaServer` closes a short body a beat late. macOS URLSession drops a body's buffered
 bytes if the connection ends before the delegate has answered the response.
@@ -36,8 +36,6 @@ iPhone.
 
 ## The conformance suite
 
-The suite exists to prove that the decoder gives the same audio however the bytes arrive.
-
 **Fixtures.** 22 files in `Tests/PlaybackDecodeConformanceTests/Fixtures`, plus the three in
 `PlaybackDecodeTests/Fixtures`. They cover MP3 variants (Xing, VBRI, CBR, junk before the first frame,
 ID3v1 footer, a sample-rate change), AAC in ADTS and MP4, HE-AAC, Opus and Vorbis. Three come from
@@ -53,7 +51,7 @@ budgeted under every combination.
 
 **Seeks and goldens.** The suite then seeks to 0, 1/3, 2/3 and the end of each fixture, and compares
 with `Goldens/<fixture>.json`. A golden holds Int16 per-second PCM hashes, the frame count, the seek
-landings and the fixture's own SHA-256. The golden diff is how a decoder change is reviewed.
+landings and the fixture's own SHA-256.
 
 **Regenerate goldens** after an intended decoder change, or a new fixture:
 

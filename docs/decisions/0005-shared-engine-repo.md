@@ -3,8 +3,6 @@
 Status: Accepted
 Date: 2026-10-07
 
-Originally recorded in Shuttle Podcasts as ADR-0007.
-
 ## Context
 
 Shuttle2 copied the decoder layer from Shuttle Podcasts, and the two copies diverged. The podcast app

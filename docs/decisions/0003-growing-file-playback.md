@@ -3,15 +3,12 @@
 Status: Accepted
 Date: 2026-10-06
 
-Originally recorded in Shuttle Podcasts as ADR-0004.
-
 ## Context
 
 The first streaming byte source used a window: bounded ranges, continuations, a redirect cache, a
-footer side-fetch and throttling. It was 1,755 lines and 14 of its 23 commits were fixes, because every
-rule compensated for the window. A host application that wanted the same bytes for something else,
-such as an analysis pass, needed a separate tee. A producer slower than real time also made playback
-stutter.
+footer side-fetch and throttling. Most of its changes were fixes, because every rule compensated for
+the window. A host that wanted to read the same bytes it played, for analysis for example, needed a
+separate tee. A producer slower than real time also made playback stutter.
 
 ## Decision
 
@@ -24,8 +21,8 @@ load ends and are swept at launch.
 ## Alternatives rejected
 
 - Keep the windowed source: the compensation rules were the bug surface.
-- Reuse partial files across sessions: hosts can re-stitch ads behind a stable URL, so old bytes
-  could replay a different ad load.
+- Reuse partial files across sessions: a host can change the bytes behind a stable URL, so old
+  bytes could differ from what the host now serves.
 - Treat cached files as saved downloads: a cache is not something the user asked to keep.
 
 ## Consequences

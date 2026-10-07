@@ -1,8 +1,8 @@
 # Integrating
 
 How to add shuttle-playback to an app, decode a local file, play a URL while it downloads, and handle
-seeking and cancellation. This guide assumes you can already write an audio render loop. For why
-the engine works as it does, see [Architecture](architecture.md).
+seeking and cancellation. This guide assumes you can already write an audio render loop. If you are
+new to the package, start with the [tutorial](tutorial.md).
 
 ## Add the package
 
@@ -22,6 +22,9 @@ targets: [
 ```
 
 In Xcode, use File > Add Package Dependencies with the same URL.
+
+If a command-line or test target fails to link with undefined `CoreVideo`, `CoreMedia` or `VideoToolbox`
+symbols, add those frameworks to the target's `linkerSettings`. See the [tutorial](tutorial.md).
 
 Pin a tag, never a branch. The package needs iOS 17 or macOS 14. Add `PlaybackStreaming` only if
 you stream URLs. Add the `FFmpeg` product only if you have your own C code against libavformat, and
@@ -123,18 +126,16 @@ The loop gets `endReason == .interrupted`, you stop treating that as an end, and
 ## Show buffering and download state
 
 Read `source.snapshot` from any thread. It gives `base`, `frontier`, `totalLength`, `isComplete`,
-`downloadBytesPerSecond` and the file's `fileURL`. To get changes without polling, pass `onEvent`, or
-implement `GrowingFileListener`.
+`downloadBytesPerSecond` and the file's `fileURL`. To get changes without polling, pass `onEvent`.
+If you want the protocol-shaped callbacks, implement `GrowingFileListener` and call it from your
+`onEvent` closure and your seek code, since the source does not take a listener itself. See
+[Reference](reference.md#growingfilelistener).
 
 ## Write a byte source of your own
 
-Conform to `StreamByteReader`. The contract:
-
-- `read(into:maxLength:)` blocks until at least one byte is available. It returns 0 only at end of stream.
-- `seek(to:)` throws `.unseekable` if the source cannot serve the offset.
-- `totalLength` is nil while unknown. A made-up length breaks MP4 files with a trailing `moov`.
-- `cancel()` and `interrupt()` unblock a waiting call from any thread. `cancel()` is permanent. `interrupt()`
-  is lifted by `clearInterrupt()`, which the decoder calls on its next seek.
+Conform to `StreamByteReader` and pass it to `FFmpegStreamDecoder(reader:)`. Report `totalLength` as
+nil if you do not know it, never a guess. The full contract is in
+[Reference](reference.md#streambytereader).
 
 ## Test your integration
 
@@ -142,8 +143,11 @@ Conform to `StreamByteReader`. The contract:
 knobs: dropped connections, stalls, refused requests, redirects, a server that ignores `Range`.
 
 ```swift
+import Foundation
+import PlaybackStreaming
 import PlaybackStreamingTestSupport
 
+let audioData = try Data(contentsOf: fixtureURL)   // your own audio
 let server = try LoopbackMediaServer(body: audioData, mimeType: "audio/mpeg")
 let source = GrowingFileByteSource(url: server.url, authHeaders: [:], store: .temporary())
 server.closesAfterBodyBytes = 40_000   // drop the first connection part-way
@@ -152,21 +156,6 @@ server.closesAfterBodyBytes = 40_000   // drop the first connection part-way
 `server.url` serves the body at `/fixture.mp3` on the loopback interface. The package has no fixtures
 of its own for this product, so supply your own audio. Stop the server with `stop()`.
 
-## Reference
+## Next
 
-| Type | Where | Role |
-|---|---|---|
-| `StreamByteReader` | PlaybackDecode | Protocol: blocking, seekable bytes. |
-| `FileByteReader` | PlaybackDecode | Reader over a local file. `reportsTotalLength: false` imitates a chunked response. |
-| `FFmpegStreamDecoder` | PlaybackDecode | `open()`, `seek(toSeconds:)`, `nextChunk()`, `cancel()`, `interrupt()`, `endReason`, `mediaFramesRead`, `bytesConsumed`. |
-| `StreamAudioFormat` | PlaybackDecode | Sample rate, channel count, duration (0 if unknown), codec name, container name. |
-| `StreamProbeBudget` | PlaybackDecode | Probe bytes and analysis time. Default 64 KiB and 1 s. |
-| `StreamDecoderError` | PlaybackDecode | `unavailable`, `invalidState`, `failed(status:)`, `cancelled`, `interrupted`. |
-| `StreamByteReaderError` | PlaybackDecode | `cancelled`, `interrupted`, `unseekable`, `transport`. |
-| `GrowingFileByteSource` | PlaybackStreaming | `StreamByteReader` over an HTTP(S) URL. |
-| `GrowingFileStore` | PlaybackStreaming | The on-disk directory, the complete-file cache and its eviction. |
-| `GrowingFileSnapshot`, `GrowingFileEvent`, `GrowingFileListener` | PlaybackStreaming | What a host reads and hears. |
-| `LoopbackMediaServer` | PlaybackStreamingTestSupport | Fault-injecting local server for tests. |
-
-`FFmpegStreamDecoder.isAvailable` is true in every build that has the FFmpeg xcframework, which is every
-build of this package.
+[Reference](reference.md) lists every public type and member.

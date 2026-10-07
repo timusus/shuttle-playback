@@ -1,6 +1,6 @@
 // swift-tools-version: 5.9
 // The decode layer shared by Shuttle Podcasts and Shuttle2 on iOS: a static FFmpeg built per app
-// profile, the streaming decoder that drives it and the byte-source and HLS plumbing around it. Nothing here knows
+// profile, the streaming decoder that drives it and the byte-source plumbing around it. Nothing here knows
 // what a podcast, an ad or a queue is. See CLAUDE.md for build, test and release.
 import PackageDescription
 
@@ -18,13 +18,12 @@ let package = Package(
         // A loopback `Range`-aware HTTP server with fault knobs, for a consumer's own tests of
         // anything built on `PlaybackStreaming`. No fixtures in it.
         .library(name: "PlaybackStreamingTestSupport", targets: ["PlaybackStreamingTestSupport"]),
-        // The static FFmpeg itself, for a consumer with its own C against libavformat (Shuttle
-        // Podcasts' scanner decode). One FFmpeg per app: two copies of the same static symbols
+        // The static FFmpeg itself, for a consumer with its own C against libavformat. One FFmpeg per app: two copies of the same static symbols
         // would be a duplicate-symbol link failure, or worse, a silent pick of one.
         .library(name: "FFmpeg", targets: ["CFFmpeg"]),
     ],
     targets: [
-        // Committed, not downloaded: see README.md "Where the xcframework lives". Rebuild with
+        // Committed, not downloaded: see docs/ffmpeg.md#what-is-committed. Rebuild with
         // `scripts/build-ffmpeg.sh` (profile `podcast`).
         .binaryTarget(name: "CFFmpeg", path: "Frameworks/FFmpeg.xcframework"),
         .target(

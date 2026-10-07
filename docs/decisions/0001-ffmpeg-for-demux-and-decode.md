@@ -3,13 +3,11 @@
 Status: Accepted
 Date: 2026-09-09 (FFmpeg decode); 2026-10-07 (per-app profiles, static link kept)
 
-Originally recorded in Shuttle Podcasts as ADR-0002.
-
 ## Context
 
 The engine needs a streaming demuxer and decoder for whatever container a server sends, including
-MP4 with the `moov` atom at the end of the file. Shuttle Podcasts already bundled FFmpeg for its
-ad-skip scanner, so the player and the scanner can decode with the same code.
+MP4 with the `moov` atom at the end of the file. An app that also runs its own code against
+libavformat can then decode with the same FFmpeg as the player.
 
 ## Decision
 
@@ -34,7 +32,7 @@ statically linked.
   platform slice.
 - Adding Ogg was a rebuild flag, not a parser.
 - Static linking against an LGPL library leaves the relinking question open for closed-source
-  consumers. Shuttle2 went dynamic for that reason. Revisit if it matters to a consumer.
+  consumers. Revisit if it matters to one.
 - The shim stays codec-agnostic. A missing codec is FFmpeg saying no, never a branch of ours.
 - FFmpeg bugs the tag lacks are fixed with local patches. See [FFmpeg](../ffmpeg.md).
 

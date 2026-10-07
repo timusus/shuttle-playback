@@ -3,14 +3,12 @@
 Status: Accepted
 Date: 2026-09-14
 
-Originally recorded in Shuttle Podcasts as ADR-0003.
-
 ## Context
 
-The first plan kept `AVPlayer` as a fallback for HLS, behind a rollout gate. A sample of 42,000 of
-the 21 million episodes in Shuttle Podcasts' catalogue contained no `.m3u8` enclosures. 93% were MP3
-and 6% were M4A, MP4 or AAC. The `AVPlayer` path also tied playback to the app's scanner through one
-resource loader, so a scanner fault could stall audio.
+The first plan kept `AVPlayer` as a fallback for HLS. A sample of 42,000 episodes from a podcast
+catalogue contained no `.m3u8` enclosures. 93% were MP3 and 6% were M4A, MP4 or AAC. A second player
+path would also have been a second place for playback to fail, with its own buffering and error
+behaviour to keep in step with the first.
 
 ## Decision
 
@@ -19,8 +17,8 @@ The engine has one decode path, `FFmpegStreamDecoder` over a `StreamByteReader`.
 
 ## Alternatives rejected
 
-- Keep `AVPlayer` for HLS with a fallback counter: two players to test, for a format almost nothing
-  in the catalogue uses.
+- Keep `AVPlayer` for HLS as a fallback: two players to test, for a format almost nothing in the
+  sample uses.
 - FFmpeg's `hls` demuxer: it opens playlists through its own URL protocols and cannot run over
   custom IO. The build also disables protocols and networking.
 

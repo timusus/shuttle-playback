@@ -1,7 +1,7 @@
 # FFmpeg
 
-Reference for the static FFmpeg that ships in `Frameworks/FFmpeg.xcframework`, how it is built, and
-how to rebuild it. For why FFmpeg is used at all, see
+Reference for the static FFmpeg that ships in `Frameworks/FFmpeg.xcframework`, with the steps to
+rebuild it. For why FFmpeg is used at all, see
 [ADR-0001](decisions/0001-ffmpeg-for-demux-and-decode.md).
 
 ## What is committed
@@ -20,15 +20,8 @@ libavformat, libavcodec, libswresample and libavutil, merged. The xcframework al
 `COPYING.LGPLv2.1` and `VERSION.txt`. `VERSION.txt` records the FFmpeg tag, the profile, the exact
 configure flags and the applied patches. Read it to see what a given build contains.
 
-It is committed because:
-
-- SwiftPM does not run Git LFS. A consumer resolving by git URL would get pointer files.
-- There is no hosted CI to publish release assets. A `.binaryTarget(url:checksum:)` would need someone to
-  upload a zip and update a checksum by hand on every rebuild.
-- Anyone who can clone the repository can build it.
-
-The cost is repository growth of a few MB each time FFmpeg is rebuilt. `.gitattributes` marks `*.a` as
-binary, so git never diffs or normalises it.
+`.gitattributes` marks `*.a` as binary, so git never diffs or normalises it. For why the framework is
+committed rather than downloaded, see [Architecture](architecture.md#why-the-ffmpeg-is-committed).
 
 SwiftPM links it through the `CFFmpeg` binary target. `CStreamDecode` also links the system `z` and
 `iconv`. libavformat's ID3v2 reader and MP4 `cmov` path call zlib, and metadata conversion calls
@@ -47,7 +40,7 @@ the command-line programs. Only libavformat, libavcodec, libswresample and libav
 
 The `podcast` profile covers MP3, AAC (ADTS and LATM), MP4 and M4A, and Ogg with Opus and Vorbis.
 
-The `music` profile exists so Shuttle2's migration has a starting list. It writes
+The `music` profile exists as a starting list of formats for a music app. It writes
 `FFmpeg-music.xcframework`, which no target references, and the script refuses to build it unless
 `FFMPEG_ALLOW_UNVERIFIED_PROFILE=1` is set.
 
@@ -90,8 +83,7 @@ fixture and a conformance case for any new format, because an untested format is
 ## Local patches
 
 Patches in `scripts/ffmpeg-patches/` are applied by `build-ffmpeg.sh` to the cloned source, before the
-build, and listed in `VERSION.txt`. A patch that already reverse-applies is treated as in place. Use
-them only for FFmpeg bugs the pinned tag has and the decoder cannot work around.
+build, and listed in `VERSION.txt`. A patch that already reverse-applies is treated as in place.
 
 | Patch | What it fixes |
 |---|---|
@@ -100,13 +92,8 @@ them only for FFmpeg bugs the pinned tag has and the decoder cannot work around.
 ## Licence
 
 The build is plain LGPL-2.1 or later. The scripts must never add `--enable-gpl`, `--enable-version3`,
-`--enable-nonfree`, or an external library to a profile, because the library links statically into
-closed-source apps.
+`--enable-nonfree`, or an external library to a profile.
 
 This repository's own code is GPL-3.0 (see the [README](../README.md#licence)). FFmpeg's licence text ships
-inside the xcframework.
-
-Static linking an LGPL library into an app carries an obligation to let a user relink the app against a
-modified FFmpeg. A commercial licence for this package does not change FFmpeg's own terms. If that
-obligation matters to your distribution, take advice. Shuttle2 links FFmpeg dynamically for this
-reason.
+inside the xcframework. For the relinking obligation that static linking brings, see
+[Architecture](architecture.md#why-the-ffmpeg-is-committed).

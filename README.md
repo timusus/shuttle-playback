@@ -4,10 +4,10 @@ An audio decoding engine for iOS and macOS, written in Swift on top of a static 
 byte source, such as a file or a URL that is still downloading, into interleaved Float32 PCM at the
 source's own sample rate. You schedule that PCM however you like.
 
-Apple's `AVPlayer` will not play MP4 files with the index at the end, will not play Ogg or Opus, and
-does not let you touch the samples. This engine decodes the audio itself, so the app owns every sample
-on its way to the speaker. It also plays a file while it downloads, and recovers from dropped
-connections.
+Apple's frameworks do not decode Ogg Vorbis or Opus, and streaming an MP4 whose `moov` index is at the
+end of the file needs range reads that `AudioFileStream` cannot do. This engine demuxes and decodes with
+FFmpeg behind a pull interface, so the app owns every sample on its way to the speaker. It also plays a
+file while it downloads, and recovers from dropped connections.
 
 It is the decode layer of [Shuttle Podcasts](https://shuttlepodcasts.app) and Shuttle2. It knows nothing
 about podcasts, queues or UI.
@@ -53,7 +53,9 @@ while let chunk = decoder.nextChunk() {          // interleaved Float32, up to 4
 
 ## Documentation
 
+- [Tutorial](docs/tutorial.md): decode your first file and print its duration and frame count.
 - [Integrating](docs/integrating.md): add the package, decode a file, stream a URL, seek, cancel.
+- [Reference](docs/reference.md): the public types and their contracts.
 - [Architecture](docs/architecture.md): how the decoder and the download source work, with diagrams.
 - [Decisions](docs/decisions/README.md): why the engine is built this way.
 - [FFmpeg](docs/ffmpeg.md): the committed static build, profiles, patches, rebuilding.

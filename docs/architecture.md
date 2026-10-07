@@ -70,7 +70,7 @@ flowchart LR
     R --> B --> A --> D -->|packets| C -->|frames| S --> P --> O
 ```
 
-Points worth knowing:
+How the pieces behave:
 
 - **The reader is blocking.** `read` may wait for bytes to arrive. The decoder calls it on its own
   thread. `cancel()` and `interrupt()` are the only calls made from another thread.
@@ -133,9 +133,15 @@ flowchart TD
     RE -->|not found| TR
     RS -- no --> TR["avformat_seek_file backward<br/>with a 64 KiB read budget"]
     TR -->|landed inside the budget| FL["flush codec, reset resampler"]
-    TR -->|budget spent or seek failed| EST{"length and duration known?"}
+    TR -->|budget spent or seek failed| INT{"cancelled or interrupted?"}
+    INT -- yes --> STOP["throw cancelled or interrupted"]
+    INT -- no --> EST{"length and duration known?"}
     EST -- yes --> BYTE["byte-estimate seek<br/>t over duration times media bytes"]
-    EST -- no --> WALK["unbudgeted seek: pay for the walk"]
+    EST -- no --> BL{"was the 64 KiB budget spent?"}
+    BL -- yes --> WALK["unbudgeted seek: pay for the walk"]
+    BL -- no --> EOFQ{"reader reported end of stream?"}
+    EOFQ -- yes --> EOFX["stream ends at the target<br/>endReason eof, seek returns normally"]
+    EOFQ -- no --> ERR["throw seek failure"]
     BYTE --> FL2["flush codec, reset resampler"]
     WALK --> FL2
     FL --> PUMP["decode to the first frame"]
@@ -154,8 +160,10 @@ flowchart TD
   seek to 25 minutes read 12 MB. Once a seek has read 64 KiB, the next read is refused, the walk
   aborts, and the decoder places the seek by byte ratio instead. This is exact for constant bitrate
   and close for the rest. The estimate is reported as the landed time.
-- **A source with no length and no container duration has nothing to estimate from.** The walk is then
-  the only seek there is, so it is allowed to run.
+- **A source with no length and no container duration has nothing to estimate from.** After a blown
+  budget the walk is the only seek there is, so it is allowed to run. A seek that failed without
+  blowing the budget is not walked. If the reader said end of stream (a seek past the last frame),
+  the stream ends at the target and `endReason` is `.eof`. Any other failure throws.
 - **FFmpeg's fast-seek flag is set**, so an MP3 uses its Xing table of contents when it has one.
 - **`mediaFramesRead` is media time.** After a seek it is set from the landed time and advances by the
   frames handed out.
@@ -188,7 +196,8 @@ stateDiagram-v2
 
 `nextChunk()` returning nil is not by itself the end of the stream. `endReason` says which of
 `eof`, `failure`, `cancelled` or `interrupted` it was, and a caller must treat them differently.
-Reporting a network failure as the end of the stream is the worst mistake available here.
+Treating a network failure as the end of the stream would cut an episode short without telling the
+user, which is why the reason is kept.
 
 An interrupted decode can resume without audible damage. If the next seek is to exactly the frame the
 interrupted read would have returned, the decoder does not flush the codec. It puts the demuxer back
@@ -215,7 +224,7 @@ flowchart LR
     SRC["GrowingFileByteSource<br/>one lock and condition"]
     DEC["FFmpegStreamDecoder<br/>decoder thread"]
     SNAP["GrowingFileSnapshot"]
-    LIS["GrowingFileListener<br/>and onEvent"]
+    LIS["Host code<br/>onEvent, or a GrowingFileListener it wires itself"]
     STORE["GrowingFileStore<br/>.partial and .audio files"]
 
     NET -->|body chunks| URLS
@@ -295,7 +304,9 @@ stateDiagram-v2
     [*] --> Requesting: transaction opens
     Requesting --> Streaming: response accepted, link up
     Requesting --> Backoff: no response in 20 s (8 s on a retry)
-    Requesting --> Backoff: refused status or page
+    Requesting --> Backoff: refused status
+    Requesting --> Backoff: non-audio page, only from the remembered chain end
+    Requesting --> Failed: non-audio page from the original URL
     Streaming --> Backoff: connection dropped
     Streaming --> Backoff: body silent for 6 s
     Streaming --> Backoff: body ended short
@@ -326,7 +337,9 @@ stateDiagram-v2
   have expired, so the next request walks the chain from the original URL once.
 - **A non-audio response is a failure.** An HTML `Content-Type` is refused. When the type is not
   audio, video or Ogg, the first 12 bytes of the body are checked for a media signature instead, so
-  a login page is never decoded.
+  a login page is never decoded. The failure is final unless the request went to the remembered end
+  of the redirect chain: there the page may be a signed URL that expired, so it is retried from the
+  original URL.
 - **Past the retry budget the read throws** `StreamByteReaderError.transport`. Bytes already
   downloaded are still read first. The error stays until the next seek, which opens a fresh transaction
   with a fresh budget.
@@ -349,8 +362,8 @@ instead of restarting, because a restart would only be answered from byte 0 agai
 `completedFile(for:)` returns the cached file for a URL, to be played with `FileByteReader`. Before a
 transaction starts, the store evicts to make room if the volume would be left with less than 200 MB.
 
-Partial files are never reused across sessions because hosts can re-stitch ads behind a stable URL,
-and old bytes would replay a different ad load. See
+Partial files are never reused across sessions because a host can change the bytes behind a stable
+URL, and old bytes would then play something the host no longer serves. See
 [ADR-0003](decisions/0003-growing-file-playback.md).
 
 ### Snapshot and events
@@ -365,10 +378,12 @@ A host can watch the source in two ways:
 - `onEvent`, a closure passed to the initialiser, receives `GrowingFileEvent`: `transaction` when a
   response is accepted, `download` at most once a second while bytes arrive and once at
   completion, and `seekLanded` when a seek was answered from the file already there.
-- A `GrowingFileListener` receives the same events with a snapshot taken just after. It is also told
-  when playback starts and when the player will seek, so a transaction opened by a seek can be
-  paired with its target. It reads the file back through `fileURL`, so it can never see a byte the
-  decoder did not have, and it never makes a second fetch.
+- `GrowingFileListener` is a protocol a host implements for the same events, each with a snapshot
+  taken just after, plus two calls the host's own player makes (`playbackDidStart`,
+  `playerWillSeek`) so a transaction opened by a seek can be paired with its target. The source
+  does not take a listener: the host forwards the source's events and its own calls to the listener
+  itself. A listener reads the file back through `fileURL`, so it can never see a byte the decoder
+  did not have, and it never makes a second fetch.
 
 `willSeek(generation:)` is how a player tags a seek. The next read that opens a transaction carries
 that generation, and a read answered from the existing file reports the seek as landed instead.
@@ -384,3 +399,38 @@ that generation, and a read answered from the existing file reports the seek as 
 The decoder thread and the delegate queue meet under one lock and condition inside the byte source.
 File I/O runs outside the lock. `GrowingFileByteSource.cancel()` must always be called, because a
 running task retains its delegate, which is the source.
+
+## Why the FFmpeg is committed
+
+`Frameworks/FFmpeg.xcframework` is committed to git, not downloaded:
+
+- SwiftPM does not run Git LFS, so a consumer resolving by git URL would get pointer files.
+- There is no hosted CI to publish release assets. A `.binaryTarget(url:checksum:)` would need someone
+  to upload a zip and update a checksum by hand on every rebuild.
+- Anyone who can clone the repository can build it.
+
+The cost is repository growth of a few MB each time FFmpeg is rebuilt. `.gitattributes` marks `*.a` as
+binary, so git never diffs or normalises it.
+
+Static linking an LGPL library into an app carries an obligation to let a user relink the app against a
+modified FFmpeg. A commercial licence for this package does not change FFmpeg's own terms. If that
+obligation matters to your distribution, take advice. The build is therefore plain LGPL-2.1 or later,
+and the scripts never add `--enable-gpl`, `--enable-version3`, `--enable-nonfree` or an external
+library. See [ADR-0001](decisions/0001-ffmpeg-for-demux-and-decode.md).
+
+Local patches exist for FFmpeg bugs the pinned tag has and the decoder cannot work around. Patch 0001
+is the case in point: with a source of unknown length, FFmpeg's MP3 demuxer stored the negative
+"unknown" size in an unsigned variable and discarded the Xing frame count, so the gapless end trim and
+the duration were lost.
+
+## Why the tests are shaped this way
+
+The conformance suite exists to prove that the decoder gives the same audio however the bytes arrive:
+partial reads, one-shot I/O errors and a source of unknown length must each give a decode
+bit-identical to the clean one. The golden diff is how a decoder change is reviewed, because a change
+in the PCM shows up as a changed hash.
+
+`DownloadRetry` and `GrowingFileReadRule` take no clock, lock or network, so their tests use literal
+numbers. The byte source's tests drive time with a manual clock, so backoffs and the 30 s link window
+run in milliseconds. A decoder bug the suite finds and nobody has fixed is pinned, rather than left as a
+red test, so that a different finding, or a pinned finding that stops happening, still fails.
