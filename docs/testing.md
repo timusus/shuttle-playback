@@ -50,9 +50,10 @@ to the clean decode in the same run. A resumed decode must match the clean one p
 warm-up frames after a seek. MP3 and MP4 resume bit-exactly. Bytes read before the first audio are
 budgeted under every combination.
 
-**Seeks and goldens.** The suite then seeks to 0, 1/3, 2/3 and the end of each fixture, and compares
-with `Goldens/<fixture>.json`. A golden holds Int16 per-second PCM hashes, the frame count, the seek
-landings and the fixture's own SHA-256.
+**Seeks and goldens.** The suite then seeks to 0, 1/3, 2/3, 100 ms before the end and the end of
+each fixture, and compares with `Goldens/<fixture>.json`. The seek to the end lands on end of stream
+and pins no audio; the near-end one pins the last of it. A golden holds Int16 per-second PCM hashes,
+the frame count, the seek landings and the fixture's own SHA-256.
 
 **Regenerate goldens** after an intended decoder change, or a new fixture:
 
@@ -72,8 +73,9 @@ Then review the JSON diff. The suite writes a golden only if the fault matrix pa
 `KnownIssues.swift`. A rule names the fixture, the kind of check, the exact fault combinations and
 the exact finding, with its GitHub issue, and runs under `XCTExpectFailure`. A different value, or a
 pinned finding that stops happening, fails the suite. When the bug is fixed, remove the rule. There
-are no rules at present, and `alignFrames` is 0 in every golden because seeks land on the requested
-sample.
+are no rules at present, and `alignFrames` is 0 in every seek of every golden because seeks land on
+the requested sample. A seek to the end lands where the clean decode ends, so its empty window
+counts as 0 too.
 
 **FFmpeg fixes.** Bugs in the pinned FFmpeg tag are fixed with patches that `build-ffmpeg.sh` applies. See
 [FFmpeg](ffmpeg.md#local-patches).

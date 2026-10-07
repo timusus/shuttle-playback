@@ -63,8 +63,8 @@
       "windowSha256Int16" : "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     },
     {
-      "alignFrames" : null,
-      "landedS" : 20,
+      "alignFrames" : 0,
+      "landedS" : 20.016,
       "toS" : 20.016,
       "tolS" : 0.03,
       "windowFrames" : 0,

@@ -6,7 +6,8 @@
 /// The issue number is on timusus/shuttle-playback.
 ///
 /// Seeks are sample-accurate: the decoder starts a pre-roll before the target and drops what
-/// comes before it, so `alignFrames` is 0 in every golden. The one landing that cannot be exact is
+/// comes before it, so `alignFrames` is 0 in every seek of every golden (a seek to the end lands
+/// where the clean decode ends). The one landing that cannot be exact is
 /// outside these fixtures: a seek in a VBR MP3 further from a frame of known time than one seek's
 /// byte budget (`kSeekBudgetBytes`, a few seconds of audio) is placed by its Xing TOC or bitrate,
 /// and nothing in an MP3 frame says what time it is (issue #3).

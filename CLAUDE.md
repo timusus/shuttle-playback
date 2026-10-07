@@ -74,7 +74,8 @@ answered the response.)
 fixture in `Tests/PlaybackDecodeConformanceTests/Fixtures` (plus the three in
 `PlaybackDecodeTests/Fixtures`) through `FaultyByteReader` under all 7 combinations of partial reads,
 one-shot I/O errors and unknown length, and requires each to be bit-identical to the clean decode in
-the same run. It then seeks to 0, 1/3, 2/3 and the end, and compares with `Goldens/<fixture>.json`
+the same run. It then seeks to 0, 1/3, 2/3, 100 ms before the end and the end, and compares with
+`Goldens/<fixture>.json`
 (Int16 per-second PCM hashes, frame count, seek landings, the fixture's own sha256). After an
 intended decoder change, or a new fixture, regenerate with
 `GOLDEN_UPDATE=1 swift test --filter PlaybackDecodeConformance` and review the JSON diff; it writes
@@ -87,7 +88,8 @@ combination. A decoder bug the suite found and nobody has fixed is pinned in `Kn
 fixture, kind, exact fault combinations and the exact finding, with its issue number, under
 `XCTExpectFailure`. A different value, or a pinned finding that stops happening, fails; update or
 remove the rule. Seeks are sample-accurate (a pre-roll before the target, decoded and dropped up to
-it), so `alignFrames` is 0 in every golden. The one inexact landing is outside the fixtures: a VBR
+it), so `alignFrames` is 0 in every seek of every golden, the seek to the end included (it lands
+where the clean decode ends, with an empty window). The one inexact landing is outside the fixtures: a VBR
 MP3 seek further from a frame of known time than one seek's byte budget lands by Xing TOC or bitrate
 estimate (#3), covered by `testXingVBRMP3SeeksExactlyNearAndCheaplyFar`.
 `CONFORMANCE_FIXTURE=<file name>` runs one fixture. `CONFORMANCE_PLANT_DEFECT=1` drops a frame from

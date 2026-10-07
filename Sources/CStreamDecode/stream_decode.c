@@ -114,6 +114,9 @@ struct StreamDecoder {
     int          vbri_frames_per_entry;
     /* The last seek went to a frame whose time was known exactly (see `demux_seek`). */
     int          anchored;
+    /* The timestamps after the last seek are the stream's true times: everything but a VBR MP3
+     * placed by its TOC or bitrate (see `land_exactly`). */
+    int          landing_exact;
 
     /* The first bytes of the media as libavformat read them (offset 0 is `base_offset`), kept so
      * the Xing/Info/VBRI frame can be read without a second request. */
@@ -1097,6 +1100,13 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
         }
         if (status == STREAM_DECODE_OK && decoder->last_frame_pts != AV_NOPTS_VALUE) {
             *landed_seconds = (double)(decoder->last_frame_pts - decoder->start_time) * tb;
+        } else if (status == STREAM_DECODE_EOF && decoder->landing_exact
+                   && decoder->next_pts != AV_NOPTS_VALUE) {
+            /* Every frame after the placement ended before the target, so the stream is over where
+             * the last of them ended: exactly where an unbroken decode ends. A container's
+             * duration can be shorter than its audio (an AAC's last frame runs past the edit
+             * list's length), and the position would have been reported short of the end. */
+            *landed_seconds = (double)(decoder->next_pts - decoder->start_time) * tb;
         } else if (status == STREAM_DECODE_EOF && decoder->media_duration > 0
                    && seconds >= decoder->media_duration - 1.0 / decoder->sample_rate) {
             /* At or past the declared end, and the stream agrees: it is over there. That length
@@ -1161,6 +1171,7 @@ static int land_exactly(StreamDecoder *d, int64_t target) {
     }
     int swr_rc = init_swr(d);   /* drop whatever the resampler still held from before */
     if (swr_rc != STREAM_DECODE_OK) return swr_rc;
+    d->landing_exact = 1;
     if (d->mp3_header_ok && !index_seek) {
         int rc;
         while ((rc = av_read_frame(d->fmt, d->held)) >= 0 && d->held->stream_index != d->audio_idx) {
@@ -1169,6 +1180,7 @@ static int land_exactly(StreamDecoder *d, int64_t target) {
         /* Otherwise the pump reads again and meets the same end, error or interruption. */
         if (rc >= 0) d->has_held = 1;
         int64_t dts = rc >= 0 ? mp3_exact_dts(d, d->held) : AV_NOPTS_VALUE;
+        d->landing_exact = dts != AV_NOPTS_VALUE;
         if (dts != AV_NOPTS_VALUE && dts != d->held->dts) {
             /* The demuxer is told the frame's real time the one way it takes one: an index entry,
              * sought to exactly. Every timestamp after it, and the encoder padding it trims at the
