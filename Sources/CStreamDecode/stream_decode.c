@@ -461,8 +461,14 @@ static int mp4_fragmented_audio_without_elst(const StreamDecoder *d) {
     uint32_t type;
 
     for (;;) {
+        size_t start = top;
         if (!box_next(buf, len, &top, &type, &moov, &moov_end)) return 0;
-        if (type == BOX4('m', 'o', 'o', 'v')) break;
+        /* A moov sized 0 ("to the end of the file") would end at the prologue's end here, and an
+         * elst past it would go unseen: no answer, no trim. */
+        if (type == BOX4('m', 'o', 'o', 'v')) {
+            if (box_be32(buf + start) == 0) return 0;
+            break;
+        }
         if (type == BOX4('m', 'd', 'a', 't') || type == BOX4('m', 'o', 'o', 'f')) return 0;
     }
 
