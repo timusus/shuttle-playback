@@ -125,6 +125,11 @@ sequenceDiagram
     Dec-->>Caller: StreamAudioFormat
 ```
 
+`avformat_find_stream_info` is skipped when the container header already describes the stream
+(FLAC, ALAC in MP4, PCM in WAV or AIFF) and the duration is known without it; lossy codecs always
+probe. A WAV from a source with a known length but unsized RIFF/data fields keeps the probe, which
+recovers the duration from the file size. `forcesProbe` opts out (ADR-0011).
+
 The probe budget is `StreamProbeBudget`. The default is 64 KiB and 1 s. FFmpeg's own defaults are a
 5 MB probe and 5 s of analysis, which is too much when the bytes are cellular data. A caller whose
 files need more analysis passes a larger budget to `FFmpegStreamDecoder.init`.

@@ -74,7 +74,7 @@ Then review the JSON diff. The suite writes a golden only if the fault matrix pa
 `KnownIssues.swift`. A rule names the fixture, the kind of check, the exact fault combinations and
 the exact finding, with its GitHub issue, and runs under `XCTExpectFailure`. A different value, or a
 pinned finding that stops happening, fails the suite. When the bug is fixed, remove the rule. Rules
-exist at present for #21 and #28, and `alignFrames` is 0 in every seek of every golden because
+exist at present for #28 and #36, and `alignFrames` is 0 in every seek of every golden because
 seeks land on
 the requested sample. A seek to the end lands where the clean decode ends, so its empty window
 counts as 0 too.
