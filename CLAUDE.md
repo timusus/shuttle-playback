@@ -15,7 +15,7 @@ Full documentation (architecture, decisions, integration, FFmpeg, testing) is in
 | `PlaybackStreamingTestSupport` | `PlaybackStreamingTestSupport` | `LoopbackMediaServer`, no fixtures. Tests of the streaming target are in `PlaybackStreamingTests` (own two tone fixtures). |
 | `FFmpeg` | `CFFmpeg` (binary) | The static FFmpeg. For an app with its own C against libavformat (Podcasts' scanner decode). An app links exactly one FFmpeg. |
 
-`Frameworks/FFmpeg.xcframework` holds three slices (ios-arm64, ios-arm64-simulator, macos-arm64), each one `libffmpeg.a` plus headers and a `CFFmpeg` modulemap. `VERSION.txt` inside it records the FFmpeg tag, the profile and the exact configure flags.
+`Frameworks/FFmpeg.xcframework` holds three slices (ios-arm64, ios-arm64-simulator, macos-arm64), each one `libffmpeg.a` plus headers and a `CFFmpeg` modulemap. `VERSION.txt` inside it records the FFmpeg tag and the exact configure flags.
 
 ## Where the xcframework lives, and why
 
