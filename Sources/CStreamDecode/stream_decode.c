@@ -602,8 +602,19 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
      * and the caller's position follows the frame that is actually decoded, so the cost of taking
      * it is nothing this player can observe. */
     d->fmt->flags |= AVFMT_FLAG_FAST_SEEK;
+    /* With no total length, stop the MP4 header at the moov and mdat (issue #9). mov reads root
+     * atoms until it has both AND the last one ends at `avio_size()` (mov.c mov_read_default); with
+     * no size that never holds, so it skipped to the end of the mdat, read past the end of the
+     * source for a next atom, and the first packet seeked back and read its 32 KiB again. IGNIDX
+     * is the flag that condition also stops on, and in this build mov is the only demuxer that
+     * reads it: it stops there and leaves the rest of the file to `next_root_atom`, which is how
+     * mov reads a source that cannot seek. Cleared after the header so nothing later sees it. */
+    int length_unknown = d->cb.size(d->opaque) < 0;
+    if (length_unknown) d->fmt->flags |= AVFMT_FLAG_IGNIDX;
 
-    if (avformat_open_input(&d->fmt, NULL, NULL, NULL) < 0) {
+    int opened = avformat_open_input(&d->fmt, NULL, NULL, NULL);
+    if (opened >= 0 && length_unknown) d->fmt->flags &= ~AVFMT_FLAG_IGNIDX;
+    if (opened < 0) {
         d->fmt = NULL;   /* avformat_open_input freed it; the AVIO context is still ours */
         if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
         /* Not "unsupported": the caller answers that with another player, and an interrupt is

@@ -20,16 +20,7 @@ enum KnownIssues {
         var messages: [String]
     }
 
-    private static let unknownLengthSets: [FaultSwitches] = [
-        [.unknownLength], [.partialReads, .unknownLength],
-        [.ioErrorOncePerPosition, .unknownLength], [.partialReads, .ioErrorOncePerPosition, .unknownLength],
-    ]
-
-    static let rules: [Rule] = [
-        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/9 (moov-first M4A reads the whole probe budget when totalLength is nil)",
-             fixture: "tone_moov_first.m4a", kind: .bytes, switches: unknownLengthSets,
-             messages: ["65546 bytes read before the first audio, golden allows 33792"]),
-    ]
+    static let rules: [Rule] = []
 
     /// The rule a finding is pinned by, if any.
     static func rule(for fixture: String, kind: ConformanceMatrix.Kind, switches: FaultSwitches,
