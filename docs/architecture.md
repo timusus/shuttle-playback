@@ -78,6 +78,10 @@ How the pieces behave:
   unseekable and the MP4 demuxer reads the whole `mdat` to reach a `moov` atom at the end of the file.
   The AVIO context has a size callback too (`AVSEEK_SIZE`), so a reader that knows its length lets
   FFmpeg jump to the end with one seek. A reader with no length answers "unknown", never a guess.
+  With no length the decoder also sets `AVFMT_FLAG_IGNIDX` for its whole life, so the MP4 demuxer
+  stops each root-atom read at the first `moov` and `mdat` it has, the way it reads an unseekable
+  source: the header does not skip past the `mdat` looking for the end, and a fragmented MP4 reads
+  one fragment at a time instead of running to the end of the file after the first.
 - **Leading ID3v2 tags are stepped over before FFmpeg sees them.** An MP3 with embedded cover art can
   carry megabytes of tag, and FFmpeg's MP3 demuxer reads all of it. The decoder reads the tag
   headers itself, seeks past them, and gives FFmpeg an offset-0 that is the first MPEG frame. The

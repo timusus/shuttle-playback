@@ -608,12 +608,16 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
      * source for a next atom, and the first packet seeked back and read its 32 KiB again. IGNIDX
      * is the flag that condition also stops on, and in this build mov is the only demuxer that
      * reads it: it stops there and leaves the rest of the file to `next_root_atom`, which is how
-     * mov reads a source that cannot seek. Cleared after the header so nothing later sees it. */
-    int length_unknown = d->cb.size(d->opaque) < 0;
-    if (length_unknown) d->fmt->flags |= AVFMT_FLAG_IGNIDX;
+     * mov reads a source that cannot seek.
+     *
+     * It stays set for the life of the decoder. A fragmented MP4 reads each later moof the same
+     * way, from `next_root_atom` while it plays or from its fragment index (sidx, tfra) when it
+     * seeks, and that read has to stop at the fragment's mdat for the same reason: with the flag
+     * cleared it read on through every remaining fragment to the end of the file, reported that
+     * as the end, and playback stopped after the first fragment. */
+    if (d->cb.size(d->opaque) < 0) d->fmt->flags |= AVFMT_FLAG_IGNIDX;
 
     int opened = avformat_open_input(&d->fmt, NULL, NULL, NULL);
-    if (opened >= 0 && length_unknown) d->fmt->flags &= ~AVFMT_FLAG_IGNIDX;
     if (opened < 0) {
         d->fmt = NULL;   /* avformat_open_input freed it; the AVIO context is still ours */
         if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;

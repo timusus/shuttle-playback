@@ -77,6 +77,9 @@ patched = b[:i] + struct.pack('>I', struct.unpack('>I', b[i:i+4])[0] + 100_000) 
 open('mdat_too_long.m4a', 'wb').write(patched)
 PY
 rm aac_moov_last.m4a
+# Fragmented: an empty moov, then 1 s fragments (moof + mdat), a global sidx and an mfra at the end.
+$FF -i "$TMP/s44.wav" -c:a aac -b:a 48k -movflags empty_moov+default_base_moof+global_sidx \
+    -frag_duration 1000000 aac_fragmented_sidx.m4a
 
 # HE-AAC v1 and v2 via the macOS encoder (ffmpeg has no SBR/PS encoder).
 afconvert -f m4af -d aach -b 32000 "$TMP/s44.wav" he_aac_v1.m4a
