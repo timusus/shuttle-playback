@@ -29,7 +29,7 @@ private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback
 ///   chain from the requested URL once with the generous wait (``chainEndForgotten``).
 /// - A new network path (``GrowingFilePathMonitor``) ends a transaction still on the network at
 ///   once, as a drop the retry above decides on, instead of leaving it to the idle timeout.
-/// - A transaction whose answer says the resource ends exactly at its base (`416` with
+/// - A transaction whose answer says the resource ends exactly at its base or resume point (`416` with
 ///   `bytes */N`, or a range clamped to the last byte) is a zero-length open, as in media3: the
 ///   length is learned and the read is at its end (``totalEndingAt(_:status:contentRange:)``).
 /// - ``snapshot`` is the only read surface for anyone but the decoder; ``GrowingFileEvent``s
@@ -753,6 +753,32 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
             let status = http?.statusCode ?? 0
             let contentRange = http?.value(forHTTPHeaderField: "Content-Range")
             let range = Self.contentRange(contentRange)
+            if let total = Self.totalEndingAt(tx.resumeAt ?? tx.base, status: status, contentRange: contentRange),
+               lastKnownTotalLength.map({ $0 == total }) ?? true {
+                // The host says the resource ends exactly where this transaction starts: a `416`
+                // with `bytes */N`, or a range clamped to the last byte, at position N. As media3
+                // does, that is a zero-length open: the length is learned and the read is at its
+                // end. A resume at the frontier is the same open, there. A total that differs from
+                // the one already known (the file shrank) is refused like any other answer.
+                downloadLog.info("download: open_at_end gen=\(tx.generation) status=\(status) total=\(total)")
+                tx.resumeAt = nil
+                tx.ended = true
+                tx.isComplete = true
+                tx.totalLength = total
+                lastKnownTotalLength = total
+                if finalURL == nil { finalURL = response.url }
+                if startupValue.firstResponseAt == nil {
+                    startupValue.firstResponseAt = clock.now
+                    startupValue.status = status
+                    startupValue.remembered = tx.remembered
+                }
+                events = [
+                    .transaction(base: tx.base, generation: tx.generation, seekGeneration: tx.seekGeneration, httpStatus: status),
+                    .download(frontier: tx.frontier, downloadBytesPerSecond: downloadBytesPerSecondLocked(), complete: true),
+                ]
+                condition.broadcast()
+                return .cancel
+            }
             if let resumeAt = tx.resumeAt {
                 tx.resumeAt = nil
                 // The same bytes from the frontier on, as far as the host lets that be checked:
@@ -789,31 +815,6 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
                 scheduleIdleCheckLocked(tx)
                 condition.broadcast()
                 return .allow
-            }
-            if let total = Self.totalEndingAt(tx.base, status: status, contentRange: contentRange),
-               lastKnownTotalLength.map({ $0 == total }) ?? true {
-                // The host says the resource ends exactly where this transaction starts: a `416`
-                // with `bytes */N`, or a range clamped to the last byte, at position N. As media3
-                // does, that is a zero-length open: the length is learned and the read is at its
-                // end. A total that differs from the one already known (the file shrank) is
-                // refused like any other answer.
-                downloadLog.info("download: open_at_end gen=\(tx.generation) status=\(status) total=\(total)")
-                tx.ended = true
-                tx.isComplete = true
-                tx.totalLength = total
-                lastKnownTotalLength = total
-                if finalURL == nil { finalURL = response.url }
-                if startupValue.firstResponseAt == nil {
-                    startupValue.firstResponseAt = clock.now
-                    startupValue.status = status
-                    startupValue.remembered = tx.remembered
-                }
-                events = [
-                    .transaction(base: tx.base, generation: tx.generation, seekGeneration: tx.seekGeneration, httpStatus: status),
-                    .download(frontier: tx.frontier, downloadBytesPerSecond: downloadBytesPerSecondLocked(), complete: true),
-                ]
-                condition.broadcast()
-                return .cancel
             }
             switch status {
             case 200:
@@ -977,7 +978,8 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         return (start, Int64(parts[2].trimmingCharacters(in: .whitespaces)))
     }
 
-    /// The resource's total when a fresh request's answer says it ends exactly at `base`: a `416`
+    /// The resource's total when an answer says it ends exactly at `base` (a request's start or a
+    /// resume's frontier): a `416`
     /// with `Content-Range: bytes */<base>`, or a `206` clamped to the last byte (`bytes X-Y/<base>`
     /// with `X` before `base`). Nil for any other answer.
     static func totalEndingAt(_ base: Int64, status: Int, contentRange header: String?) -> Int64? {
