@@ -1,16 +1,14 @@
 # CLAUDE.md
 
 Public (GPL-3.0) Swift package holding the iOS decode layer shared by **Shuttle Podcasts**
-(`timusus/podcasts`) and, later, **Shuttle2** (`timusus/shuttle2`). It holds only codec and DSP
-code. Anything about podcasts, ads, queues, players or UI stays in the apps.
+(`timusus/podcasts`) and, later, **Shuttle2** (`timusus/shuttle2`). It holds only decode,
+byte-source and FFmpeg code (effects such as skip-silence and Voice Boost live in the apps). Anything about podcasts, ads, queues, players or UI stays in the apps.
 
 ## Layout
 
 | Product | Target(s) | What it is |
 |---|---|---|
 | `PlaybackDecode` | `PlaybackDecode`, `CStreamDecode` | `FFmpegStreamDecoder`: pull decoder over a `StreamByteReader`, Float32 interleaved at the source rate, seekable, cancellable. `FileByteReader` is the plain-file reader. Probe budget is `StreamProbeBudget` (default 64 KiB / 1 s). |
-| `SilenceGate` | `SilenceGate` | Skip-silence trimming. Samples in, samples out. `SilenceGateSettings.podcast` is Android's tuning. The savings tally (`SilenceSavingsStore`) is app-side. |
-| `VoiceEnhance` | `VoiceEnhance` | Voice Boost: `VoiceEnhanceProcessor` plus `Biquad`, `Compressor`, `LookaheadLimiter`, `KWeightingFilter`, `LufsMeter`. A port of the Android chain; the numbers in the tests are the spec. |
 | `FFmpeg` | `CFFmpeg` (binary) | The static FFmpeg. For an app with its own C against libavformat (Podcasts' scanner decode). An app links exactly one FFmpeg. |
 
 `Frameworks/FFmpeg.xcframework` holds three slices (ios-arm64, ios-arm64-simulator, macos-arm64), each one `libffmpeg.a` plus headers and a `CFFmpeg` modulemap. `VERSION.txt` inside it records the FFmpeg tag, the profile and the exact configure flags.
@@ -100,6 +98,4 @@ moved.
   to `main`. No PRs and no AI attribution in any commit.
 - Public API is the contract with two apps. Keep it small. Make something `public` only when an
   app needs it, and keep it `Sendable`-friendly.
-- Behaviour shared with Android (the silence-gate tuning and the Voice Boost chain) is ported, not
-  invented. Change it on both platforms or not at all.
 - This repo has no hosted CI. `swift test` locally plus `release.sh` is the gate.

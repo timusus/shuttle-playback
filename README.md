@@ -11,8 +11,8 @@ possible to:
 - start playback while the file is still downloading, from any byte source you supply;
 - play formats `AVPlayer` handles badly, such as MP4 files with their index at the end, or Ogg and
   Opus;
-- run your own effects on the audio, such as trimming silence or boosting voices, without the
-  drift and glitches of an `AVPlayer` audio tap.
+- get decoded PCM to process however you like, such as trimming silence or boosting voices, without
+  the drift and glitches of an `AVPlayer` audio tap.
 
 ## What's in it
 
@@ -22,8 +22,6 @@ never pays for a music player's features, and the other way round.
 | Product | What it does |
 |---|---|
 | `PlaybackDecode` | Streaming FFmpeg decoder. You give it a `StreamByteReader` (bytes from a file, a download, anything); it gives you PCM. Handles seeking, files still being written, and a configurable probe budget. |
-| `SilenceGate` | Skip silence: detects and trims quiet stretches, with smooth fades in and out. |
-| `VoiceEnhance` | Voice Boost: EQ, compression, loudness normalisation (LUFS) and a lookahead limiter, tuned for speech. |
 | `FFmpeg` | A static, LGPL-only FFmpeg build. Codecs and containers are chosen per app by a build profile; the `podcast` profile has MP3, AAC, MP4 and Ogg/Opus/Vorbis. |
 
 Requires iOS 17 or macOS 14.
@@ -34,7 +32,7 @@ Requires iOS 17 or macOS 14.
 .package(url: "https://github.com/timusus/shuttle-playback.git", from: "0.1.0")
 ```
 
-Then add the products you need to your target, such as `PlaybackDecode` and `SilenceGate`.
+Then add the products you need to your target, such as `PlaybackDecode`.
 
 ## Status
 

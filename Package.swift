@@ -1,6 +1,6 @@
 // swift-tools-version: 5.9
 // The decode layer shared by Shuttle Podcasts and Shuttle2 on iOS: a static FFmpeg built per app
-// profile, the streaming decoder that drives it, and the stand-alone DSP stages. Nothing here knows
+// profile, the streaming decoder that drives it and the byte-source and HLS plumbing around it. Nothing here knows
 // what a podcast, an ad or a queue is. See CLAUDE.md for build, test and release.
 import PackageDescription
 
@@ -11,11 +11,6 @@ let package = Package(
         // The pull decoder: a `StreamByteReader` in, interleaved Float32 PCM at the source's own
         // rate out, seekable and cancellable.
         .library(name: "PlaybackDecode", targets: ["PlaybackDecode"]),
-        // Skip silence: trims long silent runs from a PCM stream. Samples in, samples out.
-        .library(name: "SilenceGate", targets: ["SilenceGate"]),
-        // Voice Boost: the BS.1770 meter, makeup gain, EQ, compressor and limiter, as one
-        // processor plus the stages it is built from.
-        .library(name: "VoiceEnhance", targets: ["VoiceEnhance"]),
         // The static FFmpeg itself, for a consumer with its own C against libavformat (Shuttle
         // Podcasts' scanner decode). One FFmpeg per app: two copies of the same static symbols
         // would be a duplicate-symbol link failure, or worse, a silent pick of one.
@@ -33,8 +28,6 @@ let package = Package(
             linkerSettings: [.linkedLibrary("z"), .linkedLibrary("iconv")]
         ),
         .target(name: "PlaybackDecode", dependencies: ["CStreamDecode"]),
-        .target(name: "SilenceGate"),
-        .target(name: "VoiceEnhance"),
         // The fixtures are committed (three 20 s tones, well under 250 KB each): a decoder that
         // has to be handed a podcast before it can be tested is a decoder nobody tests.
         .testTarget(
@@ -45,7 +38,5 @@ let package = Package(
         // Fault reader, fixture corpus and goldens for the decoder: every faulted decode must equal
         // the clean one. Fixtures and goldens are read by path (see Golden.swift), not as resources.
         .testTarget(name: "PlaybackDecodeConformanceTests", dependencies: ["PlaybackDecode"]),
-        .testTarget(name: "SilenceGateTests", dependencies: ["SilenceGate"]),
-        .testTarget(name: "VoiceEnhanceTests", dependencies: ["VoiceEnhance"]),
     ]
 )
