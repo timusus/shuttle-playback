@@ -1986,6 +1986,24 @@ static int demux_seek(StreamDecoder *decoder, double seconds, int64_t target, do
          * leaves the demuxer with no timestamp to report — there is nothing in the stream that
          * says what second this frame is — so the estimate IS the landed time. */
         int status = pump(decoder);
+        if (status == STREAM_DECODE_EOF && decoder->next_pts == AV_NOPTS_VALUE && !decoder->cancelled
+            && !decoder->interrupted && seconds < decoder->media_duration) {
+            /* The estimate fell past the last frame's start (a FLAC with no seek table, whose
+             * bisection outran the budget on a short file, lands in the final kilobytes) and the
+             * stream ended with nothing decoded, though audio remains before its declared end.
+             * That is not the stream's end: the walk is paid for, as it is with no length to
+             * estimate from (issue #28). */
+            avio_clear_latched_error(decoder);
+            decoder->source_eof = 0;
+            rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, INT64_MIN, target, target,
+                                    AVSEEK_FLAG_BACKWARD);
+            if (rc < 0) {
+                if (decoder->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+                if (decoder->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+                return STREAM_DECODE_ERR_SEEK;
+            }
+            return kSeekPlaced;
+        }
         *landed_seconds = ratio * decoder->media_duration;
         return status;
     }

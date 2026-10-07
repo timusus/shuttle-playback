@@ -22,11 +22,6 @@ enum KnownIssues {
     }
 
     static let rules: [Rule] = [
-        // FLAC's seek after a one-shot I/O error returns different PCM than the clean seek.
-        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/28 (FLAC seek after a one-shot I/O error)",
-             fixture: "flac_stereo.flac", kind: .seekPCM,
-             switches: [.ioErrorOncePerPosition, [.partialReads, .ioErrorOncePerPosition]],
-             messages: ["seek to 3.9s: PCM after the landing differs from the clean seek"]),
         // A 24-bit WAV with no known length buffers a second 32 KiB before the first audio.
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/36 (wav_s24 reads twice with unknown length)",
              fixture: "wav_s24.wav", kind: .bytes, switches: [.unknownLength, [.partialReads, .unknownLength]],
