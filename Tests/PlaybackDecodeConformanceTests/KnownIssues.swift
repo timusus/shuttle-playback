@@ -23,8 +23,7 @@ enum KnownIssues {
 
     static let rules: [Rule] = [
         // FLAC's seek after a one-shot I/O error returns different PCM than the clean seek.
-        // Not yet filed: GitHub was down when the suite found it.
-        Rule(issue: "unfiled (FLAC seek after a one-shot I/O error)",
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/28 (FLAC seek after a one-shot I/O error)",
              fixture: "flac_stereo.flac", kind: .seekPCM,
              switches: [.ioErrorOncePerPosition, [.partialReads, .ioErrorOncePerPosition]],
              messages: ["seek to 3.9s: PCM after the landing differs from the clean seek"]),

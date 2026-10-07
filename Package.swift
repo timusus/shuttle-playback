@@ -24,7 +24,7 @@ let package = Package(
     ],
     targets: [
         // Committed, not downloaded: see docs/ffmpeg.md#what-is-committed. Rebuild with
-        // `scripts/build-ffmpeg.sh` (profile `podcast`).
+        // `scripts/build-ffmpeg.sh` (one music-superset build for both apps).
         .binaryTarget(name: "CFFmpeg", path: "Frameworks/FFmpeg.xcframework"),
         .target(
             name: "CStreamDecode",
