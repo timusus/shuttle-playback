@@ -45,7 +45,7 @@ final class LeadingBytesTests: XCTestCase {
         }
         var seeks: [(TimeInterval, [Float])] = []
         for fraction in [1.0 / 3, 2.0 / 3] {
-            let landed = try decoder.seek(toSeconds: format.duration * fraction)
+            let landed = try decoder.seek(toSeconds: try XCTUnwrap(format.duration) * fraction)
             var window: [Float] = []
             while window.count < 4096 * format.channelCount, let chunk = decoder.nextChunk() { window += chunk }
             seeks.append((landed, Array(window.prefix(4096 * format.channelCount))))
@@ -72,7 +72,7 @@ final class LeadingBytesTests: XCTestCase {
         let got = try run(tmp, budget: budget)
         XCTAssertEqual(got.format.sampleRate, bare.format.sampleRate, label)
         XCTAssertEqual(got.format.channelCount, bare.format.channelCount, label)
-        XCTAssertEqual(got.format.duration, bare.format.duration, accuracy: 0.05, "\(label): duration")
+        XCTAssertEqual(try XCTUnwrap(got.format.duration), try XCTUnwrap(bare.format.duration), accuracy: 0.05, "\(label): duration")
         XCTAssertEqual(got.pcm, bare.pcm, "\(label): PCM differs from the bare file's")
         XCTAssertLessThanOrEqual(got.bytesBeforeFirstAudio, maxBytesBeforeAudio,
                                  "\(label): \(got.bytesBeforeFirstAudio) bytes read before the first audio")
@@ -107,7 +107,7 @@ final class LeadingBytesTests: XCTestCase {
     /// Under the default 64 KiB budget a 100 kB prefix is not recovered from (80 kB is: see
     /// garbage_prefix_80k.mp3). Pinned: this is the behaviour wanted, and it fails today.
     func testA100kBGarbagePrefixUnderTheDefaultProbeBudget() throws {
-        XCTExpectFailure("a garbage prefix beyond the default probe budget fails to open")
+        XCTExpectFailure("#24: a garbage prefix beyond the default probe budget fails to open")
         try check(prefix: garbage(100_000), label: "100 kB garbage, default probe",
                   maxBytesBeforeAudio: 100_000 + 128 * 1024)
     }

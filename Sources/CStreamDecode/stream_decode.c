@@ -1008,8 +1008,9 @@ static const uint32_t kMP3SameStreamMask = 0xFFFEFCC0u;
  * after the first are spf * bitrate / (8 * rate) bytes long on average and padding keeps each
  * within one byte of that, so the offset from the end of the first frame, divided and rounded, counts them exactly
  * (the first frame is measured, not assumed, because it is the one an encoder cuts short). A
- * stream is constant-bitrate when its Info frame says so, or when it has no tag frame, every
- * estimate this decoder makes already assumes it and the landed frame is the first one's twin.
+ * stream is constant-bitrate when its Info frame says so, or when it has no tag frame, the frames
+ * in the prologue (at least three) are all the first one's twins (`mp3_untagged_cbr`) and the
+ * landed frame is too.
  * A VBR stream has no such relation and keeps the demuxer's estimate.
  */
 static int64_t mp3_exact_dts(const StreamDecoder *d, const AVPacket *pkt) {
