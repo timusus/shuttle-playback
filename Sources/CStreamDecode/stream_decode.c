@@ -920,6 +920,91 @@ static int64_t mp3_exact_dts(const StreamDecoder *d, const AVPacket *pkt) {
                                            (AVRational){ 1, d->sample_rate }, d->time_base);
 }
 
+/* What a Layer III frame header says about the frame. */
+typedef struct {
+    int spf, bitrate, sample_rate, side_info_bytes, lsf;
+    int bytes;   /* the whole frame, padding included */
+} MP3Frame;
+
+static int mp3_frame_of(uint32_t h, MP3Frame *f) {
+    const uint8_t p[4] = { (uint8_t)(h >> 24), (uint8_t)(h >> 16), (uint8_t)(h >> 8), (uint8_t)h };
+    if (((h >> 17) & 3) != 1) return 0;   /* Layer III only: the one with a bit reservoir */
+    if (!mp3_parse_header(p, &f->spf, &f->bitrate, &f->sample_rate, &f->side_info_bytes)) return 0;
+    f->lsf = ((h >> 19) & 3) != 3;
+    f->bytes = (int)((int64_t)f->spf / 8 * f->bitrate / f->sample_rate) + (int)((h >> 9) & 1);
+    return 1;
+}
+
+/* The header of the frames after the first in a constant-bitrate Layer III stream, 0 when that is
+ * not known. With an Info frame the first audio frame may be a short one at another bitrate, so the
+ * second frame is read from the prologue; with no tag frame only the first frame's twins are trusted
+ * (as in `mp3_exact_dts`, which this agrees with on every frame it accepts). */
+static uint32_t mp3_cbr_header(const StreamDecoder *d) {
+    MP3Frame f;
+    if (!d->mp3_header_ok || d->mp3_tag == MP3_TAG_VBR || !mp3_frame_of(d->mp3_header, &f)) return 0;
+    if (d->mp3_tag == MP3_TAG_NONE) return d->cb.size(d->opaque) < 0 ? 0 : d->mp3_header;
+    int64_t second = d->first_pkt_pos + d->first_pkt_size;
+    if (second < 0 || second + 4 > d->prologue_len) return 0;
+    uint32_t h = read_be(d->prologue + second, 4);
+    uint32_t mask = kMP3SameStreamMask & ~0xF000u;
+    return (h & mask) == (d->mp3_header & mask) && mp3_frame_of(h, &f) ? h : 0;
+}
+
+/*
+ * The frame `ts` (stream time base) falls in, in a constant-bitrate Layer III stream, found by
+ * reading the few bytes where it has to be: `*pos` and `*dts` are its byte position and exact time,
+ * or `*pos` is -1 when this cannot say (the caller seeks by estimate instead). Returns
+ * STREAM_DECODE_OK, or the status of a cancel or an interruption.
+ *
+ * Frame k starts within a byte or two of `second + (k - 1) * spf * bitrate / (8 * rate)`, which is
+ * the relation `mp3_exact_dts` counts frames by. mp3_seek finds a frame near a byte estimate too,
+ * but first rewinds 4096 bytes before it (mp3_sync's SEEK_WINDOW) and reads them: on a stream still
+ * downloading, a far seek restarts the download there and waits for all of them, a quarter of a
+ * second at twice a 64 kbps bitrate, before the first byte it needs. This reads from the frame. A
+ * header there, the next frame's header after it, and the count agreeing is the frame.
+ */
+static int mp3_cbr_frame(StreamDecoder *d, int64_t ts, int64_t *pos, int64_t *dts) {
+    *pos = -1;
+    MP3Frame f;
+    uint32_t h = mp3_cbr_header(d);
+    if (!h || !mp3_frame_of(h, &f) || d->first_pkt_dts == AV_NOPTS_VALUE || d->first_pkt_pos < 0) {
+        return STREAM_DECODE_OK;
+    }
+    int64_t samples = av_rescale_q(ts - d->first_pkt_dts, d->time_base, (AVRational){ 1, d->sample_rate });
+    int64_t index = samples / d->mp3_spf;
+    if (index < 1) return STREAM_DECODE_OK;
+
+    enum { kSlack = 4 };
+    uint8_t buf[2 * kSlack + 1441 + 1 + 4];   /* the largest Layer III frame, and the next header */
+    int need = 2 * kSlack + f.bytes + 1 + 4;
+    if (need > (int)sizeof(buf)) return STREAM_DECODE_OK;
+    int64_t second = d->first_pkt_pos + d->first_pkt_size;
+    double frame_bytes = (double)f.spf * f.bitrate / (8.0 * f.sample_rate);
+    int64_t lo = second + llround((double)(index - 1) * frame_bytes) - kSlack;
+    if (lo < second) lo = second;
+
+    int got = avio_seek(d->fmt->pb, lo, SEEK_SET) < 0 ? -1 : avio_read(d->fmt->pb, buf, need);
+    if (got < need) {
+        if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+        if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+        avio_clear_latched_error(d);
+        return STREAM_DECODE_OK;
+    }
+    for (int off = 0; off <= 2 * kSlack; off++) {
+        uint32_t here = read_be(buf + off, 4);
+        MP3Frame g;
+        if ((here & kMP3SameStreamMask) != (h & kMP3SameStreamMask) || !mp3_frame_of(here, &g)) continue;
+        if (off + g.bytes + 4 > got) continue;
+        if ((read_be(buf + off + g.bytes, 4) & kMP3SameStreamMask) != (h & kMP3SameStreamMask)) continue;
+        if (1 + llround((double)(lo + off - second) / frame_bytes) != index) continue;
+        *pos = lo + off;
+        *dts = d->first_pkt_dts + av_rescale_q(index * d->mp3_spf, (AVRational){ 1, d->sample_rate },
+                                               d->time_base);
+        return STREAM_DECODE_OK;
+    }
+    return STREAM_DECODE_OK;
+}
+
 /* Bytes one `avformat_seek_file` may read before it is judged to be walking the file. Two AVIO
  * refills: enough for a mov index landing or an mp3 TOC landing, and small enough that the walk it
  * exists to stop is cut off after a fraction of a second of audio rather than the 12 MB a single
@@ -1043,10 +1128,31 @@ static const int kSeekPlaced = 1000;
  * HE-AAC's SBR and PS headers come every so many frames, not in each, and a codec opened mid-stream
  * decodes without them until the next one arrives. An HE-AAC v2 stream from Apple's encoder decoded
  * bit-identically to an unbroken run only after more than 65536 samples at the output rate (98304
- * were enough); 131072, about 3 s, leaves a margin for an encoder that repeats them less often. */
+ * were enough); 131072, about 3 s, leaves a margin for an encoder that repeats them less often.
+ *
+ * A constant-bitrate Layer III stream gets what its reservoir can reach and no more. Every byte of
+ * pre-roll is a byte a far seek on a stream still downloading waits for before it plays: 16384
+ * samples is 2976 bytes at 64 kbps, which held a seek past the fetched bytes silent 186 ms longer
+ * at twice the bitrate. A frame's main data starts at most 511 bytes (255 in MPEG-2 and 2.5) before
+ * its own, in the frames before it, and the frame before the target has to have decoded exactly
+ * for its overlap to be right. So: the frames those bytes can span, the one before the target, and
+ * one of margin; 5 frames at 64 kbps. With the frame placed exactly (`mp3_cbr_frame`), one fewer
+ * still decoded every conformance fixture bit-identically to an unbroken run from the target on,
+ * and two fewer did not. */
 static int64_t seek_preroll_samples(const StreamDecoder *d) {
     if (d->sbr) return 131072;
-    return d->dec->codec_id == AV_CODEC_ID_OPUS ? 32768 : 16384;
+    if (d->dec->codec_id == AV_CODEC_ID_OPUS) return 32768;
+    uint32_t h = d->dec->codec_id == AV_CODEC_ID_MP3 ? mp3_cbr_header(d) : 0;
+    MP3Frame f;
+    if (h && mp3_frame_of(h, &f)) {
+        int main_bytes = f.bytes - 4 - f.side_info_bytes - (((h >> 16) & 1) ? 0 : 2);
+        int reservoir = f.lsf ? 255 : 511;
+        if (main_bytes > 0) {
+            int64_t samples = (int64_t)((reservoir + main_bytes - 1) / main_bytes + 2) * f.spf;
+            if (samples < 16384) return samples;
+        }
+    }
+    return 16384;
 }
 
 /* The furthest before its target an exact MP3 anchor is used from: about 1.5 s at 44.1 kHz. */
@@ -1273,6 +1379,12 @@ static int demux_seek(StreamDecoder *decoder, double seconds, int64_t target, do
          * long decode to it; the estimate is cheaper. */
         if (target > decoder->start_time && !mp3_anchor_in_reach(decoder, target - anchor_dts)) {
             anchor_pos = -1;
+        }
+        /* Further than that, a constant-bitrate stream's frame is found where it has to be, which
+         * is exact and reads nothing before it (`mp3_cbr_frame`). */
+        if (anchor_pos < 0) {
+            int found = mp3_cbr_frame(decoder, target, &anchor_pos, &anchor_dts);
+            if (found != STREAM_DECODE_OK) return found;
         }
     }
     if (anchor_pos >= 0 && anchor_dts != AV_NOPTS_VALUE) {
