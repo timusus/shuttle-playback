@@ -17,6 +17,11 @@ from the download frontier when the host answers with the same range and total, 
 restarts at the decoder's position. A 30 s link window covers connection attempts that nothing
 answers. The host only detects: it notices starvation and resumes playing.
 
+A new network path (Wi-Fi gone to cellular, the link back after none) ends the transaction in flight
+at once instead of waiting out the 6 s (#31). It is one more failure of this layer, not a second
+recovery path: `DownloadRetry` decides on it from the same budget, and the retry resumes from the
+frontier as after any drop. The signal is one `NWPathMonitor` shared by every source.
+
 ## Alternatives rejected
 
 - Keep a second recovery rule in the host: it raced the source's retry.

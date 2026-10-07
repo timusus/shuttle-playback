@@ -74,6 +74,11 @@ file already there.
 
 A read fails with `StreamByteReaderError.transport` when retries and the 30 s link window are spent.
 
+When the device's network path changes to another usable one (Wi-Fi to cellular, back online after
+none), the source reopens a transaction in flight from the download frontier at once instead of
+waiting out the 6 s idle timeout (`idleTimeoutSeconds`). This is automatic, through one shared
+`NWPathMonitor`, and spends the same retry budget as any other failure; there is nothing to call.
+
 A read at exactly the end before the length is known returns 0, as media3's `DefaultHttpDataSource`
 does: the host's `416` with `Content-Range: bytes */N` (or a range clamped to the last byte of `N`) at
 position `N` is a zero-length open, and `totalLength` becomes `N`. Any other `416` is a refusal,

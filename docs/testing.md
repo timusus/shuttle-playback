@@ -93,7 +93,9 @@ ours are listed last.
 
 Scripted per-request behaviour (`FakeDataSet`) is the server's per-request knobs and `bodies`,
 covered by `GrowingFileByteSourceTests` and `LoopbackFaultKnobTests`; there is no separate scripting
-layer. Timeouts and idle checks have their own tests in `GrowingFileByteSourceTests`.
+layer. Timeouts and idle checks have their own tests in `GrowingFileByteSourceTests`, and so do
+network path changes: each test hands the source its own `GrowingFilePathMonitor` and feeds it paths
+with `update(_:)`, so the machine's real network never reaches a test.
 
 ## The conformance suite
 

@@ -136,6 +136,11 @@ Notes:
 - **The decoder blocks while it waits for bytes.** That is how buffering shows up. A body that goes quiet
   is retried by the source, and a read fails with `StreamByteReaderError.transport` only when
   retries and the 30 s link window are spent. See [Recovery and retry](architecture.md#recovery-and-retry).
+- **Do not reopen on a network change yourself.** The source watches the network path and reopens
+  its download from the frontier when Wi-Fi drops to cellular or the link comes back. A host that also
+  re-seeks or recreates the source on `NWPathMonitor` races it (ADR-0004).
+- **A seek to exactly the end reads zero bytes**, even before the length is known: the host's `416`
+  with `bytes */N` is taken as the end, as media3 does.
 
 ## Seek
 

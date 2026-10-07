@@ -351,6 +351,8 @@ stateDiagram-v2
     Requesting --> Failed: non-audio page from the original URL
     Streaming --> Backoff: connection dropped
     Streaming --> Backoff: body silent for 6 s
+    Streaming --> Backoff: new network path
+    Requesting --> Backoff: new network path
     Streaming --> Backoff: body ended short
     Streaming --> Complete: body whole
     Backoff --> Resume: file holds the decoder position
@@ -369,6 +371,14 @@ stateDiagram-v2
   waits 8 s. Neither waits past the end of the link window. The session's own timeout is a backstop.
 - **Idle body.** Once a response has arrived, a body that goes 6 s without a byte is ended by the source
   and handled like a drop. With URLSession's default, a silent link held the read for 60 s.
+- **New network path.** When a usable path replaces another (Wi-Fi gone to cellular, the link back
+  after none), a transaction still waiting for its response or its body is ended at once, as a drop,
+  rather than waiting out the 6 s on a connection the old path may never finish. It is the same
+  failure as any other: the response's answered state decides whether it spends an attempt, and the
+  retry resumes from the frontier after the usual backoff. The path the monitor starts with, the
+  same path reported again and a path that cannot be used change nothing, and a transaction whose
+  body is all in is left alone. One `NWPathMonitor` (`GrowingFilePathMonitor.shared`) serves every
+  source; tests feed their own monitor.
 - **Resume.** A retry whose file holds the decoder's position asks for `Range: bytes=<frontier>-`,
   with `If-Range` when the host gave a strong ETag. The bytes append to the same file under the same
   generation, so nothing already on disk is fetched again. The resume is accepted only if the host
