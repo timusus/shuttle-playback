@@ -15,13 +15,6 @@ enum KnownIssues {
     }
 
     static let rules: [Rule] = [
-        // A resume after an interrupt seeks the same decoder; where MP3 seeks land early the
-        // stitched decode repeats audio (more frames, PCM shifted after the warm-up).
-        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/3 (MP3 seek lands before the reported time; a resume repeats audio)",
-             fixtures: ["bear-vbr-vbri-header.mp3", "bear-vbr-vbri-header-truncated-toc.mp3", "tone.mp3",
-                        "lame_info_delay_padding.mp3", "test-cbr-info-header-pcut-frame.mp3", "id3v1_footer.mp3"],
-             kinds: [.frameCount, .resumePCM],
-             applies: { $0.contains(.ioErrorOncePerPosition) }),
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/4 (HE-AAC seek after an interrupted read lands late)",
              fixtures: ["he_aac_v1.m4a", "he_aac_v2.m4a"],
              kinds: [.outcome, .seekLanding, .seekPCM],
@@ -30,9 +23,11 @@ enum KnownIssues {
              fixtures: ["garbage_trailing_4k.mp3"],
              kinds: [.seekLanding, .seekPCM],
              applies: { $0.contains(.ioErrorOncePerPosition) }),
+        // An Ogg resume is an ordinary seek (no index puts it back on a packet), so landing early
+        // repeats audio: more frames, or an outcome failure where it lands late instead.
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/6 (Ogg seek with totalLength nil lands early)",
              fixtures: ["opus_stereo.opus", "vorbis_stereo.ogg"],
-             kinds: [.seekLanding, .outcome],
+             kinds: [.seekLanding, .outcome, .frameCount],
              applies: { $0.contains(.unknownLength) }),
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/7 (AAC resume differs in the last ~800 frames)",
              fixtures: ["aac_edit_list.m4a", "tone_moov_first.m4a", "tone_moov_last.m4a"],

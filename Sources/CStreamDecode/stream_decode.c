@@ -77,6 +77,18 @@ struct StreamDecoder {
      * `base_offset`) and the duration those bytes cover. */
     int64_t      media_bytes;
     double       media_duration;
+
+    /* What a resume needs (see `resume_after_last_packet`): the frame the next read returns, the
+     * last packet the codec was given, and whether the last read stopped on an interruption. */
+    int64_t      position_frames;
+    int64_t      last_pkt_pos;
+    int64_t      last_pkt_dts;
+    int          has_last_pkt;
+    /* The packet `held` started as, while the codec has had nothing since the open. */
+    int64_t      first_pkt_pos;
+    int64_t      first_pkt_dts;
+    int          has_first_pkt;
+    int          resumable;
 };
 
 /* ── AVIO glue ───────────────────────────────────────────────────────────── */
@@ -326,10 +338,21 @@ static int pump(StreamDecoder *d) {
             }
             return STREAM_DECODE_ERR_IO;
         }
+        /* A read that was cut short still hands back what it had: `av_get_packet` returns the
+         * bytes it got as a truncated packet. The codec would reject it and its audio would be
+         * gone, so it is dropped here and read again whole after the resume. */
+        if (d->cancelled || d->interrupted) {
+            av_packet_unref(d->pkt);
+            return d->cancelled ? STREAM_DECODE_ERR_CANCELLED : STREAM_DECODE_ERR_INTERRUPTED;
+        }
         if (d->pkt->stream_index != d->audio_idx) {
             av_packet_unref(d->pkt);
             continue;
         }
+        d->last_pkt_pos = d->pkt->pos;
+        d->last_pkt_dts = d->pkt->dts;
+        d->has_last_pkt = d->pkt->pos >= 0 && d->pkt->dts != AV_NOPTS_VALUE;
+        d->has_first_pkt = 0;
         int sent = avcodec_send_packet(d->dec, d->pkt);
         av_packet_unref(d->pkt);
         /* A packet the decoder rejects is a corrupt frame, not the end of the episode: skip it and
@@ -544,6 +567,9 @@ static int skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *opti
     int64_t end = d->held->pos + d->held->size;
     if (d->held->pos < 0 || d->held->size <= kMP3MaxFrameBytes || end <= kMP3JunkScanBytes) {
         d->has_held = 1;
+        d->first_pkt_pos = d->held->pos;
+        d->first_pkt_dts = d->held->dts;
+        d->has_first_pkt = d->held->pos >= 0 && d->held->dts != AV_NOPTS_VALUE;
         return STREAM_DECODE_OK;
     }
     /* The parser hands the junk over glued to the first frame, so the frame is somewhere in the
@@ -571,9 +597,68 @@ static void after_seek_reset(StreamDecoder *d) {
     pending_reset(d);
     av_packet_unref(d->held);
     d->has_held = 0;
+    d->has_last_pkt = 0;
+    d->has_first_pkt = 0;
     d->flushing = 0;
     d->ended = 0;
     d->last_frame_pts = AV_NOPTS_VALUE;
+}
+
+/*
+ * Carry on after an interrupted read, as if it had never happened (issues #3 and #7).
+ *
+ * A seek to the frame the next read would have returned is a resume, and an ordinary seek is the
+ * wrong tool for it: it lands on a packet boundary at or before the target and flushes the codec,
+ * so the stitched decode repeats or drops audio, and an MP3 loses its bit reservoir. The codec and
+ * the resampler still hold exactly the state the last packet left. So the demuxer alone is put
+ * back on that packet (by its own index, which an exact timestamp and AVSEEK_FLAG_ANY make
+ * precise), the packet is read again and dropped, and the next one is the one the interruption
+ * cost. When the codec has had nothing yet (interrupted straight after the open), the packet the
+ * open read is found the same way and kept for the codec instead. Anything that does not find
+ * its packet again returns an error and the caller seeks normally; an interruption or cancel is
+ * returned as itself.
+ */
+static int resume_after_last_packet(StreamDecoder *d) {
+    AVStream *st = d->fmt->streams[d->audio_idx];
+    int keep = !d->has_last_pkt;
+    int64_t pos = keep ? d->first_pkt_pos : d->last_pkt_pos;
+    int64_t dts = keep ? d->first_pkt_dts : d->last_pkt_dts;
+
+    /* Only an index can put the demuxer back on one packet. The generic one (mp3) holds the
+     * packets already read but may have thinned them, so the entry is added back; a container's
+     * own index (mov) has the sample already and must not have it rewritten. A demuxer with
+     * neither (ogg) seeks by bisection, which lands on a page, not a packet. */
+    int at = av_index_search_timestamp(st, dts, AVSEEK_FLAG_ANY);
+    const AVIndexEntry *entry = at >= 0 ? avformat_index_get_entry(st, at) : NULL;
+    if (!entry || entry->timestamp != dts) {
+        if (!(d->fmt->iformat->flags & AVFMT_GENERIC_INDEX)) return STREAM_DECODE_ERR_SEEK;
+        av_add_index_entry(st, pos, dts, 0, 0, AVINDEX_KEYFRAME);
+    }
+    /* FAST_SEEK sends mp3 to its TOC or a bitrate guess; without it, an mp3 seeks by the index. */
+    int flags = d->fmt->flags;
+    d->fmt->flags &= ~AVFMT_FLAG_FAST_SEEK;
+    int rc = avformat_seek_file(d->fmt, d->audio_idx, dts, dts, dts, AVSEEK_FLAG_ANY);
+    d->fmt->flags = flags;
+
+    for (int i = 0; rc >= 0 && i < 64; i++) {
+        rc = av_read_frame(d->fmt, d->pkt);
+        if (rc < 0) break;
+        int ours = d->pkt->stream_index == d->audio_idx;
+        int found = ours && d->pkt->pos == pos && d->pkt->dts == dts;
+        int past = ours && d->pkt->dts != AV_NOPTS_VALUE && d->pkt->dts > dts;
+        if (found && keep) {
+            av_packet_unref(d->held);
+            av_packet_move_ref(d->held, d->pkt);
+            d->has_held = 1;
+            return STREAM_DECODE_OK;
+        }
+        av_packet_unref(d->pkt);
+        if (found) return STREAM_DECODE_OK;
+        if (past) break;
+    }
+    if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+    if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+    return STREAM_DECODE_ERR_SEEK;
 }
 
 /* Whether the container gives enough to place a second in the byte stream by linear estimate. */
@@ -598,8 +683,18 @@ static void avio_clear_latched_error(StreamDecoder *d) {
     d->avio->eof_reached = 0;
 }
 
+static int seek_to(StreamDecoder *decoder, double seconds, double *landed_seconds);
+
 int stream_decoder_seek(StreamDecoder *decoder, double seconds, double *landed_seconds) {
     if (!decoder || !landed_seconds) return STREAM_DECODE_ERR_ARGS;
+    int status = seek_to(decoder, seconds, landed_seconds);
+    if (status == STREAM_DECODE_OK || status == STREAM_DECODE_EOF) {
+        decoder->position_frames = llround(*landed_seconds * decoder->sample_rate);
+    }
+    return status;
+}
+
+static int seek_to(StreamDecoder *decoder, double seconds, double *landed_seconds) {
     *landed_seconds = seconds;
     if (decoder->cancelled) return STREAM_DECODE_ERR_CANCELLED;
     /* The seek IS the answer to the interruption: clearing it here, before anything reads, is what
@@ -607,6 +702,20 @@ int stream_decoder_seek(StreamDecoder *decoder, double seconds, double *landed_s
     decoder->interrupted = 0;
     avio_clear_latched_error(decoder);
     if (seconds < 0) seconds = 0;
+
+    /* A seek to exactly where an interrupted read stopped is a resume. */
+    int resumable = decoder->resumable;
+    decoder->resumable = 0;
+    if (resumable && (decoder->has_last_pkt || decoder->has_first_pkt)
+        && llround(seconds * decoder->sample_rate) == decoder->position_frames) {
+        int resumed = resume_after_last_packet(decoder);
+        if (resumed == STREAM_DECODE_OK || resumed == STREAM_DECODE_ERR_CANCELLED) return resumed;
+        if (resumed == STREAM_DECODE_ERR_INTERRUPTED) {
+            decoder->resumable = 1;
+            return resumed;
+        }
+        avio_clear_latched_error(decoder);
+    }
 
     double tb = av_q2d(decoder->time_base);
     int64_t target = decoder->start_time + (int64_t)llround(seconds / (tb > 0 ? tb : 1.0));
@@ -733,6 +842,8 @@ int stream_decoder_read(StreamDecoder *decoder, float *out, int max_frames, int 
     }
 
     *frames = written;
+    decoder->position_frames += written;
+    if (status == STREAM_DECODE_ERR_INTERRUPTED) decoder->resumable = 1;
     /* Frames in hand beat the reason the loop stopped: the caller plays these and asks again, and
      * the next call reports the same end for the same reason. */
     return written > 0 ? STREAM_DECODE_OK : status;
