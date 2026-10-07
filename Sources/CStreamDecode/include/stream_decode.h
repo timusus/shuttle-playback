@@ -1,24 +1,15 @@
 /*
  * stream_decode.h — the PLAYBACK decoder, for iOS.
  *
- * A streaming sibling of `CSpineDecode/spine_decode.c`. Same libraries, same AVIO trick, but the
- * two have opposite jobs and must not be merged:
- *
- *   - `spine_decode.c` takes a whole span in memory and hands back 8 kHz mono float32, because the
- *     ad-skip matcher's PCM is defined by `segment-detection/spine/audio.py` and any other rate
- *     would not be that PCM.
- *   - this takes a *byte reader* — a file, or an HTTP range transaction that may block for a
- *     second — and hands back the source's OWN rate and channel count, interleaved float32,
- *     a chunk at a time, seekably, cancellably. That is what a player schedules; resampling it
- *     would be a second, lossy, pointless conversion.
- *
- * Plan of record: `mobile/ios/docs/plans/2026-09-09-streaming-audio-pipeline.md` §0 (Phase 1 is
- * the whole player), §1 (the picture), §3 (the `moov`-after-`mdat` bandwidth trap), §5 (position
- * is media time; after a seek it comes from the first decoded packet's pts), §6 Phase 1.
+ * It takes a *byte reader* — a file, or an HTTP range transaction that may block for a second —
+ * and hands back the source's OWN rate and channel count, interleaved float32, a chunk at a time,
+ * seekably, cancellably. That is what a player schedules; resampling it would be a second, lossy,
+ * pointless conversion. Position is media time: after a seek it comes from the decoded frames'
+ * timestamps, not from the request.
  *
  * THE SEEK CALLBACK IS NOT OPTIONAL. With a read callback alone `pb->seekable` is 0, and
  * libavformat's `mov` demuxer then read-discards the entire `mdat` to reach a trailing `moov`
- * (`aviobuf.c` forward-seek path, `mov.c` retry gated on AVIO_SEEKABLE_NORMAL). On a 60 MB episode
+ * (`aviobuf.c` forward-seek path, `mov.c` retry gated on AVIO_SEEKABLE_NORMAL). On a 60 MB file
  * that is 60 MB of cellular data to learn where the audio starts. `StreamDecodeTests` measures it.
  *
  * Threading: one decoder is driven by exactly one thread. `stream_decoder_cancel` is the single
@@ -87,9 +78,9 @@ typedef struct StreamDecoder StreamDecoder;
  * Open `callbacks` as an audio stream. Returns a handle on success and writes `info`; returns NULL
  * on failure and writes the reason to `status`.
  *
- * A failed open is ALWAYS a failure, never silence: the player above turns it into the `AVPlayer`
- * fallback with a counter (plan §1), and a decoder that opened nothing but reported success would
- * present as an episode that plays no audio and never ends.
+ * A failed open is ALWAYS a failure, never silence: a caller can fall back to another player on
+ * it, and a decoder that opened nothing but reported success would present as a stream that plays
+ * no audio and never ends.
  */
 StreamDecoder *stream_decoder_open(const StreamDecodeCallbacks *callbacks,
                                    void *opaque,
@@ -97,7 +88,7 @@ StreamDecoder *stream_decoder_open(const StreamDecodeCallbacks *callbacks,
                                    int *status);
 
 /** The probe budget `stream_decoder_open` uses: 64 KiB and 1 s of analysis (stream_decode.c says
- *  why a single-stream podcast container needs no more). */
+ *  why a single-stream audio container needs no more). */
 #define STREAM_DECODE_DEFAULT_PROBE_BYTES 65536
 #define STREAM_DECODE_DEFAULT_MAX_ANALYZE_US 1000000
 
@@ -122,11 +113,12 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
 /**
  * Seek to `seconds` and report where the stream actually landed in `landed_seconds`.
  *
- * The landed value is the `best_effort_timestamp` of the first frame decoded after the seek, in
- * seconds — NOT the number that was asked for (plan §5.1). MP3 without a TOC lands on a frame
- * boundary near a bitrate estimate; MP4 lands on the sample table's keyframe. The caller's
- * position must follow the audio, not the request, or the scrubber lies and every ad-skip seek is
- * computed against a time nobody played.
+ * The landed value is the time of the first sample the next `read` returns, in seconds, taken from
+ * the decoded frames' timestamps — NOT the number that was asked for. It is the requested sample
+ * wherever the stream's timestamps allow; a VBR MP3 placed by its Xing TOC or bitrate estimate
+ * lands where that estimate says, and a seek past the end lands where the audio ends. The caller's
+ * position must follow the audio, not the request, or the scrubber lies and every seek computed
+ * from the position is against a time nobody played.
  *
  * The frame decoded to find that timestamp is held and returned by the next `read`, so no audio is
  * lost to the probe. Returns a `StreamDecodeStatus`.

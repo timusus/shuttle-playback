@@ -3,10 +3,9 @@ import Foundation
 /// **Blocking, seekable byte access for the streaming decoder.**
 ///
 /// The playback decoder drives FFmpeg through a custom `AVIOContext` whose read and seek
-/// callbacks land here (plan: `mobile/ios/docs/plans/2026-09-09-streaming-audio-pipeline.md`, §1
-/// and §5). Two implementations exist: a file-backed reader for downloaded episodes and an HTTP
-/// range reader in the app that fetches, tees the raw bytes to the ad-skip spine, and discards.
-/// Nothing above this protocol knows which one it has.
+/// callbacks land here. ``FileByteReader`` reads a local file; `GrowingFileByteSource` in
+/// `PlaybackStreaming` reads an HTTP(S) download as it grows; an app can bring its own. Nothing
+/// above this protocol knows which one it has.
 ///
 /// Every call runs on the decoder's own thread and may block: `read` waits for bytes to arrive,
 /// `seek` may cancel and reopen a transport. `cancel()` is the one call made from another thread;

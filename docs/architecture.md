@@ -208,7 +208,7 @@ stateDiagram-v2
 
 `nextChunk()` returning nil is not by itself the end of the stream. `endReason` says which of
 `eof`, `failure`, `cancelled` or `interrupted` it was, and a caller must treat them differently.
-Treating a network failure as the end of the stream would cut an episode short without telling the
+Treating a network failure as the end of the stream would cut playback short without telling the
 user, which is why the reason is kept.
 
 An interrupted decode can resume without audible damage. If the next seek is to exactly the frame the

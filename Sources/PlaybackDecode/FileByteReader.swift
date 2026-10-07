@@ -1,6 +1,6 @@
 import Foundation
 
-/// A ``StreamByteReader`` over a local file: downloaded episodes, and every test in this package.
+/// A ``StreamByteReader`` over a local file: downloaded media, and every test in this package.
 ///
 /// `pread` rather than `FileHandle` because the decoder's seek callback and its read callback are
 /// the same conversation with the same descriptor — an explicit offset means there is no shared

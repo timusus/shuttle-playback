@@ -1,7 +1,7 @@
 import Foundation
 
 /// **What the growing file looks like right now**: the only thing outside the byte source that
-/// may read it. The controller's buffering and stall rules, and any reader a host puts
+/// may read it. A host player's buffering and stall rules, and any reader a host puts
 /// beside the player through ``GrowingFileListener``, read this and never the source itself.
 ///
 /// The file holds `[base, frontier)` of the resource, from ONE transaction: a restart is a new

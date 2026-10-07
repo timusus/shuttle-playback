@@ -56,7 +56,7 @@ The output is Float32 at the file's own sample rate. Nothing is resampled, so an
 or other renderer should run at `format.sampleRate`.
 
 Always check `endReason` after `nextChunk()` returns nil. A nil from a network failure is not the end
-of the episode.
+of the stream.
 
 ## Play a URL while it downloads
 

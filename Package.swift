@@ -50,7 +50,7 @@ let package = Package(
             resources: [.copy("Fixtures")]
         ),
         // The fixtures are committed (three 20 s tones, well under 250 KB each): a decoder that
-        // has to be handed a podcast before it can be tested is a decoder nobody tests.
+        // has to be handed a large real-world file before it can be tested is a decoder nobody tests.
         .testTarget(
             name: "PlaybackDecodeTests",
             dependencies: ["PlaybackDecode", "CStreamDecode"],

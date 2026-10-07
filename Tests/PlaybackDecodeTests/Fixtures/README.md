@@ -1,8 +1,7 @@
 # StreamDecodeTests fixtures
 
-Three encodings of the same 20 s signal, 161 KB each, **committed** (unlike
-`SpineNativeTests/Fixtures`, which is a 90 MB corpus episode and is gitignored). A decoder that
-needs a podcast handed to it before it can be tested is a decoder nobody runs the tests for.
+Three encodings of the same 20 s signal, 161 KB each, **committed**. A decoder that needs a large
+real-world file handed to it before it can be tested is a decoder nobody runs the tests for.
 
 The signal is a sum of two sines — 440 Hz left, 660 Hz right — under a 0.05 Hz amplitude sweep, so
 no two seconds of it look alike. That is what makes the parity tests' cross-correlation alignment
@@ -23,7 +22,7 @@ ffmpeg -y -i tone.wav -c:a libmp3lame -b:a 64k -write_xing 1 \
 # MP4 with `moov` BEFORE `mdat`: the streaming-friendly layout.
 ffmpeg -y -i tone.wav -c:a aac -b:a 64k -movflags +faststart tone_moov_first.m4a
 
-# MP4 with `moov` AFTER `mdat` (ffmpeg's default). This is the plan's §3 bandwidth trap: without a
+# MP4 with `moov` AFTER `mdat` (ffmpeg's default). This is the trailing-moov bandwidth trap: without a
 # working AVIO seek callback FFmpeg read-discards the whole `mdat` to reach it.
 ffmpeg -y -i tone.wav -c:a aac -b:a 64k tone_moov_last.m4a
 

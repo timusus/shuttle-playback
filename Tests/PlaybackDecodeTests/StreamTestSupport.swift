@@ -26,7 +26,7 @@ enum Fixture {
 // MARK: - Readers used only by the tests
 
 /// Wraps a reader and records every byte and every seek, so the `moov`-after-`mdat` test can assert
-/// on bandwidth rather than on a decode that merely succeeded (plan §3).
+/// on bandwidth rather than on a decode that merely succeeded.
 final class CountingByteReader: StreamByteReader {
     private let inner: StreamByteReader
     private(set) var bytesRead: Int64 = 0
@@ -91,7 +91,7 @@ final class BlockingByteReader: StreamByteReader {
 }
 
 /// A file reader that stops delivering after `stallAfterBytes` and blocks there until it is
-/// interrupted or cancelled — a bounded response body whose host went quiet mid-episode.
+/// interrupted or cancelled — a bounded response body whose host went quiet mid-stream.
 ///
 /// The interrupt case is what this exists for: the decode has to come back out of that block, and
 /// the SAME decoder has to keep working afterwards, which a cancel could never demonstrate.
@@ -430,7 +430,7 @@ enum PCMComparison {
 // MARK: - Fixtures built at test time
 
 /// The big fixtures, generated rather than committed: a 14 MB MP3 and a 4 MB ID3 tag are not
-/// things to put in git, and what they measure — bandwidth on a REAL enclosure's shape — needs
+/// things to put in git, and what they measure — bandwidth on a REAL long file's shape — needs
 /// their real size to mean anything.
 enum GeneratedFixture {
 
@@ -440,8 +440,8 @@ enum GeneratedFixture {
         URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("shuttle-stream-fixtures")
     }
 
-    /// 30 minutes of 64 kbps CBR MP3 with **no Xing/Info header** — the shape of most podcast
-    /// enclosures, and the one with no table of contents to seek by. About 14 MB.
+    /// 30 minutes of 64 kbps CBR MP3 with **no Xing/Info header** — the shape of most long
+    /// spoken-word MP3s, and the one with no table of contents to seek by. About 14 MB.
     ///
     /// Cached between runs: `ffmpeg` takes five seconds and the bytes are deterministic.
     static func largeCBRMP3() throws -> URL {
@@ -487,7 +487,7 @@ enum GeneratedFixture {
     }
 
     /// `tone.mp3` behind a padding-only ID3v2 tag of `tagBytes`, standing in for the cover art a
-    /// real enclosure carries. The measured case is `darknet-diaries-ep179`: a 13 782 278-byte tag
+    /// real published MP3 carries. The measured case was a 108 MB MP3 with a 13 782 278-byte tag
     /// holding a 3000x3000 PNG, which `mp3_read_header` reads in full.
     static func mp3BehindID3Tag(bytes tagBytes: Int) throws -> URL {
         let source = try Data(contentsOf: try Fixture.url(Fixture.mp3))

@@ -7,12 +7,11 @@ import XCTest
     import CStreamDecode
 #endif
 
-/// The playback decoder's tests. Plan of record (in the Shuttle Podcasts repo):
-/// `mobile/ios/docs/plans/2026-09-09-streaming-audio-pipeline.md` §6 Phase 1.
+/// The playback decoder's tests.
 ///
 /// The two that matter most are the parity ones — the streamed decode has to sound like the
-/// `AVAssetReader` decode the app shipped — and `testMoovLastBandwidth`, which is the only place
-/// the §3 trap is measured rather than assumed.
+/// `AVAssetReader` decode of the same file — and `testMoovLastCostsOneSeekNotTheWholeFile`, the
+/// only place the trailing-`moov` bandwidth trap is measured rather than assumed.
 final class StreamDecodeTests: XCTestCase {
 
     private func skipUnlessAvailable() throws {
@@ -215,7 +214,7 @@ final class StreamDecodeTests: XCTestCase {
         }
     }
 
-    // MARK: - The §3 bandwidth trap
+    // MARK: - The trailing-moov bandwidth trap
 
     func testMoovLastCostsOneSeekNotTheWholeFile() throws {
         try skipUnlessAvailable()
@@ -235,11 +234,11 @@ final class StreamDecodeTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(frames, Int(format.sampleRate))
 
         /* Without a seek callback FFmpeg read-discards the entire `mdat` to reach the trailing
-         * `moov`: on a real 60 MB episode that is 60 MB of cellular data before a note is heard.
+         * `moov`: on a real 60 MB file that is 60 MB of cellular data before a note is heard.
          *
          * The bound is absolute bytes rather than a share of the file, because on a fixture this
          * small there is no share worth asserting: the 64 KiB probe budget alone is 40% of 161 KB,
-         * while on a 60 MB episode that same fixed cost is 0.1%. What these numbers pin down is
+         * while on a 60 MB file that same fixed cost is 0.1%. What these numbers pin down is
          * the SHAPE of the transfer — probe, one seek to the end, the moov, nothing else — and a
          * walked mdat blows through every one of them. */
         let probeBudget: Int64 = 64 * 1024      // stream_decode.c sets AVFormatContext.probesize
@@ -257,11 +256,11 @@ final class StreamDecodeTests: XCTestCase {
             + "\(counting.seekOffsets.count) seeks, \(afterOpen) of them in open()")
     }
 
-    // MARK: - The §4 bandwidth traps a real enclosure has
+    // MARK: - The bandwidth traps a real long MP3 has
 
     /// **A no-Xing CBR MP3 must cost a window to open and a window to seek in, not the file.**
     ///
-    /// Most podcast enclosures are exactly this: constant bitrate, no Xing/Info header, and so no
+    /// Most long spoken-word MP3s are exactly this: constant bitrate, no Xing/Info header, and so no
     /// table of contents. libavformat's generic seek has nothing to place a timestamp with, so it
     /// DECODES FORWARD FROM THE START until the timestamps reach the target — measured here before
     /// the fix at 12 MB for one seek to 25 minutes, on a file whose whole open cost 32 KiB.
@@ -347,7 +346,7 @@ final class StreamDecodeTests: XCTestCase {
     ///
     /// `mp3_read_header` parses every APIC frame, so a tag carrying cover art is READ in full
     /// before the demuxer has looked at a single audio frame — and `probesize` does not bound it,
-    /// because the tag is consumed before probing starts. Measured on `darknet-diaries-ep179`: a
+    /// because the tag is consumed before probing starts. Measured on a published 108 MB MP3: a
     /// 13 782 278-byte tag holding a 3000x3000 PNG, and `open()` cost 13.8 MB of cellular data
     /// before a note was heard.
     func testAHugeID3TagIsSteppedOverNotRead() throws {
@@ -428,9 +427,9 @@ final class StreamDecodeTests: XCTestCase {
         XCTAssertNotNil(decoder.nextChunk(), "the decoder produced nothing after an interrupted read")
     }
 
-    /// A seek that arrives while the episode is still opening interrupts the open. That has to
-    /// throw `.interrupted`, never `.failed`: the app answers `.failed` with its `AVPlayer`
-    /// fallback, as if the format were unsupported. Stalls in the ID3 probe (0), in libavformat's
+    /// A seek that arrives while the stream is still opening interrupts the open. That has to
+    /// throw `.interrupted`, never `.failed`: a caller answers `.failed` with its fallback
+    /// player, as if the format were unsupported. Stalls in the ID3 probe (0), in libavformat's
     /// first read (10, past the ID3 header) and, where the open reads that far, deeper in its probe.
     func testInterruptDuringOpenThrowsInterruptedNotFailed() throws {
         try skipUnlessAvailable()
@@ -468,7 +467,7 @@ final class StreamDecodeTests: XCTestCase {
 
     // MARK: - No Content-Length
 
-    /// A seek into a chunked body whose connection broke is NOT the end of the episode: libavformat
+    /// A seek into a chunked body whose connection broke is NOT the end of the stream: libavformat
     /// reports the broken read as end of file, and only the reader knows otherwise. (A seek past
     /// the real end of a length-less source is end of stream; the conformance suite's seek to the
     /// end under `unknownLength` holds that.)
@@ -484,7 +483,7 @@ final class StreamDecodeTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? StreamDecoderError, .failed(status: Int32(STREAM_DECODE_ERR_SEEK.rawValue)))
         }
-        XCTAssertNotEqual(decoder.endReason, .eof, "a truncated body read as the end of the episode")
+        XCTAssertNotEqual(decoder.endReason, .eof, "a truncated body read as the end of the stream")
     }
 
     func testUnknownLengthStillDecodesMP3() throws {

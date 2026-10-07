@@ -10,7 +10,7 @@ public struct StreamAudioFormat: Equatable {
     public let channelCount: Int
     /// From the container (`AVFormatContext.duration`: MP4's sample table, MP3's Xing TOC, or
     /// `Content-Length` ÷ bitrate). Zero when the container does not know, in which case the
-    /// caller falls back to feed metadata (plan §5.3).
+    /// caller falls back to whatever duration it has from elsewhere.
     public let duration: TimeInterval
     public let codec: String
     public let container: String
@@ -28,7 +28,7 @@ public struct StreamAudioFormat: Equatable {
 ///
 /// libavformat's own defaults are a 5 MB probe and 5 s of analysis, spent before the first frame
 /// plays; for a decoder whose bytes may be cellular data that is the wrong trade. ``default`` is the
-/// budget this decoder has always used (64 KiB, 1 s), which identifies a single-stream podcast
+/// budget this decoder has always used (64 KiB, 1 s), which identifies a single-stream audio
 /// container as well as the full probe does. An app whose files need more analysis passes a larger
 /// one; a value <= 0 falls back to the default on the C side.
 public struct StreamProbeBudget: Equatable, Sendable {
@@ -74,11 +74,9 @@ public enum StreamDecoderError: Error, Equatable, CustomStringConvertible {
 
 /// **The playback decoder: encoded bytes in, interleaved float32 out, a chunk at a time.**
 ///
-/// The streaming sibling of Shuttle Podcasts' `AudioDecoder`, and the reason the two are separate
-/// is worth stating plainly: `AudioDecoder` produces the ad-skip matcher's 8 kHz mono PCM, which is defined by the
-/// bench and measured bit for bit against it. This produces what the *player* schedules — the
-/// source's own rate and channel count — over a reader that may block. Plan of record:
-/// `mobile/ios/docs/plans/2026-09-09-streaming-audio-pipeline.md` §6 Phase 1.
+/// It produces what a *player* schedules — the source's own rate and channel count — over a reader
+/// that may block. Nothing here resamples or mixes down; a consumer that needs PCM in another shape
+/// converts it itself.
 ///
 /// Not thread-safe. One thread calls `open`, `seek` and `nextChunk`; ``cancel()`` and
 /// ``interrupt()`` are the two calls allowed from another thread. `cancel` turns a stalled network
@@ -90,7 +88,7 @@ public final class FFmpegStreamDecoder {
     public enum EndReason: String {
         case running, eof, failure, cancelled
         /// ``interrupt()`` brought the read back so a seek could be applied. The only one of these
-        /// a caller must NOT report as the end of an episode: the next ``seek(toSeconds:)`` puts
+        /// a caller must NOT report as the end of the stream: the next ``seek(toSeconds:)`` puts
         /// the decoder back to `.running`.
         case interrupted
     }
@@ -137,7 +135,7 @@ public final class FFmpegStreamDecoder {
     public var endReason: EndReason { reason }
 
     /// Frames of *media* handed to the caller so far. Media time, not wall time: position is this
-    /// divided by the sample rate (plan §5.1), which is why silence the DSP drops never moves it.
+    /// divided by the sample rate, which is why silence a later effect drops never moves it.
     public var mediaFramesRead: Int64 { framesRead }
 
     /// Bytes the reader has been asked for. The bandwidth number the `moov`-at-end test asserts on.
@@ -150,9 +148,9 @@ public final class FFmpegStreamDecoder {
 
     /// Probe the container and open its best audio stream. Blocking: it reads through `reader`.
     ///
-    /// A failure here is always thrown, never swallowed — the caller's answer to it is the
-    /// `AVPlayer` fallback with a counter (plan §1), and a decoder that reported success on
-    /// nothing would present as an episode that plays silence and never ends.
+    /// A failure here is always thrown, never swallowed — a caller can answer it with another
+    /// player, and a decoder that reported success on nothing would present as a stream that
+    /// plays silence and never ends.
     @discardableResult
     public func open() throws -> StreamAudioFormat {
         #if canImport(CStreamDecode)
@@ -179,8 +177,8 @@ public final class FFmpegStreamDecoder {
                 max_analyze_duration_us: Int64((probeBudget.analyzeDuration * 1_000_000).rounded())
             )
             guard let opened = stream_decoder_open_with(&callbacks, opaque, &options, &info, &status) else {
-                // An interrupt is a seek arriving while the episode opens, not a format this build
-                // cannot play: `.failed` would send the caller to its `AVPlayer` fallback.
+                // An interrupt is a seek arriving while the stream opens, not a format this build
+                // cannot play: `.failed` would send the caller to its fallback player.
                 switch status {
                 case Int32(STREAM_DECODE_ERR_CANCELLED.rawValue):
                     reason = .cancelled
@@ -215,8 +213,8 @@ public final class FFmpegStreamDecoder {
     /// decoding a short pre-roll and dropping it, except in a VBR MP3 more than one seek's byte
     /// budget from a frame of known time, which lands by Xing TOC or bitrate estimate. A caller
     /// that set its position to the requested number instead would show a scrubber that disagrees
-    /// with the audio, and every ad-skip seek would be computed against a time nobody played
-    /// (plan §5.1).
+    /// with the audio, and every seek computed from that position would be against a time nobody
+    /// played.
     @discardableResult
     public func seek(toSeconds seconds: TimeInterval) throws -> TimeInterval {
         #if canImport(CStreamDecode)
@@ -268,9 +266,9 @@ public final class FFmpegStreamDecoder {
 
     /// The next chunk of interleaved float32 in [-1, 1], or nil once the stream has ended.
     ///
-    /// nil is not by itself "the episode finished": ``endReason`` says whether it was EOF, a
-    /// cancel or a failure, and the caller must distinguish them. Reporting a transport failure as
-    /// the end of an episode marks it played and moves the listener on (plan §5.4).
+    /// nil is not by itself "the stream finished": ``endReason`` says whether it was EOF, a
+    /// cancel or a failure, and the caller must distinguish them. A transport failure reported as
+    /// the end would mark the item played and move the listener on.
     public func nextChunk() -> [Float]? {
         #if canImport(CStreamDecode)
             guard let handle, let format, reason == .running else { return nil }
@@ -310,7 +308,7 @@ public final class FFmpegStreamDecoder {
     /// The race it closes is the player's: the pull loop can be inside a read on a stalled
     /// connection while a seek waits behind it on the same serial queue, so on a dead link the seek
     /// never happens and on a slow one it lands late. ``cancel()`` would answer it and end the
-    /// episode; this ends only the call. Safe from any thread.
+    /// decode; this ends only the call. Safe from any thread.
     public func interrupt() {
         box.interrupt()
         #if canImport(CStreamDecode)

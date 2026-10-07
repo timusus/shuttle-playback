@@ -1,11 +1,10 @@
 /*
  * stream_decode.c — see stream_decode.h.
  *
- * The AVIO / open / cleanup shape is `CSpineDecode/spine_decode.c`'s, deliberately: that file is
- * the one that has been measured against the bench, so its ordering (open, best-effort
- * find_stream_info, find_best_stream, decoder, swresample) is copied rather than re-reasoned. What
- * is different is everything the player needs and a whole-buffer decode does not: a seekable AVIO
- * over a blocking reader, a pull-at-a-time decode loop with its own state, seek, and cancel.
+ * The open follows the usual libavformat order: open, best-effort find_stream_info,
+ * find_best_stream, decoder, swresample. Around it is what a player needs and a whole-buffer decode
+ * does not: a seekable AVIO over a blocking reader, a pull-at-a-time decode loop with its own state,
+ * seek, and cancel.
  */
 #include "stream_decode.h"
 
@@ -141,7 +140,7 @@ static int avio_read_packet(void *opaque, uint8_t *buf, int buf_size) {
     StreamDecoder *d = (StreamDecoder *)opaque;
     if (d->cancelled || d->interrupted) return AVERROR_EXIT;
     /* A seek that has already spent its budget is a demuxer walking the file packet by packet to
-     * build an index it has no table for (plan §4). Refusing the read aborts the walk; the caller
+     * build an index it has no table for. Refusing the read aborts the walk; the caller
      * falls back to the byte estimate, which costs one transaction instead of megabytes. */
     if (d->seek_budget_armed && d->seek_bytes >= d->seek_budget) {
         d->seek_budget_blown = 1;
@@ -221,16 +220,16 @@ static int64_t avio_seek_packet(void *opaque, int64_t offset, int whence) {
  * How many bytes of leading ID3v2 tag(s) to hide from libavformat.
  *
  * **This is the streaming player's largest single bandwidth cost, and it is not hypothetical.**
- * Measured on a Darknet Diaries enclosure (`darknet-diaries-ep179`, 108 MB): a 13 782 278-byte
+ * Measured on a published 108 MB MP3: a 13 782 278-byte
  * ID3v2 tag holding a 3000x3000 PNG cover, which `mp3_read_header` READS — not seeks over, because
  * it parses every APIC frame and turns the picture into an attached-pic stream nobody asked for.
  * `stream_decoder_open` cost 13.8 MB of cellular data before a note was heard. `probesize` does not
  * bound it: the tag is consumed before the demuxer ever gets to probe audio.
  *
- * So the tag is stepped over here and FFmpeg's byte 0 is the first MPEG frame. The artwork and the
- * tag's metadata are not lost to anything that wanted them — the app takes both from the feed —
- * and the byte offsets the ad-skip tee records are the SOURCE's, since the translation lives in
- * the AVIO callbacks and nowhere else.
+ * So the tag is stepped over here and FFmpeg's byte 0 is the first MPEG frame. The decoder reports
+ * no tag metadata or artwork; a caller that wants them reads the tag itself. Byte offsets the
+ * caller sees (`stream_decoder_position_bytes`, the reader's positions) stay the SOURCE's, since
+ * the translation lives in the AVIO callbacks and nowhere else.
  *
  * Returns the absolute offset to start at, and leaves the reader positioned there. On anything
  * that is not ID3v2 it returns 0 and rewinds, which is every m4a and most mp3s.
@@ -279,8 +278,8 @@ static int init_swr(StreamDecoder *d) {
     swr_free(&d->swr);
 
     AVChannelLayout out_layout = { 0 };
-    /* Zero-initialised for the reason spine_decode.c records: av_channel_layout_copy uninitialises
-     * its destination first, so a free() of stack garbage is an intermittent SIGABRT. */
+    /* Zero-initialised: av_channel_layout_copy uninitialises its destination first, so a free() of
+     * stack garbage is an intermittent SIGABRT. */
     AVChannelLayout in_layout = { 0 };
     if (d->dec->ch_layout.nb_channels > 0) {
         av_channel_layout_copy(&in_layout, &d->dec->ch_layout);
@@ -347,7 +346,7 @@ static int is_sbr(enum AVCodecID codec_id, int profile) {
  *
  * Precondition: `pending` is fully consumed. Returns STREAM_DECODE_OK with pending_frames > 0,
  * STREAM_DECODE_EOF when there is nothing left, or an error status. Every exit is a status: a
- * decode that quietly produced nothing would present as an episode that stops in the middle and
+ * decode that quietly produced nothing would present as a recording that stops in the middle and
  * reports it finished.
  */
 static int pump(StreamDecoder *d) {
@@ -463,7 +462,7 @@ static int pump(StreamDecoder *d) {
         d->has_first_pkt = 0;
         int sent = avcodec_send_packet(d->dec, d->pkt);
         av_packet_unref(d->pkt);
-        /* A packet the decoder rejects is a corrupt frame, not the end of the episode: skip it and
+        /* A packet the decoder rejects is a corrupt frame, not the end of the stream: skip it and
          * keep going, which is what every player does with a bad MP3 frame. */
         (void)sent;
     }
@@ -494,7 +493,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
         return NULL;
     }
     /* libav's own diagnostics go to stderr at AV_LOG_INFO and say nothing the caller acts on; the
-     * status codes are the channel that is read. spine_decode.c has the incident this prevents. */
+     * status codes are the channel that is read, and a host app's console stays its own. */
     av_log_set_level(AV_LOG_QUIET);
     memset(info, 0, sizeof(*info));
 
@@ -509,7 +508,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     d->seek_first_pts = AV_NOPTS_VALUE;
     d->seek_from = AV_NOPTS_VALUE;
 
-    /* Before anything reads: hide the ID3v2 tag, which on a real podcast enclosure is megabytes of
+    /* Before anything reads: hide the ID3v2 tag, which on a real published MP3 is megabytes of
      * cover art that libavformat would otherwise consume in full. */
     d->base_offset = probe_id3_offset(d);
     if (d->cancelled) { local_status = STREAM_DECODE_ERR_CANCELLED; goto fail; }
@@ -529,7 +528,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     d->dec = avcodec_alloc_context3(codec);
     if (!d->dec) goto fail;
     if (avcodec_parameters_to_context(d->dec, par) < 0) { local_status = STREAM_DECODE_ERR_DECODER; goto fail; }
-    /* One thread: FFmpeg's audio decoders have no frame threading to gain from (plan §4), and the
+    /* One thread: FFmpeg's audio decoders have no frame threading to gain from, and the
      * pull loop is single-threaded by contract. */
     d->dec->thread_count = 1;
     /* Without it the codec cannot move a frame's timestamp past the encoder delay it trims
@@ -560,7 +559,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
      * A source with NO TOTAL LENGTH still gets the Xing duration: stock n7.1 mp3dec stored the
      * negative "unknown" `avio_size()` in a uint64_t and discarded the tag, which the local patch
      * scripts/ffmpeg-patches/0001 fixes (issue #1). A length-less MP3 with no Xing tag reports 0,
-     * and the caller falls back to the feed's own duration. */
+     * and the caller falls back to whatever duration it has from elsewhere. */
     if (d->fmt->duration != AV_NOPTS_VALUE) {
         info->duration_sec = (double)d->fmt->duration / (double)AV_TIME_BASE;
     } else if (stream->duration != AV_NOPTS_VALUE) {
@@ -610,7 +609,7 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
     if (!avio_buf) return STREAM_DECODE_ERR_ALLOC;
 
     /* Read AND seek: with a NULL seek callback `pb->seekable` is 0 and the mov demuxer walks the
-     * whole `mdat` to find a trailing `moov` (header, and plan §3). */
+     * whole `mdat` to find a trailing `moov` (see the header). */
     d->avio = avio_alloc_context(avio_buf, avio_buf_size, 0, d, avio_read_packet, NULL,
                                  avio_seek_packet);
     if (!d->avio) { av_free(avio_buf); return STREAM_DECODE_ERR_ALLOC; }
@@ -618,10 +617,10 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
     d->fmt = avformat_alloc_context();
     if (!d->fmt) return STREAM_DECODE_ERR_ALLOC;
     d->fmt->pb = d->avio;
-    /* Bound what probing costs in BYTES, because for this decoder bytes are cellular data (plan
-     * §4). The defaults are a 5 MB probe and 5 s of analysis, and libavformat spends them eagerly:
+    /* Bound what probing costs in BYTES, because for a streaming source bytes are cellular data.
+     * The defaults are a 5 MB probe and 5 s of analysis, and libavformat spends them eagerly:
      * measured on `tone_moov_last.m4a`, open() alone read 42% of the file, all of it before a
-     * single frame was played. Podcast audio is one stream in a container the first packets
+     * single frame was played. Spoken-word and music audio is one stream in a container the first packets
      * already describe, so a 64 KiB probe and 1 s of analysis identify it just as well. Those are
      * the defaults; a caller with a different trade-off passes `StreamDecodeOptions`. */
     d->fmt->probesize = (options && options->probe_bytes > 0)
@@ -631,7 +630,7 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
     /* Seek by the table of contents the container carries rather than by binary search. Without
      * this `mp3_seek` only trusts a Xing TOC on a file it has decided is CBR, and for everything
      * else it runs `ff_seek_frame_binary`, which probes and re-syncs its way through the file: on
-     * the 160 KB tone fixture one seek to 10 s read 72 KB, and on an enclosure it is the walk the
+     * the 160 KB tone fixture one seek to 10 s read 72 KB, and on an hour-long file it is the walk the
      * budget below exists to stop. The TOC is a coarser landing (a percent of the file per entry)
      * and the caller's position follows the frame that is actually decoded, so the cost of taking
      * it is nothing this player can observe. */
@@ -656,10 +655,10 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
         d->fmt = NULL;   /* avformat_open_input freed it; the AVIO context is still ours */
         if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
         /* Not "unsupported": the caller answers that with another player, and an interrupt is
-         * only a seek arriving while the episode opens. */
+         * only a seek arriving while the stream opens. */
         return d->interrupted ? STREAM_DECODE_ERR_INTERRUPTED : STREAM_DECODE_ERR_OPEN;
     }
-    /* Best effort, as in spine_decode.c: some containers decode fine with thinner metadata. */
+    /* Best effort: some containers decode fine with thinner metadata. */
     (void)avformat_find_stream_info(d->fmt, NULL);
     /* Not when it was cut short, though: an interrupted probe leaves out what it had not reached,
      * an MP3's bitrate duration among it, and every later seek then takes another path and lands
@@ -948,7 +947,7 @@ static void after_seek_reset(StreamDecoder *d) {
  *
  * A seek to the frame the next read would have returned is a resume, and an ordinary seek is the
  * wrong tool for it: it lands on a packet boundary at or before the target and flushes the codec,
- * so the stitched decode repeats or drops audio, and an MP3 loses its bit reservoir. The codec and
+ * so the resumed decode repeats or drops audio, and an MP3 loses its bit reservoir. The codec and
  * the resampler still hold exactly the state the last packet left. So the demuxer alone is put
  * back on that packet (by its own index, which an exact timestamp and AVSEEK_FLAG_ANY make
  * precise), the packet is read again and dropped, and the next one is the one the interruption
@@ -1063,7 +1062,7 @@ static const int64_t kMaxAnchorGapSamples = 65536;
  * finds there with the time asked for. Nothing in an MP3 frame says what time it is, so the only
  * true time is one counted frame by frame from a frame whose time is known. That count is taken
  * whenever it reads no more than a seek is allowed to (`kSeekBudgetBytes`), a few seconds at a
- * podcast bitrate; further than that, the estimate is all there is.
+ * speech bitrate; further than that, the estimate is all there is.
  */
 static int mp3_anchor_in_reach(const StreamDecoder *d, int64_t gap) {
     int64_t samples = av_rescale_q(gap, d->time_base, (AVRational){ 1, d->sample_rate });
@@ -1122,7 +1121,7 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
      * length to bound it) is placed again further back, then from the start. */
     for (int attempt = 0;; attempt++) {
         int64_t from = target - preroll * ((int64_t)1 << (2 * attempt));
-        /* Never a decode from the start just to be exact: on a long episode that is the whole
+        /* Never a decode from the start just to be exact: on a long file that is the whole
          * file (12 MB measured). After two re-placements the landing stands, reported as it is. */
         int last = attempt >= 2;
         int from_start = from <= decoder->start_time;
@@ -1270,7 +1269,7 @@ static int demux_seek(StreamDecoder *decoder, double seconds, int64_t target, do
             anchor_pos = decoder->first_pkt_pos;
             anchor_dts = decoder->first_pkt_dts;
         }
-        /* An anchor far before the target (a long episode's start, or a coarse table) would cost a
+        /* An anchor far before the target (a long file's start, or a coarse table) would cost a
          * long decode to it; the estimate is cheaper. */
         if (target > decoder->start_time && !mp3_anchor_in_reach(decoder, target - anchor_dts)) {
             anchor_pos = -1;
@@ -1322,7 +1321,7 @@ static int demux_seek(StreamDecoder *decoder, double seconds, int64_t target, do
      * landing is skipped unheard. Where it actually lands is what the caller's position becomes.
      *
      * The budget is the whole point of this call's shape. An MP3 with no Xing TOC — which is most
-     * podcast enclosures — has no way to place a timestamp, so libavformat's generic seek DECODES
+     * long spoken-word MP3s — has no way to place a timestamp, so libavformat's generic seek DECODES
      * FORWARD FROM THE START until the timestamps reach the target: measured at 12 MB for one seek
      * to 25 minutes, on a fixture whose whole open cost 32 KiB. It is refused here rather than
      * paid for, and the byte estimate below takes over. Everything with a real index — every mp4,
@@ -1357,7 +1356,7 @@ static int demux_seek(StreamDecoder *decoder, double seconds, int64_t target, do
              * no frame to sync to). The stream is over there, which is the answer the byte
              * estimate gives a source that has a length. Only when the READER said so, though: a
              * broken read comes back as end of file too, and a truncated chunked body is not the
-             * end of the episode. */
+             * end of the stream. */
             if (!walked && rc == AVERROR_EOF && decoder->source_eof) {
                 after_seek_reset(decoder);
                 decoder->ended = 1;
