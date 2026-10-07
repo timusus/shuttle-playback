@@ -1725,7 +1725,6 @@ static void avio_clear_latched_error(StreamDecoder *d) {
 /* What a FLAC stream's STREAMINFO says, which every frame header is read against. */
 typedef struct {
     int     max_blocksize;
-    int     fixed_blocksize;   /* min == max: every frame but the last has it */
     int     max_frame_bytes;   /* 0: unknown */
     int     sample_rate;
     int     channels;
@@ -1741,7 +1740,6 @@ static int flac_info(const StreamDecoder *d, FLACInfo *si) {
     if (par->codec_id != AV_CODEC_ID_FLAC || !par->extradata || par->extradata_size < 34) return 0;
     const uint8_t *p = par->extradata;
     si->max_blocksize = (int)read_be(p + 2, 2);
-    si->fixed_blocksize = (int)read_be(p, 2) == si->max_blocksize;
     si->max_frame_bytes = (int)read_be(p + 7, 3);
     si->sample_rate = (int)(read_be(p + 10, 3) >> 4);
     si->channels = ((p[12] >> 1) & 7) + 1;
@@ -1814,7 +1812,9 @@ static int flac_frame_header(const uint8_t *p, int n, const FLACInfo *si, int64_
     if (n < len + 1) return -1;
     if (av_crc(av_crc_get_table(AV_CRC_8_ATM), 0, p, (size_t)len) != p[len]) return 0;
     if (bs > si->max_blocksize) return 0;
-    int64_t first = variable ? number : number * (si->fixed_blocksize ? si->max_blocksize : bs);
+    /* A fixed-blocksize stream's frames all have its block size but the last, which may be
+     * shorter: the frame number counts blocks of STREAMINFO's maximum, not of this frame's size. */
+    int64_t first = variable ? number : number * si->max_blocksize;
     if (si->total_samples > 0 && first >= si->total_samples) return 0;
     *sample = first;
     *blocksize = bs;
@@ -1827,14 +1827,17 @@ enum { FLAC_PROBE_FOUND, FLAC_PROBE_NONE, FLAC_PROBE_GAVE_UP };
  * Find the first frame that starts at or after byte `at` (AVIO offset) and before `end`, where the
  * frames from `end_sample` on start; the frame at `lo_sample` starts before `at`. Only a header
  * numbered strictly between the two counts. One at or before `want` (which may become the seek's
- * anchor) is believed when the next one follows it (its first sample is this one's plus its block
- * size), or when its frame is the stream's last; a header passing every check by chance inside a
- * frame's data then costs a frame more, not a wrong landing. One after `want` only bounds the
- * search, so it is taken on its CRC-8, without reading on through its frame. Reads 4 KiB at a time straight from the reader (AVIO's direct mode, so a probe
- * does not cost a 32 KiB refill), adding them to `*spent`.
+ * anchor) is believed when a later one follows it (its first sample is that one's plus its block
+ * size), or when its frame runs to `end` or is the stream's last; a header passing every check by
+ * chance inside a frame's data then costs a frame more, not a wrong landing, and does not hide
+ * the real header before it from the one after. One after `want` only bounds the search, so it
+ * is taken on its CRC-8, without reading on through its frame: a lookalike there costs probes,
+ * never the landing. Reads 4 KiB at a time straight from the reader (AVIO's direct mode, so a
+ * probe does not cost a 32 KiB refill), adding them to `*spent`.
  *
  * `*result` is FLAC_PROBE_FOUND with `*pos` and `*sample`, FLAC_PROBE_NONE when no frame starts
- * in [at, end), or FLAC_PROBE_GAVE_UP (a read failed, or no header within two of the largest frames).
+ * in [at, end) (which one of the largest frames scanned with no header in it also shows), or
+ * FLAC_PROBE_GAVE_UP (a read failed, or no header believed within two of the largest frames).
  * Returns STREAM_DECODE_OK, or a cancel or an interruption.
  */
 static int flac_probe(StreamDecoder *d, const FLACInfo *si, int64_t at, int64_t end, int64_t lo_sample,
@@ -1847,9 +1850,13 @@ static int flac_probe(StreamDecoder *d, const FLACInfo *si, int64_t at, int64_t 
     uint8_t *buf = av_malloc((size_t)cap);
     if (!buf) return STREAM_DECODE_OK;
 
-    int have = 0, scanned = 0, ended = 0;
+    /* The headers met so far, any of which the next may follow: a lookalike between two real
+     * headers must not hide the first from the second. */
+    enum { kCands = 8 };
+    int64_t cands[kCands], cand_samples[kCands];
+    int cand_sizes[kCands], ncands = 0;
     int64_t cand = -1, cand_sample = 0;
-    int cand_bs = 0;
+    int have = 0, scanned = 0, ended = 0;
     d->avio->direct = 1;
     if (avio_seek(d->fmt->pb, at, SEEK_SET) < 0) ended = -1;
     while (ended == 0) {
@@ -1864,14 +1871,26 @@ static int flac_probe(StreamDecoder *d, const FLACInfo *si, int64_t at, int64_t 
             if (r < 0) break;
             /* Every frame between the bracket's ends starts strictly between their samples. */
             if (r > 0 && s > lo_sample && (end_sample <= 0 || s < end_sample)) {
-                if (cand >= 0 && cand_sample + cand_bs == s) {
-                    *result = FLAC_PROBE_FOUND;
-                    goto done;
+                for (int i = 0; i < ncands; i++) {
+                    if (cand_samples[i] + cand_sizes[i] == s) {
+                        cand = cands[i];
+                        cand_sample = cand_samples[i];
+                        *result = FLAC_PROBE_FOUND;
+                        goto done;
+                    }
                 }
-                cand = scanned;
-                cand_sample = s;
-                cand_bs = bs;
+                if (ncands == kCands) {
+                    memmove(cands, cands + 1, sizeof(cands[0]) * (kCands - 1));
+                    memmove(cand_samples, cand_samples + 1, sizeof(cand_samples[0]) * (kCands - 1));
+                    memmove(cand_sizes, cand_sizes + 1, sizeof(cand_sizes[0]) * (kCands - 1));
+                    ncands--;
+                }
+                cands[ncands] = scanned;
+                cand_samples[ncands] = s;
+                cand_sizes[ncands++] = bs;
                 if (s > want) {
+                    cand = scanned;
+                    cand_sample = s;
                     *result = FLAC_PROBE_FOUND;
                     goto done;
                 }
@@ -1879,12 +1898,19 @@ static int flac_probe(StreamDecoder *d, const FLACInfo *si, int64_t at, int64_t 
             scanned++;
         }
         if (ended) break;
+        /* Every frame is at most `max_frame_bytes` long, so the first to start at or after `at`
+         * does so within one of them: that far scanned with no header of the stream is past the
+         * last frame (a tag, or junk). */
+        if (ncands == 0 && si->max_frame_bytes > 0 && scanned >= si->max_frame_bytes) {
+            *result = FLAC_PROBE_NONE;
+            break;
+        }
         if (have == cap) {
             if (at + have >= d->media_bytes) ended = 1;
             break;
         }
-        int want = cap - have < 4096 ? cap - have : 4096;
-        int got = avio_read(d->fmt->pb, buf + have, want);
+        int ask = cap - have < 4096 ? cap - have : 4096;
+        int got = avio_read(d->fmt->pb, buf + have, ask);
         if (got > 0) {
             have += got;
             *spent += got;
@@ -1896,8 +1922,15 @@ static int flac_probe(StreamDecoder *d, const FLACInfo *si, int64_t at, int64_t 
      * believed when its frame runs to there. */
     if (ended == 1) {
         int64_t next = at + have >= d->media_bytes || at + scanned < end ? si->total_samples : end_sample;
-        if (cand >= 0 && next > 0 && cand_sample + cand_bs == next) *result = FLAC_PROBE_FOUND;
-        else if (cand < 0) *result = FLAC_PROBE_NONE;
+        for (int i = ncands - 1; i >= 0 && next > 0; i--) {
+            if (cand_samples[i] + cand_sizes[i] == next) {
+                cand = cands[i];
+                cand_sample = cand_samples[i];
+                *result = FLAC_PROBE_FOUND;
+                break;
+            }
+        }
+        if (ncands == 0) *result = FLAC_PROBE_NONE;
     }
 done:
     if (*result == FLAC_PROBE_FOUND) {
@@ -2106,6 +2139,17 @@ static int land_exactly(StreamDecoder *d, int64_t target);
 
 /* `demux_seek`'s "the demuxer is placed, land by the timestamps" result; no STREAM_DECODE_ code. */
 static const int kSeekPlaced = 1000;
+
+/* How many times a byte estimate past the last frame steps back before the walk takes over. */
+static const int kEndStepBacks = 8;
+
+/* Whether a byte seek to `seconds` ran to the end of the stream with nothing decoded, though the
+ * stream says it lasts longer: the end of the reader came first, as end of stream or, from a
+ * demuxer reading a header there (ADTS), as an I/O error. */
+static int past_last_frame(const StreamDecoder *d, int status, double seconds) {
+    if (status != STREAM_DECODE_EOF && !(status == STREAM_DECODE_ERR_IO && d->source_eof)) return 0;
+    return d->next_pts == AV_NOPTS_VALUE && !d->cancelled && !d->interrupted && seconds < d->media_duration;
+}
 
 /* How far before its target a seek puts the demuxer, in samples, so the codec has converged by the
  * target: an MP3's bit reservoir spans a few frames (more at a low VBR quality), and Opus's CELT
@@ -2519,24 +2563,44 @@ static int demux_seek(StreamDecoder *decoder, double seconds, int64_t target, do
          * leaves the demuxer with no timestamp to report — there is nothing in the stream that
          * says what second this frame is — so the estimate IS the landed time. */
         int status = pump(decoder);
-        if (status == STREAM_DECODE_EOF && decoder->next_pts == AV_NOPTS_VALUE && !decoder->cancelled
-            && !decoder->interrupted && seconds < decoder->media_duration) {
+        if (past_last_frame(decoder, status, seconds)) {
             /* The estimate fell past the last frame's start (an ADTS stream sought to just before
              * its declared end) and the stream ended with nothing decoded, though audio remains
              * before that end. That is not the stream's end (issue #28). The demuxer's own seek
-             * gets there exactly when it can within the budget; when it would walk further, or
-             * cannot seek there at all, the estimate steps back by the budget and decodes on. */
+             * gets there exactly when it can within the budget. When it would walk further, or
+             * cannot seek there at all, the estimate steps back and decodes on, from an eighth
+             * of the budget and twice as far each time (media3's seekers step back so too), so
+             * it lands at most about twice the overshoot early. Each failed step reads from its
+             * byte to the end, so `kEndStepBacks` of them read at most about 64 budgets; past
+             * that, which only a file with megabytes after its last frame reaches, the walk does
+             * it whatever it costs, as an expensive seek beats one that reports the end. */
             avio_clear_latched_error(decoder);
             rc = budgeted_seek(decoder, INT64_MIN, target, target, AVSEEK_FLAG_BACKWARD, &walked);
             if (rc >= 0 && !walked) return kSeekPlaced;
             if (decoder->cancelled) return STREAM_DECODE_ERR_CANCELLED;
             if (decoder->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
-            avio_clear_latched_error(decoder);
-            byte = byte > decoder->seek_budget ? byte - decoder->seek_budget : 0;
-            ratio = (double)byte / (double)decoder->media_bytes;
-            placed = seek_to_byte(decoder, byte);
-            if (placed != STREAM_DECODE_OK) return placed;
-            status = pump(decoder);
+            int64_t step = decoder->seek_budget / 8 > 0 ? decoder->seek_budget / 8 : 1;
+            for (int steps = 0; steps < kEndStepBacks && byte > 0 && past_last_frame(decoder, status, seconds);
+                 steps++, step *= 2) {
+                avio_clear_latched_error(decoder);
+                byte = byte > step ? byte - step : 0;
+                ratio = (double)byte / (double)decoder->media_bytes;
+                placed = seek_to_byte(decoder, byte);
+                if (placed != STREAM_DECODE_OK) return placed;
+                status = pump(decoder);
+            }
+            if (past_last_frame(decoder, status, seconds)) {
+                avio_clear_latched_error(decoder);
+                decoder->source_eof = 0;
+                rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, INT64_MIN, target, target,
+                                        AVSEEK_FLAG_BACKWARD);
+                if (rc < 0) {
+                    if (decoder->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+                    if (decoder->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+                    return STREAM_DECODE_ERR_SEEK;
+                }
+                return kSeekPlaced;
+            }
         }
         *landed_seconds = ratio * decoder->media_duration;
         return status;

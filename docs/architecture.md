@@ -209,7 +209,10 @@ flowchart TD
   samples from the target while reporting the target. Every FLAC frame header carries its frame or
   sample number, so the decoder probes the file itself: interpolating between frames of known place
   and time (the first frame, verified index entries, the file's end), bisecting where the bitrate
-  jumps, and reading the header (CRC-8 checked) at each probe. It stops once it has a frame at most
+  jumps, and reading the header (CRC-8 checked) at each probe. A header that may become the anchor
+  is believed only when a later one follows it, so a lookalike in a frame's data cannot move the
+  landing; a probe that scans one largest frame with no header (a tag after the audio) bounds the
+  search like the end of the file. It stops once it has a frame at most
   32 KiB before the target, or after 10 probes or 128 KiB, places the demuxer on that frame through
   an exact index entry, and drops the samples up to the target. A FLAC frame decodes on its own, so
   there is no pre-roll. Only a search that ended more than 64 KiB away falls back to the estimate.
@@ -219,8 +222,10 @@ flowchart TD
   aborts, and the decoder places the seek by byte ratio instead. This is exact for constant bitrate
   and close for the rest. The estimate is reported as the landed time. An estimate past the last
   frame's start (an ADTS stream sought to just before its declared end) decodes nothing; the
-  demuxer's own seek is then tried within the budget, and failing that the estimate steps back by
-  the budget (issue #28). Neither walks the file.
+  demuxer's own seek is then tried within the budget, and failing that the estimate steps back
+  from an eighth of the budget, doubling, until a frame decodes (issue #28). Eight steps reach about
+  2 MiB back and read at most about 4 MiB; only past that, a file with megabytes after its last
+  frame, does the seek walk.
 - **A source with no length and no container duration has nothing to estimate from.** After a blown
   budget the walk is the only seek there is, so it is allowed to run. A seek that failed without
   blowing the budget is not walked. If the reader said end of stream (a seek past the last frame),
