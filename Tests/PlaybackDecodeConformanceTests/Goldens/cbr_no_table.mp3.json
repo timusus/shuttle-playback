@@ -18,24 +18,33 @@
       "alignFrames" : 0,
       "landedS" : 0,
       "toS" : 0,
-      "tolS" : 0.03
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "f9d7bf6137e45f3939e79c04a73250c589a1494a81fd70b79ed843946b8addc1"
     },
     {
       "alignFrames" : 0,
       "landedS" : 1.344,
       "toS" : 1.344,
-      "tolS" : 0.03
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "6bf34b246638e45373471134ad47d4f1b67109484e487305dc1d1e7fdb811dd8"
     },
     {
       "alignFrames" : 0,
       "landedS" : 2.688,
       "toS" : 2.688,
-      "tolS" : 0.03
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "e24e06e23efacaddcdfdddd0e0ffd181cedf8d94a23776040d330e5753cedf35"
     },
     {
+      "alignFrames" : null,
       "landedS" : 4.008,
       "toS" : 4.032,
-      "tolS" : 0.03
+      "tolS" : 0.03,
+      "windowFrames" : 256,
+      "windowSha256Int16" : "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     }
   ],
   "sha256" : "249c3be6b1843244b9ebcef9e31ee1d048fac6d96c49e7f57af492f1ba36dfbd"

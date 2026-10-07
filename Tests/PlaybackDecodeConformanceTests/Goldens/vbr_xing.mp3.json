@@ -1,5 +1,5 @@
 {
-  "bytesBeforeFirstAudioMax" : 32768,
+  "bytesBeforeFirstAudioMax" : 27648,
   "channels" : 2,
   "durationS" : 4.05,
   "expect" : "decodes",
@@ -17,22 +17,33 @@
       "alignFrames" : 0,
       "landedS" : 0,
       "toS" : 0,
-      "tolS" : 0.03
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "daf47e476c27264dbd4594d139d9d672523f437fcb8d02bbe6251b4423535771"
     },
     {
+      "alignFrames" : null,
       "landedS" : 1.311,
       "toS" : 1.333,
-      "tolS" : 0.03
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "2d68b1e4652c81d156c29267cf02ec86bf47232fb7355747a816a4c479b77fdd"
     },
     {
+      "alignFrames" : null,
       "landedS" : 2.647,
       "toS" : 2.667,
-      "tolS" : 0.03
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "277b2dbbc48e017124e6ca0f06f38d79d01d4d895ad342598a31090692930891"
     },
     {
+      "alignFrames" : null,
       "landedS" : 4,
       "toS" : 4,
-      "tolS" : 0.03
+      "tolS" : 0.03,
+      "windowFrames" : 0,
+      "windowSha256Int16" : ""
     }
   ],
   "sha256" : "a805e7ed5fdf9734285d2b66c7f3f0bd354d71c04d61424730c3168711a64588"
