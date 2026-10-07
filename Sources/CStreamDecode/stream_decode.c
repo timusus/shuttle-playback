@@ -453,6 +453,11 @@ static int pump(StreamDecoder *d) {
                                                  (AVRational){ 1, rate }, d->time_base);
                 if (d->seek_first_pts == AV_NOPTS_VALUE) d->seek_first_pts = pts;
             }
+            /* Clamp before the seek discard below, or skipped final frames are never clamped and a
+             * seek past the end lands beyond the clipped end. */
+            if (d->end_pts != AV_NOPTS_VALUE && pts != AV_NOPTS_VALUE && !pts_guessed
+                && d->next_pts > d->end_pts)
+                d->next_pts = d->end_pts;   /* where the audio ends */
             int64_t cut = 0;
             int landing = 0;   /* this is the frame the seek target falls in */
             if (d->discard_until != AV_NOPTS_VALUE) {
@@ -473,7 +478,6 @@ static int pump(StreamDecoder *d) {
             if (d->end_pts != AV_NOPTS_VALUE && pts != AV_NOPTS_VALUE && !pts_guessed) {
                 int64_t room = av_rescale_q(d->end_pts - pts, d->time_base,
                                             (AVRational){ 1, rate });
-                if (d->next_pts > d->end_pts) d->next_pts = d->end_pts;   /* where the audio ends */
                 if (room <= cut) {   /* wholly past the edit list's end */
                     av_frame_unref(d->frame);
                     continue;
