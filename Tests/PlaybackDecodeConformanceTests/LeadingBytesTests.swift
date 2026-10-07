@@ -126,4 +126,70 @@ final class LeadingBytesTests: XCTestCase {
         try check(prefix: junk, label: "150 kB garbage with false sync words, default probe",
                   maxBytesBeforeAudio: 150_000 + 128 * 1024)
     }
+
+    /// A reader over a file that ends every read at the next boundary, so the scan buffer fills in
+    /// the shape a test wants, and counts what was read.
+    private final class ShapedReader: StreamByteReader {
+        private let inner: FileByteReader
+        private let boundaries: [Int64]
+        private(set) var bytesRead: Int64 = 0
+        init(_ url: URL, boundaries: [Int64] = []) throws {
+            inner = try FileByteReader(url: url)
+            self.boundaries = boundaries
+        }
+        var totalLength: Int64? { inner.totalLength }
+        var position: Int64 { inner.position }
+        func read(into buffer: UnsafeMutableRawPointer, maxLength: Int) throws -> Int {
+            var limit = maxLength
+            if let next = boundaries.first(where: { $0 > inner.position }) { limit = min(limit, Int(next - inner.position)) }
+            let n = try inner.read(into: buffer, maxLength: limit)
+            bytesRead += Int64(n)
+            return n
+        }
+        func seek(to offset: Int64) throws { try inner.seek(to: offset) }
+        func cancel() { inner.cancel() }
+        func interrupt() { inner.interrupt() }
+        func clearInterrupt() { inner.clearInterrupt() }
+    }
+
+    private func write(_ data: Data, ext: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("leading-\(UUID().uuidString).\(ext)")
+        try data.write(to: url)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return url
+    }
+
+    /// MPEG 2.5 layer II at index 14 and 8 kHz is a 2880-byte frame, the longest the header parser
+    /// accepts. Two of them chained, with a read that ends just short of the third header, leave the
+    /// scan buffer holding more than one 1792-byte frame's worth of look-ahead; the next full read
+    /// then used to write past the end of it. Meaningful under `-Xswiftc -sanitize=address`.
+    func testChainedMaximumLengthMPEG25FramesDoNotOverrunTheScanBuffer() throws {
+        let header: [UInt8] = [0xFF, 0xE5, 0xE8, 0xC0]
+        let frame = 2880
+        for start in [400_000, 400_001, 400_002, 400_003] {
+            var data = garbage(start)
+            for _ in 0..<2 { data += header + Data(count: frame - header.count) }
+            data += garbage(40_000)
+            let url = try write(data, ext: "mp3")
+            // Reads end where the first header starts and 5763 bytes later: the longest carry a
+            // chain of three can need.
+            let reader = try ShapedReader(url, boundaries: [Int64(start), Int64(start + 2 * 2880 + 3)])
+            let decoder = FFmpegStreamDecoder(reader: reader)
+            _ = try? decoder.open()
+        }
+    }
+
+    /// A body that is plainly not MP3 is not scanned for MP3 frames after the probe gives up, and a
+    /// scan that would start past its cap is not begun: the failed open reads the body once (a rescan would read 64 KiB or more of it again).
+    func testNonMP3BodiesAreNotRescanned() throws {
+        let html = Data("<html><body>".utf8) + garbage(900_000)
+        var mp4 = Data([0, 0, 0, 24]) + Data("ftypisom".utf8) + Data([0, 0, 2, 0]) + Data("isomiso2".utf8)
+        mp4 += garbage(900_000)
+        for (label, data, ext) in [("html", html, "html"), ("mp4", mp4, "mp4")] {
+            let url = try write(data, ext: ext)
+            let reader = try ShapedReader(url)
+            XCTAssertThrowsError(try FFmpegStreamDecoder(reader: reader).open(), label)
+            XCTAssertLessThanOrEqual(reader.bytesRead, Int64(data.count) + 4096, "\(label): \(reader.bytesRead) bytes read")
+        }
+    }
 }

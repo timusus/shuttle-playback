@@ -145,6 +145,7 @@ struct StreamDecoder {
     uint8_t      prologue[4096];
     int          prologue_len;
     int64_t      io_pos;             /* libavformat's read position */
+    int64_t      contiguous_read;    /* the end of the run of bytes read from offset 0, past any seeks */
 };
 
 enum { MP3_TAG_NONE = 0, MP3_TAG_INFO, MP3_TAG_VBR };
@@ -172,6 +173,7 @@ static int avio_read_packet(void *opaque, uint8_t *buf, int buf_size) {
             memcpy(d->prologue + d->io_pos, buf, (size_t)keep);
             if (d->io_pos + keep > d->prologue_len) d->prologue_len = (int)(d->io_pos + keep);
         }
+        if (d->io_pos <= d->contiguous_read && d->io_pos + n > d->contiguous_read) d->contiguous_read = d->io_pos + n;
         d->io_pos += n;
         return n;
     }
@@ -810,9 +812,29 @@ static int reopen_seek(StreamDecoder *d, int64_t offset) {
 static const int64_t kMP3ResyncScanBytes = 1024 * 1024;
 /* Consecutive frame headers that must chain (each at the previous one's end) to call it audio. */
 static const int kMP3ResyncChain = 3;
+/* The longest frame `mp3_parse_header` accepts: MPEG 2.5 layer II at 160 kbps and 8 kHz is
+ * 1152 / 8 * 160000 / 8000 = 2880 bytes, plus one padding byte. (Layer I tops out at 964, layer III
+ * at 1441.) */
+enum { kMP3ResyncMaxFrame = 2881 };
+/* What the scan carries over from one read to the next. A chain is abandoned for more bytes only
+ * when a header position `at` has `at + 4 > len`, and `at` is at most (chain - 1) frames past the
+ * candidate `i`, so `len - i` is under `(chain - 1) * frame + 4` = `kMP3ResyncLook`; otherwise `i` ends
+ * at `len - 3`. The buffer holds the carry plus one read. */
+enum { kMP3ResyncChunk = 32 * 1024, kMP3ResyncLook = 2 * kMP3ResyncMaxFrame + 4 };
 
 static int mp3_parse_header(const uint8_t *p, int *spf, int *bitrate, int *sample_rate,
                             int *side_info_bytes);
+
+/* The start of the body is the signature of another container or a text page, which no amount of
+ * scanning will turn into MP3 (an ID3 tag has been skipped already, so these are the audio's own
+ * first bytes). */
+static int prologue_is_not_mp3(const StreamDecoder *d) {
+    const uint8_t *p = d->prologue;
+    int n = d->prologue_len;
+    if (n >= 8 && !memcmp(p + 4, "ftyp", 4)) return 1;
+    if (n >= 4 && (!memcmp(p, "OggS", 4) || !memcmp(p, "fLaC", 4) || !memcmp(p, "RIFF", 4) || !memcmp(p, "FORM", 4))) return 1;
+    return n >= 1 && (p[0] == '<' || p[0] == '{');
+}
 
 /* The byte length of the MPEG audio frame whose header is at `p`, or 0 if it is not one. */
 static int mp3_frame_length(const uint8_t *p, uint32_t *key) {
@@ -836,16 +858,19 @@ static int reopen_past_mp3_junk(StreamDecoder *d, const StreamDecodeOptions *opt
     if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
     close_format(d);
 
-    enum { kChunk = 32 * 1024, kLook = 3 * 1792 + 4 };
-    uint8_t *buf = (uint8_t *)av_malloc(kChunk + kLook);
-    if (!buf) return STREAM_DECODE_ERR_ALLOC;
+    enum { kChunk = kMP3ResyncChunk, kLook = kMP3ResyncLook };
     /* The probe has already looked at the first `kMP3JunkScanBytes` (mp3dec scans them for two
      * chained frames), so start there, less the span a chain occupies in case one straddles it. */
     int64_t found = -1, pos = kMP3JunkScanBytes - kLook;   /* `pos`: offset of buf[0] from base_offset */
     /* The failed open read on through the junk to the audio, as far as libavformat's own buffer
      * ahead of it: the first frame is within the last 64 KiB of what it read, so there is no need
-     * to read the junk again. */
-    if (d->io_pos - 64 * 1024 > pos) pos = d->io_pos - 64 * 1024;
+     * to read the junk again. What it read is the run of bytes it consumed from the start, which
+     * stays true whatever the failed open then seeked to (`io_pos` is wherever that left it). */
+    if (d->contiguous_read - 64 * 1024 > pos) pos = d->contiguous_read - 64 * 1024;
+    /* Nothing left to look at, or a body that is another format's: leave the reader alone. */
+    if (pos >= kMP3ResyncScanBytes || prologue_is_not_mp3(d)) return failed;
+    uint8_t *buf = (uint8_t *)av_malloc(kChunk + kLook);
+    if (!buf) return STREAM_DECODE_ERR_ALLOC;
     int len = 0, rc = reopen_seek(d, d->base_offset + pos);
     int scanned_to_end = 0;
     if (rc != STREAM_DECODE_OK) { av_free(buf); return rc == STREAM_DECODE_ERR_IO ? failed : rc; }
@@ -868,7 +893,7 @@ static int reopen_past_mp3_junk(StreamDecoder *d, const StreamDecodeOptions *opt
                     break;
                 }
                 int fl = mp3_frame_length(buf + at, &key);
-                if (!fl || (k && key != key0)) { ok = 0; break; }
+                if (!fl || fl > kMP3ResyncMaxFrame || (k && key != key0)) { ok = 0; break; }
                 key0 = key;
                 at += fl;
             }
