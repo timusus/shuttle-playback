@@ -70,8 +70,9 @@ Then review the JSON diff. The suite writes a golden only if the fault matrix pa
 **Known issues.** A decoder bug that the suite found and that is not fixed is pinned in
 `KnownIssues.swift`. A rule names the fixture, the kind of check, the exact fault combinations and
 the exact finding, with its GitHub issue, and runs under `XCTExpectFailure`. A different value, or a
-pinned finding that stops happening, fails the suite. When the bug is fixed, remove the rule. MP3
-seek misalignment is pinned in the goldens instead, as `alignFrames`.
+pinned finding that stops happening, fails the suite. When the bug is fixed, remove the rule. There
+are no rules at present, and `alignFrames` is 0 in every golden because seeks land on the requested
+sample.
 
 **FFmpeg fixes.** Bugs in the pinned FFmpeg tag are fixed with patches that `build-ffmpeg.sh` applies. See
 [FFmpeg](ffmpeg.md#local-patches).

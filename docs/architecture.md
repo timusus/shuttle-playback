@@ -144,17 +144,19 @@ flowchart TD
     EOFQ -- no --> ERR["throw seek failure"]
     BYTE --> FL2["flush codec, reset resampler"]
     WALK --> FL2
-    FL --> PUMP["decode to the first frame"]
+    FL --> PUMP["decode the pre-roll, drop it up to t"]
     FL2 --> PUMP
-    PUMP --> LAND["landed time = first frame pts<br/>byte estimate: the estimate itself"]
+    PUMP --> LAND["landed time = t<br/>far VBR MP3: the estimate itself"]
     LAND --> DONE["return landed time"]
 ```
 
-- **Landing is at or before the request, on a frame boundary.** The seek is backward-leaning, so
-  nothing between the request and the landing is skipped unheard. After a seek the decoder decodes
-  eagerly to the first frame and reports that frame's timestamp. The result is exact to a codec
-  frame (1152 samples for MP3, 1024 for AAC), not to a single sample. A caller that sets its position
-  to the requested time instead of the returned one drifts from the audio.
+- **Landing is on the requested sample.** The demuxer is put a pre-roll before the target (16384
+  samples, 32768 for Opus), and the decoder decodes it eagerly and drops everything before the
+  target, so codec warm-up and partial frames never reach the caller. An MP3 frame does not carry
+  its time, so it is counted from a frame of known time: the first frame, a VBRI table entry, or
+  for CBR the byte offset. A VBR MP3 target further from one than a seek's byte budget is placed by
+  its Xing TOC or bitrate instead, and that estimate is the landed time (issue #3). A caller that
+  sets its position to the requested time instead of the returned one drifts from the audio there.
 - **The budget exists because of MP3 without a table of contents.** For those files FFmpeg's generic
   seek decodes forward from the start until timestamps reach the target. Measured on a fixture, one
   seek to 25 minutes read 12 MB. Once a seek has read 64 KiB, the next read is refused, the walk

@@ -211,8 +211,9 @@ public final class FFmpegStreamDecoder {
 
     /// Seek to `seconds` and return where the stream actually landed.
     ///
-    /// **The return value is the answer, not the argument.** It is the first decoded frame's
-    /// timestamp; MP3 without a TOC lands on a frame boundary near a bitrate estimate. A caller
+    /// **The return value is the answer, not the argument.** It is the requested sample, reached by
+    /// decoding a short pre-roll and dropping it, except in a VBR MP3 more than one seek's byte
+    /// budget from a frame of known time, which lands by Xing TOC or bitrate estimate. A caller
     /// that set its position to the requested number instead would show a scrubber that disagrees
     /// with the audio, and every ad-skip seek would be computed against a time nobody played
     /// (plan §5.1).

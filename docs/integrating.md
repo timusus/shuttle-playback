@@ -99,8 +99,10 @@ Notes:
 let landed = try decoder.seek(toSeconds: 600)
 ```
 
-Use `landed`, not 600, as your new position. The decoder lands at or before the request, on a codec
-frame boundary. If the stream ended at the target, `seek` returns normally and `endReason` is `.eof`.
+Use `landed`, not 600, as your new position. The decoder lands on the requested sample, except in a
+VBR MP3 far from a frame of known time, where it lands on an estimate (see
+[architecture](architecture.md#seek)). If the stream ended at the target, `seek` returns normally and
+`endReason` is `.eof`.
 
 With `GrowingFileByteSource`, tell it about the seek first if you want to pair a seek with the
 transaction it opens:

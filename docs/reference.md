@@ -38,7 +38,7 @@ build of this package.
 | `init(reader:probeBudget:)` | The budget defaults to `StreamProbeBudget.default`. |
 | `open()` | Blocks. Returns a `StreamAudioFormat` or throws `StreamDecoderError`. |
 | `nextChunk()` | Blocks. Returns up to `framesPerChunk` (4096) frames of interleaved Float32 at the source rate, or nil. |
-| `seek(toSeconds:)` | Returns the landed time, at or before the request, on a codec frame boundary. If the stream ended at the target it returns normally and `endReason` is `.eof`. |
+| `seek(toSeconds:)` | Returns the landed time: the requested sample, or an estimate in a VBR MP3 far from a frame of known time. If the stream ended at the target it returns normally and `endReason` is `.eof`. |
 | `cancel()` | Any thread. Ends the stream for good. |
 | `interrupt()` | Any thread. Ends only the blocked call. Cleared by the next `seek(toSeconds:)`. |
 | `endReason` | `.running`, `.eof`, `.failure`, `.cancelled` or `.interrupted`. |
