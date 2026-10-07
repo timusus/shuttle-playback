@@ -41,6 +41,9 @@ public final class LoopbackMediaServer: @unchecked Sendable {
     private var _refusesRequestsUntil: Date?
     private var _answers416AtOrAfterEnd = false
     private var _gzipsBody = false
+    private var _lowercasesHeaders = false
+    private var _usesChunkedEncoding = false
+    private var _htmlErrorBodies = false
     private var _etag: String?
     private var _etags: [String]?
     private var connections: [NWConnection] = []
@@ -51,6 +54,28 @@ public final class LoopbackMediaServer: @unchecked Sendable {
     public var answers416AtOrAfterEnd: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _answers416AtOrAfterEnd }
         set { lock.lock(); _answers416AtOrAfterEnd = newValue; lock.unlock() }
+    }
+
+    /// Write every response header name in lower case (`content-range`, `etag`), as an HTTP/2
+    /// front end or a CDN does. Header names are case-insensitive, so nothing may depend on case.
+    public var lowercasesHeaders: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _lowercasesHeaders }
+        set { lock.lock(); _lowercasesHeaders = newValue; lock.unlock() }
+    }
+
+    /// Send a body as `Transfer-Encoding: chunked`, with no `Content-Length`. A range answer still
+    /// carries its `Content-Range`, so only a `200` has no length at all.
+    public var usesChunkedEncoding: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _usesChunkedEncoding }
+        set { lock.lock(); _usesChunkedEncoding = newValue; lock.unlock() }
+    }
+
+    /// Give every error answer (a rejected host or range, a `416`, a missing path) a
+    /// `text/html` body with a `Content-Length`, as a real origin's error page does, instead
+    /// of an empty one.
+    public var htmlErrorBodies: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _htmlErrorBodies }
+        set { lock.lock(); _htmlErrorBodies = newValue; lock.unlock() }
     }
 
     /// Send every body gzip-encoded (`Content-Encoding: gzip`). The declared `Content-Length` is
@@ -354,6 +379,27 @@ public final class LoopbackMediaServer: @unchecked Sendable {
         URL(string: "http://127.0.0.1:\(port)/redirect/\(hops)/fixture.mp3")!
     }
 
+    /// How a redirect names its target.
+    public enum RedirectLocation: String, Sendable, CaseIterable {
+        /// `http://127.0.0.1:<port>/fixture.mp3`
+        case absolute
+        /// `/fixture.mp3`
+        case rooted
+        /// `../fixture.mp3`, resolved against the redirecting path.
+        case parentRelative = "parent"
+        /// `//127.0.0.1:<port>/fixture.mp3`
+        case schemeRelative = "scheme"
+    }
+
+    /// A URL that answers one redirect with `status` (301, 302, 303, 307 or 308), its `Location`
+    /// written as `location`, and lands on ``url``'s path.
+    public func redirectURL(status: Int = 302, location: RedirectLocation) -> URL {
+        URL(string: "http://127.0.0.1:\(port)/redirect-\(status)-\(location.rawValue)/fixture.mp3")!
+    }
+
+    /// A URL no resource lives at: `404`, with an HTML page when ``htmlErrorBodies`` is set.
+    public var missingURL: URL { URL(string: "http://127.0.0.1:\(port)/missing/fixture.mp3")! }
+
     /// The URL the chain from ``redirectingURL(hops:)`` ends at, given the current host setting.
     public var resolvedURL: URL {
         URL(string: "http://\(redirectsToAlternateHost ? "localhost" : "127.0.0.1"):\(port)\(Self.fixturePath)")!
@@ -425,6 +471,26 @@ public final class LoopbackMediaServer: @unchecked Sendable {
             }
             return
         }
+        if let (status, location) = Self.redirectSpec(path) {
+            lock.lock(); _requestHeads.append(head); lock.unlock()
+            let target: String
+            switch location {
+            case .absolute: target = "http://127.0.0.1:\(port)\(Self.fixturePath)"
+            case .rooted: target = Self.fixturePath
+            case .parentRelative: target = "../fixture.mp3"
+            case .schemeRelative: target = "//127.0.0.1:\(port)\(Self.fixturePath)"
+            }
+            connection.send(
+                content: errorAnswer(status: status, extra: "Location: \(target)\r\n", withPage: false),
+                completion: .contentProcessed { _ in connection.cancel() }
+            )
+            return
+        }
+        if path.hasPrefix("/missing/") {
+            lock.lock(); _requestHeads.append(head); lock.unlock()
+            connection.send(content: errorAnswer(status: 404), completion: .contentProcessed { _ in connection.cancel() })
+            return
+        }
         lock.lock()
         let body = _bodies.map { $0[min(_requestedRanges.count, $0.count - 1)] } ?? _body
         let etag = _etags.map { $0[min(_requestedRanges.count, $0.count - 1)] } ?? _etag
@@ -463,14 +529,15 @@ public final class LoopbackMediaServer: @unchecked Sendable {
         }
         if rejectedRange || (rejected != nil && Self.parseHost(head) == rejected?.host) {
             let status = rejectedRange ? 503 : rejected?.status ?? 503
-            let header = "HTTP/1.1 \(status) Rejected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            connection.send(content: Data(header.utf8), completion: .contentProcessed { _ in connection.cancel() })
+            connection.send(content: errorAnswer(status: status), completion: .contentProcessed { _ in connection.cancel() })
             return
         }
 
         if unsatisfiable {
-            let header = "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */\(body.count)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            connection.send(content: Data(header.utf8), completion: .contentProcessed { _ in connection.cancel() })
+            connection.send(
+                content: errorAnswer(status: 416, extra: "Content-Range: bytes */\(body.count)\r\n"),
+                completion: .contentProcessed { _ in connection.cancel() }
+            )
             return
         }
 
@@ -510,8 +577,17 @@ public final class LoopbackMediaServer: @unchecked Sendable {
         }
         if let etag { header += "ETag: \(etag)\r\n" }
         if gzips { header += "Content-Encoding: gzip\r\n" }
-        if !omitsLength { header += "Content-Length: \(slice.count)\r\n" }
+        lock.lock()
+        let chunks = _usesChunkedEncoding
+        let lower = _lowercasesHeaders
+        lock.unlock()
+        if chunks {
+            header += "Transfer-Encoding: chunked\r\n"
+        } else if !omitsLength {
+            header += "Content-Length: \(slice.count)\r\n"
+        }
         header += "Connection: close\r\n\r\n"
+        if lower { header = Self.lowercasingNames(header) }
         if let heldAfter, heldAfter < slice.count {
             // Headers and the first bytes now, the rest on release — see
             // ``heldBodyAfterBytesForRangeStartingAt``.
@@ -546,7 +622,7 @@ public final class LoopbackMediaServer: @unchecked Sendable {
         if let stallAfter, stallAfter < limit { limit = stallAfter; holdsOpen = true }
         if let closeAfter, closeAfter < limit { limit = closeAfter; holdsOpen = false; outageOnClose = outage }
         if let lie, slice.count - lie < limit { limit = max(slice.count - lie, 0); holdsOpen = false; outageOnClose = nil }
-        let written = slice.prefix(limit)
+        let written = chunks ? Self.chunked(slice.prefix(limit)) : Data(slice.prefix(limit))
 
         // A stalled body is never finished and never closed: closing would look like a short read
         // the source retries, which is the recoverable failure, not this one. An outage starts
@@ -588,6 +664,53 @@ public final class LoopbackMediaServer: @unchecked Sendable {
         } else {
             send()
         }
+    }
+
+    /// A complete error or redirect answer: `extra` header lines, then an empty body, or the HTML
+    /// page when ``htmlErrorBodies`` is set (and `withPage` allows it).
+    private func errorAnswer(status: Int, extra: String = "", withPage: Bool = true) -> Data {
+        lock.lock()
+        let page = withPage && _htmlErrorBodies
+        let lower = _lowercasesHeaders
+        lock.unlock()
+        let html = Data("<!DOCTYPE html><html><body><h1>\(status)</h1><p>Something went wrong.</p></body></html>".utf8)
+        var header = "HTTP/1.1 \(status) Answer\r\n\(extra)"
+        if page { header += "Content-Type: text/html; charset=utf-8\r\n" }
+        header += "Content-Length: \(page ? html.count : 0)\r\nConnection: close\r\n\r\n"
+        var out = Data((lower ? Self.lowercasingNames(header) : header).utf8)
+        if page { out.append(html) }
+        return out
+    }
+
+    /// `header` with each field name lower-cased; the status line and values are untouched.
+    static func lowercasingNames(_ header: String) -> String {
+        header.components(separatedBy: "\r\n").enumerated().map { index, line in
+            guard index > 0, let colon = line.firstIndex(of: ":") else { return line }
+            return line[..<colon].lowercased() + line[colon...]
+        }.joined(separator: "\r\n")
+    }
+
+    /// `(status, location)` for `/redirect-<status>-<location>/...`, else nil.
+    static func redirectSpec(_ path: String) -> (Int, RedirectLocation)? {
+        guard let first = path.split(separator: "/").first, first.hasPrefix("redirect-") else { return nil }
+        let parts = first.split(separator: "-")
+        guard parts.count == 3, let status = Int(parts[1]), let location = RedirectLocation(rawValue: String(parts[2])) else { return nil }
+        return (status, location)
+    }
+
+    /// `body` as `Transfer-Encoding: chunked`, in 4 KiB chunks.
+    static func chunked(_ body: Data) -> Data {
+        var out = Data()
+        var index = body.startIndex
+        while index < body.endIndex {
+            let end = body.index(index, offsetBy: 4096, limitedBy: body.endIndex) ?? body.endIndex
+            out.append(Data("\(String(end - index, radix: 16))\r\n".utf8))
+            out.append(body[index..<end])
+            out.append(Data("\r\n".utf8))
+            index = end
+        }
+        out.append(Data("0\r\n\r\n".utf8))
+        return out
     }
 
     /// How long a body that ends short stays open after its last byte; see `respond`.
