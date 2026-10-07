@@ -112,6 +112,20 @@ Versioning: a public API change is a minor bump while we are at 0.x. A behaviour
 decoder or a DSP stage (PCM out differs) is at least a minor bump, and the release note says what
 moved.
 
+## Engineering principles
+
+These decide every design choice, and every worker brief and review applies them.
+
+- **Testable first.** Anything that touches time, the network, the file system or the OS (clocks,
+  path monitors, trust evaluation, retries) sits behind a seam a test can drive. A behaviour without a
+  deterministic test is not done.
+- **Maintainable over clever.** One mechanism per concern (one recovery layer, one seek path), small
+  types, no speculative options. Fix the root cause; never paper over a symptom.
+- **When in doubt, follow androidx/media (media3).** Its `DataSource`, `Extractor` and
+  `DefaultHttpDataSource` code, maintainer comments and GitHub issues are the reference for edge
+  cases (range requests, 416s, seeking, priming, gapless). Cite the media3 class or issue in the
+  ADR or commit when a decision follows it, and say why when we deviate.
+
 ## Conventions
 
 - Conventional commits (`feat:`, `fix:`, `refactor:`, `build:`, `docs:`, `test:`), pushed straight
