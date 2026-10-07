@@ -72,9 +72,9 @@ ours are listed last.
 | `dataSpecWithLength_readExpectedRange` | `testContiguousWindowsAddUpToTheBody` | A length is a read size; the source has no length-limited open. |
 | `dataSpecWithLength_readUntilEndInTwoParts` | `testContiguousWindowsAddUpToTheBody` | |
 | `dataSpecWithPositionAndLength_readExpectedRange` | `testABoundedReadFromAPositionReturnsThatWindow` | |
-| `dataSpecWithPositionAtEnd_readsZeroBytes` | `testAPositionAtTheEndOfAKnownLengthIsEndOfStream` | Only once the length is known; see the next row. |
+| `dataSpecWithPositionAtEnd_readsZeroBytes` | `testAPositionAtTheEndOfAKnownLengthIsEndOfStream` | Once the length is known; see the next row for before. |
 | `dataSpecWithPositionAtEndAndLength_readsZeroBytes` | same | n/a as a separate case: no length-limited open. |
-| (`dataSpecWithPositionAtEnd_readsZeroBytes`, length not yet known) | `testAnOpenAtExactlyTheEndFailsTheReadBeforeTheLengthIsKnown` | Pinned; a `416` with `Content-Range: bytes */N` could be read as end of stream (issue #39). |
+| (`dataSpecWithPositionAtEnd_readsZeroBytes`, length not yet known) | `testAnOpenAtExactlyTheEndReadsZeroBytesBeforeTheLengthIsKnown` | As media3's `DefaultHttpDataSource`: a `416` with `Content-Range: bytes */N` (or a range clamped to the last byte of `N`) at position `N` is a zero-length open, with no retry, and the length is learned (#39). Strict and clamping origins, with and without an HTML body. |
 | `dataSpecWithPositionOutOfRange_throwsPositionOutOfRangeException` | `testAPositionPastTheEndFailsTheRead` | A transport error after the retries, whether the origin clamps or answers `416`, with and without an HTML body. media3's exception type is n/a. |
 | `dataSpecWithEndPositionOutOfRange_readsToEnd` | `testAReadLongerThanWhatRemainsReturnsTheRest` | |
 | `unboundedDataSpecWithGzipFlag_readUntilEnd` | the `gzip` resource | Run through every case. |

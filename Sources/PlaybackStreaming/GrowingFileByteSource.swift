@@ -27,6 +27,9 @@ private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback
 ///   not walked again inside a retry's short wait. A request there that is refused (a `4xx`, a
 ///   page) or unanswered forgets it, a signed hop may have expired, and the next request walks the
 ///   chain from the requested URL once with the generous wait (``chainEndForgotten``).
+/// - A transaction whose answer says the resource ends exactly at its base (`416` with
+///   `bytes */N`, or a range clamped to the last byte) is a zero-length open, as in media3: the
+///   length is learned and the read is at its end (``totalEndingAt(_:status:contentRange:)``).
 /// - ``snapshot`` is the only read surface for anyone but the decoder; ``GrowingFileEvent``s
 ///   go to `onEvent`, on the session's delegate queue or the decoder's thread.
 ///
@@ -707,7 +710,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         didReceive response: URLResponse,
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
-        var event: GrowingFileEvent?
+        var events: [GrowingFileEvent] = []
         var roomFor: Int64?
         let disposition: URLSession.ResponseDisposition = locked {
             guard !cancelled, let tx = current, tx.task === dataTask, !tx.ended else { return .cancel }
@@ -755,6 +758,31 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
                 condition.broadcast()
                 return .allow
             }
+            if let total = Self.totalEndingAt(tx.base, status: status, contentRange: contentRange),
+               lastKnownTotalLength.map({ $0 == total }) ?? true {
+                // The host says the resource ends exactly where this transaction starts: a `416`
+                // with `bytes */N`, or a range clamped to the last byte, at position N. As media3
+                // does, that is a zero-length open: the length is learned and the read is at its
+                // end. A total that differs from the one already known (the file shrank) is
+                // refused like any other answer.
+                downloadLog.info("download: open_at_end gen=\(tx.generation) status=\(status) total=\(total)")
+                tx.ended = true
+                tx.isComplete = true
+                tx.totalLength = total
+                lastKnownTotalLength = total
+                if finalURL == nil { finalURL = response.url }
+                if startupValue.firstResponseAt == nil {
+                    startupValue.firstResponseAt = clock.now
+                    startupValue.status = status
+                    startupValue.remembered = tx.remembered
+                }
+                events = [
+                    .transaction(base: tx.base, generation: tx.generation, seekGeneration: tx.seekGeneration, httpStatus: status),
+                    .download(frontier: tx.frontier, downloadBytesPerSecond: downloadBytesPerSecondLocked(), complete: true),
+                ]
+                condition.broadcast()
+                return .cancel
+            }
             switch status {
             case 200:
                 if tx.base > 0 {
@@ -799,7 +827,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
                 startupValue.status = status
                 startupValue.remembered = tx.remembered
             }
-            event = .transaction(base: tx.base, generation: tx.generation, seekGeneration: tx.seekGeneration, httpStatus: status)
+            events = [.transaction(base: tx.base, generation: tx.generation, seekGeneration: tx.seekGeneration, httpStatus: status)]
             tx.lastByteAt = clock.now
             scheduleIdleCheckLocked(tx)
             condition.broadcast()
@@ -807,7 +835,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         }
         if let roomFor { store.makeRoom(forBytes: roomFor) }
         completionHandler(disposition)
-        if let event { onEvent?(event) }
+        events.forEach { onEvent?($0) }
     }
 
     public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
@@ -915,6 +943,26 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         let parts = header.dropFirst("bytes ".count).split(whereSeparator: { "-/".contains($0) })
         guard parts.count == 3, let start = Int64(parts[0].trimmingCharacters(in: .whitespaces)) else { return nil }
         return (start, Int64(parts[2].trimmingCharacters(in: .whitespaces)))
+    }
+
+    /// The resource's total when a fresh request's answer says it ends exactly at `base`: a `416`
+    /// with `Content-Range: bytes */<base>`, or a `206` clamped to the last byte (`bytes X-Y/<base>`
+    /// with `X` before `base`). Nil for any other answer.
+    static func totalEndingAt(_ base: Int64, status: Int, contentRange header: String?) -> Int64? {
+        guard let header, header.hasPrefix("bytes ") else { return nil }
+        let spec = header.dropFirst("bytes ".count)
+        let total: Int64?
+        switch status {
+        case 416:
+            guard spec.hasPrefix("*/") else { return nil }
+            total = Int64(spec.dropFirst(2).trimmingCharacters(in: .whitespaces))
+        case 206:
+            guard let range = contentRange(header), range.start < base else { return nil }
+            total = range.total
+        default:
+            return nil
+        }
+        return total == base ? base : nil
     }
 
     /// Whether a body is media. A page by its type, what a signed URL past its expiry

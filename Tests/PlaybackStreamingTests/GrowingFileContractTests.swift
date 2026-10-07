@@ -124,17 +124,28 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         }
     }
 
-    /// Pinned; a `416` with `Content-Range: bytes */N` could be read as end of stream (issue #39).
-    /// Today a seek to exactly the end, before the length is known, fails the read like a position
-    /// past the end; media3's `dataSpecWithPositionAtEnd_readsZeroBytes` expects zero bytes.
-    func testAnOpenAtExactlyTheEndFailsTheReadBeforeTheLengthIsKnown() throws {
+    /// media3 `dataSpecWithPositionAtEnd_readsZeroBytes`, before the length is known: the origin
+    /// answers `416` with `Content-Range: bytes */N`, or clamps the range to its last byte, and
+    /// either is a zero-length open. The read is the end at once, with no retry, and the length
+    /// is learned (#39).
+    func testAnOpenAtExactlyTheEndReadsZeroBytesBeforeTheLengthIsKnown() throws {
         let body = makeBody()
         for strict in [false, true] {
-            let server = try startServer(body: body)
-            server.answers416AtOrAfterEnd = strict
-            let source = makeSource(server.url)
-            try source.seek(to: Int64(body.count))
-            assertTransport(finish(readAsync(source, 1), within: 30, "strict416=\(strict)"), "strict416=\(strict)")
+            for html in [false, true] {
+                let context = "strict416=\(strict) html=\(html)"
+                let server = try startServer(body: body)
+                server.answers416AtOrAfterEnd = strict
+                server.htmlErrorBodies = html
+                let source = makeSource(server.url)
+                try source.seek(to: Int64(body.count))
+                XCTAssertEqual(try finish(readAsync(source, 10), context).get(), Data(), context)
+                XCTAssertEqual(try read(source, 10), Data(), "\(context): after the end")
+                XCTAssertEqual(source.totalLength, Int64(body.count), context)
+                XCTAssertEqual(source.position, Int64(body.count), context)
+                XCTAssertTrue(source.snapshot.isComplete, context)
+                XCTAssertEqual(server.requestedRanges.count, 1, "\(context): retried")
+                XCTAssertTrue(server.requestHeads.allSatisfy { $0.contains("bytes=\(body.count)-") }, context)
+            }
         }
     }
 

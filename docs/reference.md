@@ -74,6 +74,11 @@ file already there.
 
 A read fails with `StreamByteReaderError.transport` when retries and the 30 s link window are spent.
 
+A read at exactly the end before the length is known returns 0, as media3's `DefaultHttpDataSource`
+does: the host's `416` with `Content-Range: bytes */N` (or a range clamped to the last byte of `N`) at
+position `N` is a zero-length open, and `totalLength` becomes `N`. Any other `416` is a refusal,
+retried and then failed as before, and so is an `N` that differs from a length already known.
+
 ### `GrowingFileConnectionPolicy`
 
 `Sendable`, `Equatable`; passed at init, per source. Applies to `url`'s origin only.

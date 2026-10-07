@@ -388,6 +388,12 @@ stateDiagram-v2
 - **Progress resets the budget.** The frontier passing the decoder's position, or a restart nobody's
   failure caused, resets `DownloadRetry`.
 
+A transaction that opens exactly at the end before the length is known (a seek to the end) gets `416`
+with `Content-Range: bytes */N`, or a range clamped to the last byte. Either says the resource ends
+where the request starts, so, as in media3's `DefaultHttpDataSource`, it is a zero-length open: the
+length becomes `N` and the read returns 0, with no retry. Any other `416`, and an `N` that differs
+from the length already known (the file shrank), is a refusal as above.
+
 If the host ignores `Range` and answers `200`, the source marks the range as ignored. It re-declares the
 file as starting at byte 0 under a new generation, and every later read ahead of the frontier waits
 instead of restarting, because a restart would only be answered from byte 0 again.
