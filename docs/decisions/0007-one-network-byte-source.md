@@ -11,8 +11,8 @@ sources would mean two recovery layers, two sets of retry rules and two sets of 
 
 ## Decision
 
-Both apps use `GrowingFileByteSource`. The range-window source does not move into this package
-(#23). [ADR-0003](0003-growing-file-playback.md) rejected the window because its
+Both apps use `GrowingFileByteSource`. The range-window source does not move into this package.
+[ADR-0003](0003-growing-file-playback.md) rejected the window because its
 compensation rules were the bug surface, and [ADR-0004](0004-one-recovery-layer-in-the-byte-source.md)
 keeps one recovery layer. What Shuttle2 needed that is generic went into `GrowingFileByteSource`:
 

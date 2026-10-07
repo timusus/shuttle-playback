@@ -16,7 +16,7 @@ commands to build, test, rebuild FFmpeg and release, and the engineering princip
 `DownloadRetry` and `GrowingFileReadRule` take no clock, lock or network, so their tests use literal
 numbers; the byte source's tests drive a manual clock and their own `GrowingFilePathMonitor`, so backoffs
 and the 30 s link window run in milliseconds and the machine's network never reaches a test. A test
-needing a 30-minute MP3 with no Xing header generates it with a host `ffmpeg` and is skipped without one.
+needing a 30-minute MP3 with no Xing header generates it with a host `ffmpeg` and is skipped without one (and on the simulator, which has none).
 
 **Conformance suite** ([ADR-0008](decisions/0008-conformance-testing-modelled-on-media3.md)). The point is
 that the decoder gives the same audio however the bytes arrive, and that a decoder change shows up as a

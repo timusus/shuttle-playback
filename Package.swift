@@ -1,7 +1,7 @@
 // swift-tools-version: 5.9
-// The decode layer shared by Shuttle Podcasts and Shuttle2 on iOS: a static FFmpeg built per app
-// profile, the streaming decoder that drives it and the byte-source plumbing around it. Nothing here knows
-// what a podcast, an ad or a queue is. See CLAUDE.md for build, test and release.
+// The decode layer shared by Shuttle Podcasts and Shuttle2 on iOS: one static FFmpeg for
+// every app (ADR-0006), the streaming decoder that drives it and the byte-source plumbing around it.
+// Nothing here knows what a podcast, an ad or a queue is. See CLAUDE.md for build, test and release.
 import PackageDescription
 
 let package = Package(

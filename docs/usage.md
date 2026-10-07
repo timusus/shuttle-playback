@@ -2,8 +2,8 @@
 
 From adding the package to decoding a file and playing a URL while it downloads. Signatures and
 parameters are in the doc comments of the types named here; this page covers the order of calls and the
-behaviour you must know. Threading and blocking apply throughout: `open()`, `nextChunk()` and
-`read(into:maxFrames:)` block, so run them on a thread of your own, one thread per decoder.
+behaviour you must know. Threading and blocking apply throughout: `open()`, `nextChunk()`,
+`read(into:maxFrames:)` and `seek(toSeconds:)` block, so run them on a thread of your own, one thread per decoder.
 
 ## Add the package
 
@@ -21,7 +21,8 @@ targets: [
 
 Pin a tag, never a branch. `PlaybackDecode` links the system libraries the static FFmpeg needs. The
 `FFmpeg` product is only for an app with its own C code against libavformat: it carries no linker
-settings (a binary target cannot), and an app must link exactly one FFmpeg.
+settings (a binary target cannot), so the app adds CoreFoundation, CoreMedia, CoreVideo and
+VideoToolbox, `z` and `iconv` itself, and must link exactly one FFmpeg.
 
 ## Decode a file
 
@@ -39,6 +40,11 @@ if decoder.endReason != .eof { /* .failure, .cancelled or .interrupted */ }
 
 `nextChunk()` returning nil is not always the end of the file: check `endReason`, or a network failure
 looks like a short track. Output is Float32 at the source's own rate, not resampled.
+
+`open()` throws `StreamDecoderError`; a format the build lacks arrives as `.failed(status:)`. The probe
+is budgeted at 64 KiB / 1 s (libavformat's own is 5 MB / 5 s); a heavier file passes
+`probeBudget: StreamProbeBudget(bytes:analyzeDuration:)` to the initialiser. Header-described formats
+(FLAC, ALAC, WAV) skip the probe (`skippedProbe`); `forcesProbe: true` restores it.
 
 **Fixed output format.** A player running one graph across tracks (gapless, mixed sample rates) calls
 `setOutputFormat(sampleRate:channelCount:)` after `open()` and before the first read or seek. The
@@ -81,6 +87,7 @@ while let chunk = decoder.nextChunk() { /* schedule it */ }
   ([ADR-0004](decisions/0004-one-recovery-layer-in-the-byte-source.md)).
 - **Auth headers stay on the origin.** A redirect to another origin (a CDN) and its later restarts carry
   none of them.
+- **Extra headers.** `GrowingFileConnectionPolicy.headers` adds request headers for the origin, with the same redirect rule as `authHeaders`.
 - **Self-signed servers.** Pass `connectionPolicy: GrowingFileConnectionPolicy(trustedLeafSHA256: [...])`
   with the fingerprint the user trusted. It is an exception, not a pin: the system evaluates first,
   and only a certificate it refuses is accepted by fingerprint. Otherwise the read fails with
@@ -88,7 +95,7 @@ while let chunk = decoder.nextChunk() { /* schedule it */ }
 - **Cache.** A download that completes from byte 0 is kept in a `GrowingFileStore` (default
   `.shared`, 1 GiB, least recently played out). Before streaming, ask
   `store.completedFile(for: url)` and play that with `FileByteReader`. If the URL carries a
-  per-session token, pass `cacheKey:` (the URL without it) to both. Call `sweepPartials()` at launch,
+  per-session token, pass `cacheKey:` (the URL without it) to the source and to `completedFile(for:)`. Call `sweepPartials()` at launch,
   and give each owner (podcasts, music) its own store so one cannot evict the other's files.
 - **Seeking to exactly the end** reads zero bytes even before the length is known, as media3's
   `DefaultHttpDataSource` does with the host's `416 bytes */N`.

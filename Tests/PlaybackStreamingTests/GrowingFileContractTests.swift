@@ -5,7 +5,7 @@ import PlaybackDecode
 
 /// media3's `DataSourceContractTest` cases, run over the resource matrix of
 /// ``GrowingFileContractCase``. The mapping from media3's case names to these tests is in
-/// `docs/testing.md`.
+/// `docs/contributing.md`.
 final class GrowingFileContractTests: GrowingFileContractCase {
 
     // MARK: - Reading

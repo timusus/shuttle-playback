@@ -1,6 +1,6 @@
 # ADR-0001: FFmpeg for demux and decode
 
-Status: Accepted
+Status: Accepted, amended by ADR-0006 (one build)
 Date: 2026-09-09 (FFmpeg decode); 2026-10-07 (static link kept); superseded in part by ADR-0006 (one build, no profiles)
 
 ## Context

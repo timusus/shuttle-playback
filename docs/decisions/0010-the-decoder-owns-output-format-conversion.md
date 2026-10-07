@@ -12,9 +12,9 @@ that switched from 44.1 to 48 kHz played the later part at the wrong speed and p
 ## Decision
 
 The decoder outputs Float32 interleaved at the source rate and channel count by default. When a
-frame's rate, layout or sample format changes mid-stream, it resamples to the format reported at open
-(commits bba9393, 5718084; #14). An app that needs a fixed output format for a gapless graph can ask
-for one with `setOutputFormat` (#20).
+frame's rate, layout or sample format changes mid-stream, it resamples to the format reported at open.
+An app that needs a fixed output format for a gapless graph can ask
+for one with `setOutputFormat`.
 
 Format conversion is part of producing PCM a player can use. Effects (skip-silence, Voice Boost) stay
 in the apps, as PCM in and PCM out.

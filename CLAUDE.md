@@ -63,7 +63,7 @@ xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreaming
   -destination 'platform=iOS Simulator,id=<UDID>'
 ```
 
-No test is skipped on either platform. (A short body is closed a beat late by `LoopbackMediaServer`:
+No test is skipped, except the one that generates a 30-minute MP3 with a host `ffmpeg` (skipped without one, and on the simulator). (A short body is closed a beat late by `LoopbackMediaServer`:
 macOS URLSession drops a body's buffered bytes if the connection ends before the delegate has
 answered the response.)
 

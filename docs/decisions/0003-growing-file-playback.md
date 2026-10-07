@@ -1,6 +1,6 @@
 # ADR-0003: Growing-file playback
 
-Status: Accepted
+Status: Accepted, amended by ADR-0007 (the cache is per store)
 Date: 2026-10-06
 
 ## Context
@@ -15,7 +15,7 @@ separate tee. A producer slower than real time also made playback stutter.
 We download the resource once to a file on disk, as one ranged transaction, with no throttle and no
 window. The decoder reads that file, and a read that reaches the end of the written bytes waits at the
 frontier. A host that wants the same bytes reads the same file. A body that completes from byte 0 is
-renamed into a cache of up to 1 GiB, evicted least recently played first. Partial files die when the
+renamed into a cache of up to 1 GiB, evicted least recently played first (now per store, [ADR-0007](0007-one-network-byte-source.md)). Partial files die when the
 load ends and are swept at launch.
 
 ## Alternatives rejected
@@ -33,7 +33,6 @@ load ends and are swept at launch.
   takes as "no footer", so the head download is not cancelled for a look at the tail
   (`GrowingFileReadRule.footerBytes`). Outside the probe the same read waits, or the last frames would
   be cut.
-
 - The whole resource is downloaded, on cellular and in Low Data Mode too, even if the listener
   stops early.
 - A killed app restarts the download from scratch.

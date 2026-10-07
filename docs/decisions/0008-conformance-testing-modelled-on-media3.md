@@ -8,7 +8,7 @@ Date: 2026-10-08
 Two apps play whatever servers send, including truncated files, junk prefixes, odd encoders and
 flaky connections. Comparing a decode with `AVAssetReader` shows only what Apple decodes. Android's
 media3 already tests its extractors against such input, and the plan to follow it is in the Podcasts
-repo's `playback-edge-case-catalogue.md` (and #18 here).
+repo's `playback-edge-case-catalogue.md`.
 
 ## Decision
 
