@@ -29,6 +29,6 @@ in the apps, as PCM in and PCM out.
 
 - The decoder links a resampler and carries its tail and timing across a format change.
 - Seeking into a resampled section is timed by byte offset, never bit-identical (the `stitch_*` fixtures).
-- The cost of the open-time format is tracked in #27.
+- Seek accuracy at a non-native output rate is tracked in #27.
 
 Links: [ADR-0005](0005-shared-engine-repo.md), [architecture](../architecture.md).

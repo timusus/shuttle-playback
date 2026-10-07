@@ -7,7 +7,7 @@ Date: 2026-10-08
 
 Opening a stream reads bytes before the first audio, and on a network each byte costs latency and
 data. Some MP3s carry far more junk before the audio than FFmpeg's own scan of 64 KiB looks through.
-media3 tolerates 128 kB.
+media3 peeks up to 128 kB: it accepts a 100 kB prefix and rejects 200 kB.
 
 ## Decision
 
@@ -15,7 +15,7 @@ media3 tolerates 128 kB.
 (`kMP3ResyncScanBytes`) for 3 chained frame headers (`kMP3ResyncChain`) in `stream_decode.c`, and opens
 there (#24). A lone sync word does not chain, so it is not taken. The scan starts from the bytes the
 probe already read, and is skipped when the body starts with another format's signature (Ogg, FLAC,
-RIFF, FORM) or a text page. A file that opens is read exactly as before.
+RIFF, FORM, an MP4 `ftyp` box) or a text page (a leading `<` or `{`). A file that opens is read exactly as before.
 
 ## Alternatives rejected
 
