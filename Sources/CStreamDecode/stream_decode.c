@@ -61,6 +61,8 @@ struct StreamDecoder {
     int64_t     last_frame_pts;   /* best_effort_timestamp of the most recent decoded frame */
     int         decode_errors;    /* consecutive `avcodec_receive_frame` errors, see `pump` */
     int64_t     end_pts;          /* MP4: where the edit list ends the audio (stream time base), else NOPTS */
+    int         prime_skip;       /* MP4 AAC: encoder priming to drop when the file's own edit list does not (issue #25), else 0 */
+    int64_t     prime_start;      /* the timestamp of the packet that carries it */
     int         flushing;         /* a NULL packet has been sent to the decoder */
     int         ended;            /* the decoder and the resampler are both drained */
 
@@ -413,6 +415,30 @@ static int is_sbr(enum AVCodecID codec_id, int profile) {
         && (profile == AV_PROFILE_AAC_HE || profile == AV_PROFILE_AAC_HE_V2);
 }
 
+static void hold_first_packet(StreamDecoder *d);
+
+/*
+ * Encoder priming to drop from an MP4 AAC stream, for the packets whose edit list does not (issue
+ * #25). The mov demuxer turns an edit list into skip-samples side data on the first packet; a
+ * fragmented file has none, and FFmpeg then plays the encoder's priming as audio, a beat of
+ * silence or a smeared start. The count is, in order: the file's iTunSMPB atom, the codec's
+ * reported initial padding, else the 1024 samples that are the least any AAC-LC encoder's first
+ * frame holds (the MDCT overlap of a frame with nothing before it). An SBR stream is left alone:
+ * its priming is in core samples and no file says how many.
+ */
+static int mp4_aac_prime_skip(const StreamDecoder *d, const AVCodecParameters *par) {
+    if (par->codec_id != AV_CODEC_ID_AAC || is_sbr(par->codec_id, par->profile)) return 0;
+    if (!d->fmt->iformat || !d->fmt->iformat->name || !strstr(d->fmt->iformat->name, "mov")) return 0;
+    const AVDictionaryEntry *smpb = av_dict_get(d->fmt->metadata, "iTunSMPB", NULL, 0);
+    if (smpb && smpb->value) {
+        /* " 00000000 00000840 000001CA 0000000000...": padding, priming, end padding, length. */
+        unsigned f0, priming;
+        if (sscanf(smpb->value, " %x %x", &f0, &priming) == 2) return (int)priming;
+    }
+    if (par->initial_padding > 0) return par->initial_padding;
+    return 1024;
+}
+
 static int is_mpeg_audio(enum AVCodecID codec_id) {
     return codec_id == AV_CODEC_ID_MP3 || codec_id == AV_CODEC_ID_MP2 || codec_id == AV_CODEC_ID_MP1;
 }
@@ -583,6 +609,16 @@ static int pump(StreamDecoder *d) {
             av_packet_unref(d->pkt);
             continue;
         }
+        if (d->prime_skip > 0 && d->pkt->pts == d->prime_start) {
+            /* The first packet of an MP4 AAC stream whose edit list did not say to skip anything
+             * (a fragmented file has none): the decoder's own skip-samples mechanism drops the
+             * priming, as it does for an edit list. */
+            uint8_t *sd = av_packet_new_side_data(d->pkt, AV_PKT_DATA_SKIP_SAMPLES, 10);
+            if (sd) {
+                memset(sd, 0, 10);   /* little-endian skip at the start, skip at the end, reasons */
+                for (int i = 0; i < 4; i++) sd[i] = (uint8_t)((uint32_t)d->prime_skip >> (8 * i));
+            }
+        }
         if (d->drop_timestamps) d->pkt->pts = d->pkt->dts = AV_NOPTS_VALUE;
         d->last_pkt_pos = d->pkt->pos;
         d->last_pkt_dts = d->pkt->dts;
@@ -687,6 +723,32 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
         stream->duration != AV_NOPTS_VALUE && stream->duration > 0) {
         d->end_pts = d->start_time + stream->duration;
     }
+    d->prime_skip = mp4_aac_prime_skip(d, par);
+    if (d->prime_skip > 0) {
+        /* Does the file's edit list already skip its priming? It shows as skip-samples side data
+         * on the first packet, which is kept for the decoder. If not, the audio starts after the
+         * priming, so that is where time zero is. */
+        int rc;
+        while ((rc = av_read_frame(d->fmt, d->held)) >= 0 && d->held->stream_index != d->audio_idx) {
+            av_packet_unref(d->held);
+        }
+        if (rc < 0) {
+            if (d->cancelled) { local_status = STREAM_DECODE_ERR_CANCELLED; goto fail; }
+            if (d->interrupted) { local_status = STREAM_DECODE_ERR_INTERRUPTED; goto fail; }
+            avio_clear_latched_error(d);
+            d->prime_skip = 0;
+        } else {
+            hold_first_packet(d);
+            if (av_packet_get_side_data(d->held, AV_PKT_DATA_SKIP_SAMPLES, NULL) ||
+                d->held->pts != d->start_time) {
+                d->prime_skip = 0;
+            } else {
+                d->prime_start = d->held->pts;
+                d->start_time +=av_rescale_q(d->prime_skip, (AVRational){ 1, d->sample_rate },
+                                              d->time_base);
+            }
+        }
+    }
 
     local_status = init_swr(d);
     if (local_status != STREAM_DECODE_OK) goto fail;
@@ -708,6 +770,10 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
         info->duration_sec = (double)d->fmt->duration / (double)AV_TIME_BASE;
     } else if (stream->duration != AV_NOPTS_VALUE) {
         info->duration_sec = (double)stream->duration * av_q2d(stream->time_base);
+    }
+    if (d->prime_skip > 0 && info->duration_sec > 0) {
+        info->duration_sec -= (double)d->prime_skip / (double)d->sample_rate;   /* the priming is not audio */
+        if (info->duration_sec < 0) info->duration_sec = 0;
     }
     /* Kept for the byte-estimate seek: what the media occupies in bytes and how long it lasts. */
     {

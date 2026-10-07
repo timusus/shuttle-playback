@@ -82,6 +82,14 @@ How the pieces behave:
   stops each root-atom read at the first `moov` and `mdat` it has, the way it reads an unseekable
   source: the header does not skip past the `mdat` looking for the end, and a fragmented MP4 reads
   one fragment at a time instead of running to the end of the file after the first.
+- **A fragmented MP4 with AAC and no edit list loses its encoder priming (#25).** The edit list is
+  what normally tells FFmpeg to skip the priming, and a fragmented file has none. When the first
+  packet carries no skip, the decoder drops the file's iTunSMPB priming, else the codec's
+  `initial_padding`, else 1024 samples (the least any AAC-LC first frame holds), and time zero is
+  after them, so `duration`, seeks and the PCM start at the first real sample. HE-AAC and files
+  whose edit list already skips are untouched. The 1024 is an assumption where the file says
+  nothing: an encoder that primes with more (Apple's 2112) keeps the rest as a short lead-in.
+  PCM for such files changes (a minor-bump behaviour change).
 - **Leading ID3v2 tags are stepped over before FFmpeg sees them.** An MP3 with embedded cover art can
   carry megabytes of tag, and FFmpeg's MP3 demuxer reads all of it. The decoder reads the tag
   headers itself, seeks past them, and gives FFmpeg an offset-0 that is the first MPEG frame. The
