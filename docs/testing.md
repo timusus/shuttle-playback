@@ -73,8 +73,8 @@ Then review the JSON diff. The suite writes a golden only if the fault matrix pa
 **Known issues.** A decoder bug that the suite found and that is not fixed is pinned in
 `KnownIssues.swift`. A rule names the fixture, the kind of check, the exact fault combinations and
 the exact finding, with its GitHub issue, and runs under `XCTExpectFailure`. A different value, or a
-pinned finding that stops happening, fails the suite. When the bug is fixed, remove the rule. There
-are no rules at present, and `alignFrames` is 0 in every seek of every golden because seeks land on
+pinned finding that stops happening, fails the suite. When the bug is fixed, remove the rule. Rules
+exist at present for #21 and #28, among others (see the file for the current list), and `alignFrames` is 0 in every seek of every golden because seeks land on
 the requested sample. A seek to the end lands where the clean decode ends, so its empty window
 counts as 0 too.
 

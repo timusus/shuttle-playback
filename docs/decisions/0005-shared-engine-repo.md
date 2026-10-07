@@ -1,6 +1,6 @@
 # ADR-0005: A shared engine repository, scoped to decode
 
-Status: Accepted
+Status: Accepted, amended by ADR-0006 (FFmpeg formats) and ADR-0007 (byte sources)
 Date: 2026-10-07
 
 ## Context
@@ -13,8 +13,8 @@ should not carry music features.
 The decode layer lives in this repository, and both apps depend on it through SwiftPM. It holds
 decode, byte sources and FFmpeg. It does not hold effects or DSP, and it knows nothing about podcasts,
 ads, queues, players or UI. Effects such as skip-silence and Voice Boost stay in the apps. They are PCM
-in and PCM out, with no coupling to the decoder, and each app's needs differ. FFmpeg formats come
-from each app's build profile.
+in and PCM out, with no coupling to the decoder, and each app's needs differ. Both apps link one
+FFmpeg build ([ADR-0006](0006-one-superset-ffmpeg.md)), which replaced per-app build profiles.
 
 The repository has no hosted CI. It is built, tested and released with version tags locally.
 It is public under GPL-3.0, with a commercial licence on request, so SwiftPM resolves it over HTTPS
@@ -25,7 +25,8 @@ with no token.
 - A package inside one app's monorepo: SwiftPM needs `Package.swift` at the root of a repository for
   a URL dependency, and a path dependency needs a sibling checkout.
 - Keep copying: the copies had already diverged.
-- One build with every codec: it adds about 0.3 to 0.4 MB of code to an app that does not need it.
+- One build with every codec: first rejected for the 0.3 to 0.4 MB it adds to an app that does not
+  need it. [ADR-0006](0006-one-superset-ffmpeg.md) reversed this after measuring about 110 KB per slice.
 - Move the effects here too: they were extracted once and moved back. The repository stays about
   playback input, not audio processing.
 
@@ -33,7 +34,8 @@ with no token.
 
 - Every decoder fix is a fix, a tag and a version bump in each app.
 - Byte sources specific to an app stay in the app. Only the growing-file source is shared, as an
-  opt-in product, and its auth headers arrive already resolved.
+  opt-in product, and its auth headers arrive already resolved. Both apps use it
+  ([ADR-0007](0007-one-network-byte-source.md)).
 - The FFmpeg xcframework is committed to the repository, because SwiftPM does not run Git LFS and
   there is no hosted CI to publish release assets. See [FFmpeg](../ffmpeg.md).
 - A public API change is a minor bump while the version is 0.x. A change that alters the PCM the

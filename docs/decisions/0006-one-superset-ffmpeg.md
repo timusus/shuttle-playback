@@ -27,4 +27,4 @@ extra formats. Build profiles and `FFmpeg-music.xcframework` are gone.
 - Adding a format to either app is a rebuild of the one framework, and the other app gets it too.
 - The licence stays LGPL-2.1 only: no GPL flags, and no library beyond the system zlib.
 
-Links: [ADR-0001](0001-ffmpeg-for-demux-and-decode.md), [FFmpeg](../ffmpeg.md).
+Links: [ADR-0005](0005-shared-engine-repo.md) (amended by this one), [ADR-0001](0001-ffmpeg-for-demux-and-decode.md), [FFmpeg](../ffmpeg.md).
