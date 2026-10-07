@@ -9,6 +9,8 @@ byte-source and FFmpeg code (effects such as skip-silence and Voice Boost live i
 | Product | Target(s) | What it is |
 |---|---|---|
 | `PlaybackDecode` | `PlaybackDecode`, `CStreamDecode` | `FFmpegStreamDecoder`: pull decoder over a `StreamByteReader`, Float32 interleaved at the source rate, seekable, cancellable. `FileByteReader` is the plain-file reader. Probe budget is `StreamProbeBudget` (default 64 KiB / 1 s). |
+| `PlaybackStreaming` | `PlaybackStreaming` | Opt-in network byte source: `GrowingFileByteSource` (a `StreamByteReader` over an HTTP(S) URL that writes to a growing file and retries/resumes from the frontier: `DownloadRetry`, `GrowingFileReadRule`), `GrowingFileStore`, `GrowingFileSnapshot` and `GrowingFileListener`. Depends on `PlaybackDecode`; a decode-only consumer never links it. Auth headers arrive resolved; no feed or podcast concept lives here. |
+| `PlaybackStreamingTestSupport` | `PlaybackStreamingTestSupport` | `LoopbackMediaServer`, no fixtures. Tests of the streaming target are in `PlaybackStreamingTests` (own two tone fixtures). Nine byte-source tests that close a connection short are skipped on a macOS host (URLSession there drops the bytes) and run on iOS. |
 | `FFmpeg` | `CFFmpeg` (binary) | The static FFmpeg. For an app with its own C against libavformat (Podcasts' scanner decode). An app links exactly one FFmpeg. |
 
 `Frameworks/FFmpeg.xcframework` holds three slices (ios-arm64, ios-arm64-simulator, macos-arm64), each one `libffmpeg.a` plus headers and a `CFFmpeg` modulemap. `VERSION.txt` inside it records the FFmpeg tag, the profile and the exact configure flags.

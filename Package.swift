@@ -11,6 +11,13 @@ let package = Package(
         // The pull decoder: a `StreamByteReader` in, interleaved Float32 PCM at the source's own
         // rate out, seekable and cancellable.
         .library(name: "PlaybackDecode", targets: ["PlaybackDecode"]),
+        // Opt-in networking: the growing-file byte source (one ranged download per transaction, read
+        // while it grows, retried across drops) and its file store. A consumer that only wants the
+        // decoder links `PlaybackDecode` and gets none of it.
+        .library(name: "PlaybackStreaming", targets: ["PlaybackStreaming"]),
+        // A loopback `Range`-aware HTTP server with fault knobs, for a consumer's own tests of
+        // anything built on `PlaybackStreaming`. No fixtures in it.
+        .library(name: "PlaybackStreamingTestSupport", targets: ["PlaybackStreamingTestSupport"]),
         // The static FFmpeg itself, for a consumer with its own C against libavformat (Shuttle
         // Podcasts' scanner decode). One FFmpeg per app: two copies of the same static symbols
         // would be a duplicate-symbol link failure, or worse, a silent pick of one.
@@ -28,6 +35,14 @@ let package = Package(
             linkerSettings: [.linkedLibrary("z"), .linkedLibrary("iconv")]
         ),
         .target(name: "PlaybackDecode", dependencies: ["CStreamDecode"]),
+        .target(name: "PlaybackStreaming", dependencies: ["PlaybackDecode"]),
+        .target(name: "PlaybackStreamingTestSupport"),
+        // Two 20-45 s tone fixtures (under 250 KB each), served over the loopback server.
+        .testTarget(
+            name: "PlaybackStreamingTests",
+            dependencies: ["PlaybackStreaming", "PlaybackStreamingTestSupport", "PlaybackDecode"],
+            resources: [.copy("Fixtures")]
+        ),
         // The fixtures are committed (three 20 s tones, well under 250 KB each): a decoder that
         // has to be handed a podcast before it can be tested is a decoder nobody tests.
         .testTarget(

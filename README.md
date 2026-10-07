@@ -22,6 +22,8 @@ never pays for a music player's features, and the other way round.
 | Product | What it does |
 |---|---|
 | `PlaybackDecode` | Streaming FFmpeg decoder. You give it a `StreamByteReader` (bytes from a file, a download, anything); it gives you PCM. Handles seeking, files still being written, and a configurable probe budget. |
+| `PlaybackStreaming` | Opt-in networking on top of `PlaybackDecode`: `GrowingFileByteSource`, a `StreamByteReader` that plays an HTTP(S) URL while it downloads (one ranged transaction per file, reads wait at the frontier, drops resume from it, a 30 s link window rides out an outage), and `GrowingFileStore`, the on-disk cache it writes into. A consumer that only wants the decoder does not link it. |
+| `PlaybackStreamingTestSupport` | A loopback `Range`-aware HTTP server with fault knobs (drops, stalls, redirects, slow links), for tests of anything built on `PlaybackStreaming`. |
 | `FFmpeg` | A static, LGPL-only FFmpeg build. Codecs and containers are chosen per app by a build profile; the `podcast` profile has MP3, AAC, MP4 and Ogg/Opus/Vorbis. |
 
 Requires iOS 17 or macOS 14.
