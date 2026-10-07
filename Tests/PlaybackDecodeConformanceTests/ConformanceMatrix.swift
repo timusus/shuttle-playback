@@ -128,9 +128,12 @@ enum ConformanceMatrix {
     /// Measured: an AAC seek restart differs from the continuous decode by up to 5e-4 at exactly
     /// the right alignment, so 2e-4 (the old probe tolerance) cannot hold over a whole window. The
     /// exact PCM of each seek is pinned by `windowSha256Int16`; this only finds where it sits.
-    /// The last samples of an AAC-in-MP4 tone differ by up to 4e-3 (the edit-list trim ends the
-    /// audio inside the tone, where the restart's missing overlap shows most), hence 5e-3.
-    static let alignTolerance: Float = 5e-3
+    static let alignTolerance: Float = 1e-3
+    /// The last `clippedTailFrames` of a seek window that ends at the clean end are compared to
+    /// `clippedTailTolerance`: a restarted AAC decode differs by up to 4e-3 there (the edit-list
+    /// trim ends the audio inside the tone, where the restart's missing overlap shows most).
+    static let clippedTailFrames = 128
+    static let clippedTailTolerance: Float = 5e-3
     static let alignSearchFrames = 65536
 
     /// Seeks to each fraction of the clean duration and records where it landed and the PCM after it.
@@ -186,10 +189,15 @@ enum ConformanceMatrix {
             for offset in distance == 0 ? [0] : [distance, -distance] {
                 let start = (nominal + offset) * channels
                 guard start >= 0, start + result.window.count <= clean.pcm.count else { continue }
+                let endsAtCleanEnd = start + result.window.count == clean.pcm.count
+                let tailStart = result.window.count - clippedTailFrames * channels
                 var matches = true
-                for i in 0..<result.window.count where abs(result.window[i] - clean.pcm[start + i]) > alignTolerance {
-                    matches = false
-                    break
+                for i in 0..<result.window.count {
+                    let tolerance = endsAtCleanEnd && i >= tailStart ? clippedTailTolerance : alignTolerance
+                    if abs(result.window[i] - clean.pcm[start + i]) > tolerance {
+                        matches = false
+                        break
+                    }
                 }
                 if matches { return offset }
             }
