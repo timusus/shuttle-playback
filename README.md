@@ -17,6 +17,12 @@ xcframework is committed rather than downloaded.
 Doc comments sometimes cite plan paths such as `mobile/ios/docs/plans/...`. Those paths are in the
 Shuttle Podcasts repo, where this code started.
 
+## Contributing
+
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions need
+agreement to a short [Contributor Licence Agreement](CLA.md), so the project can keep its commercial
+licence option.
+
 ## Licence
 
 Copyright (c) 2026 Tim Malseed. Licensed under the [GPL-3.0](LICENSE).
