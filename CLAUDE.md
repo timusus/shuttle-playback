@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Private Swift package holding the iOS decode layer shared by **Shuttle Podcasts**
+Public (GPL-3.0) Swift package holding the iOS decode layer shared by **Shuttle Podcasts**
 (`timusus/podcasts`) and, later, **Shuttle2** (`timusus/shuttle2`). It holds only codec and DSP
 code. Anything about podcasts, ads, queues, players or UI stays in the apps.
 
@@ -21,11 +21,9 @@ It is **committed to git** (about 11 MB, three 2.5 MB static libraries plus head
 downloaded:
 
 - **SwiftPM does not run Git LFS.** A consumer resolving by git URL would get LFS pointer files.
-- **A release asset in a private repo needs auth on every fetch.** `.binaryTarget(url:checksum:)`
-  on a private GitHub release means a `.netrc` or token on every dev machine and in every CI job,
-  on top of the SSH key that fetching the repo already needs. There is no hosted CI to publish
-  assets from, either.
-- **Committed means one credential.** Whoever can clone the repo can build. The cost is repo
+- **No hosted CI publishes release assets.** `.binaryTarget(url:checksum:)` would need someone to
+  upload a zip and bump a checksum by hand on every FFmpeg rebuild.
+- **Committed means it just works.** Anyone who can clone the repo can build. The cost is repo
   growth when FFmpeg is rebuilt, a few MB per FFmpeg bump, which is rare.
 
 `.gitattributes` marks `*.a` as binary so git never diffs or normalises it.
