@@ -7,7 +7,7 @@ The iOS decode layer shared by Shuttle Podcasts and Shuttle2. It contains:
 - the skip-silence and Voice Boost DSP stages.
 
 ```swift
-.package(url: "git@github.com:timusus/shuttle-playback.git", from: "0.1.0")
+.package(url: "https://github.com/timusus/shuttle-playback.git", from: "0.1.0")
 // products: PlaybackDecode, SilenceGate, VoiceEnhance, FFmpeg
 ```
 
@@ -16,5 +16,12 @@ xcframework is committed rather than downloaded.
 
 Doc comments sometimes cite plan paths such as `mobile/ios/docs/plans/...`. Those paths are in the
 Shuttle Podcasts repo, where this code started.
+
+## Licence
+
+Copyright (c) 2026 Tim Malseed. Licensed under the [GPL-3.0](LICENSE).
+
+If the GPL does not suit your project, for example a closed-source app, a commercial licence is
+available. Open an issue or get in touch through GitHub.
 
 FFmpeg is LGPL-2.1. Its licence text ships inside `Frameworks/FFmpeg.xcframework`.
