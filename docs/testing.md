@@ -34,6 +34,49 @@ xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreaming
 `scripts/release.sh` does this for you, using `IOS_SIM_UDID` if set, otherwise the first available
 iPhone.
 
+## The data-source contract suite
+
+`GrowingFileContractTests` runs media3's `DataSourceContractTest` cases against
+`GrowingFileByteSource` over `LoopbackMediaServer`, the way media3 runs them over the resources of
+`HttpDataSourceTestEnv`. `GrowingFileContractCase` is the reusable base: a `Resource` is a server
+configuration plus the URL to open, `matrix` lists them, and each case loops over it, naming the
+resource in every failure. A new server behaviour is one `Resource`; a later suite (connection
+policy, path-change reopen, cache budget) subclasses the base, adds or overrides resources and
+reuses the helpers (`open`, `read`, `readAsync`, `finish`, `assertTransport`).
+
+The matrix: ranged `206`; range ignored (`200`); no `Content-Length`; chunked; lower-case header
+names; `ETag`; gzip; `application/octet-stream`; a 3-hop redirect chain; a `302` whose `Location` is
+absolute, rooted (`/fixture.mp3`), parent-relative (`../fixture.mp3`) or scheme-relative; `301`,
+`303`, `307` and `308`; and lower-case chunked behind a relative redirect. The server knobs added
+for it are `lowercasesHeaders`, `usesChunkedEncoding`, `htmlErrorBodies`, `redirectURL(status:location:)`
+and `missingURL`.
+
+The mapping below was written from memory of media3's `library/test_utils` (the files could not be
+fetched), so the media3 names are approximate.
+
+| media3 case | Here | Notes |
+|---|---|---|
+| `unboundedRangeRequest`, read all | `testTheWholeBodyIsReadAndThenEndsInAZero` | Also asserts length and position. |
+| `positionedRangeRequest` | `testASeekThenAReadToTheEndReturnsTheSuffix`, `testASeekAsksTheHostForExactlyThatOffset` | The second checks the `Range` header on the wire. |
+| `boundedRangeRequest` | `testABoundedReadFromAPositionReturnsThatWindow` | A bound is a read length; the source has no length-limited open. |
+| `byteRangeReadsEqualWhole` | `testContiguousWindowsAddUpToTheBody` | |
+| reopen / seek back | `testSeekingBackAndForwardReadsTheSameBytes` | |
+| `positionAtEnd` | `testAPositionAtTheEndOfAKnownLengthIsEndOfStream`, `testAnOpenAtExactlyTheEndFailsTheReadBeforeTheLengthIsKnown` | Before the length is known, the read fails after the retries; the source cannot tell an end from a bad range. |
+| `positionPastEnd` | `testAPositionPastTheEndFailsTheRead` | Clamping and `416` origins, with and without an HTML body. |
+| `resourceNotFound`, error statuses | `testErrorStatusesFailTheReadAfterTheRetries` | 400 to 503, with and without an HTML page, and a missing path. |
+| HTML / wrong content type | `testAPageServedAsAudioOrAsAPageFailsTheRead` | A page declared `audio/mpeg` is trusted. |
+| request headers, redirects (`HttpDataSourceTestEnv`) | `testRequestHeadersRideEveryRequestIncludingRedirectHops`, the redirect resources | Relative and absolute `Location`, every redirect status. |
+| lower-case response headers | the `lowercase-headers` resources | Run through every case. |
+| unknown length, chunked | the `no-content-length` and `chunked` resources | Run through every case. |
+| `closeWithoutOpen`, `multipleCloseCalls` | `testCancelBeforeAnyReadAndCancelTwiceAreHarmless` | |
+| `readAfterClose` | `testAReadAfterCancelThrowsCancelled` | |
+| `reopenAfterClose` | `testANewSourceAfterACancelReadsTheWholeBodyAgain` | A source is not reopened; a new one is made. |
+| `getResponseHeaders`, `getUri` | `testTheFirstAnswerRecordsItsStatusAndTheRedirectHops` | n/a for headers: the source exposes none; it records the status, hosts and length. |
+| `getUri` before open, `open` returns length | n/a | No such API. |
+| transfer listener events | n/a | The source reports `GrowingFileEvent`, covered in `GrowingFileByteSourceTests`. |
+| `FakeDataSet` scripted per-request behaviour | the server's per-request knobs and `bodies` | Covered by `GrowingFileByteSourceTests` and `LoopbackFaultKnobTests`; no separate scripting layer. |
+| cross-protocol redirect, timeouts, `Content-Type` predicate | n/a | Loopback is HTTP only; timeouts and idle checks have their own tests in `GrowingFileByteSourceTests`. |
+
 ## The conformance suite
 
 **Fixtures.** 28 files in `Tests/PlaybackDecodeConformanceTests/Fixtures`, plus the three in
