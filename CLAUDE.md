@@ -63,12 +63,19 @@ one-shot I/O errors and unknown length, and requires each to be bit-identical to
 the same run. It then seeks to 0, 1/3, 2/3 and the end, and compares with `Goldens/<fixture>.json`
 (Int16 per-second PCM hashes, frame count, seek landings, the fixture's own sha256). After an
 intended decoder change, or a new fixture, regenerate with
-`GOLDEN_UPDATE=1 swift test --filter PlaybackDecodeConformance` and review the JSON diff. Fixtures
+`GOLDEN_UPDATE=1 swift test --filter PlaybackDecodeConformance` and review the JSON diff; it writes
+a golden only if the fault matrix passes against it. Fixtures
 are made by `Fixtures/make-fixtures.sh` (needs ffmpeg, lame, afconvert; the HE-AAC, Opus and Vorbis
 files are not byte-reproducible, so re-run it only on purpose); the three androidx/media files are
-listed in `Fixtures/NOTICE`. A decoder bug the suite found is listed in `KnownIssues.swift` with its
-issue number and runs under `XCTExpectFailure`; remove the entry when the issue is fixed.
-`CONFORMANCE_PLANT_DEFECT=1` drops a frame from the clean decode to prove the suite fails.
+listed in `Fixtures/NOTICE`. A resumed decode must match the clean one per second outside the
+warm-ups (MP3 and MP4 resume bit-exactly), and bytes before the first audio are budgeted under every
+combination. A decoder bug the suite found and nobody has fixed is pinned in `KnownIssues.swift`:
+fixture, kind, exact fault combinations and the exact finding, with its issue number, under
+`XCTExpectFailure`. A different value, or a pinned finding that stops happening, fails; update or
+remove the rule. MP3 seek misalignment (#3) is pinned as `alignFrames` in the goldens instead.
+`CONFORMANCE_FIXTURE=<file name>` runs one fixture. `CONFORMANCE_PLANT_DEFECT=1` drops a frame from
+the clean decode to prove the suite fails. FFmpeg fixes the tag lacks live in
+`scripts/ffmpeg-patches/`, applied by `build-ffmpeg.sh` and listed in `VERSION.txt`.
 
 ## Release
 
