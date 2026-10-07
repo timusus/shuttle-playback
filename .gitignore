@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+/Packages/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+.DS_Store
+# The music profile is a stub: never commit it until a consumer exists.
+Frameworks/FFmpeg-music.xcframework/
