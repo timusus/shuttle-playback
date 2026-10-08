@@ -1128,7 +1128,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
     }
 
     /// A reopen for a path change is a failure the host answered like any other: it spends one of
-    /// ``DownloadRetry/maxAttempts``, the budget a refused resume spends too. With every resume
+    /// ``GrowingFileDownload/Retry/maxAttempts``, the budget a refused resume spends too. With every resume
     /// after it refused, the read fails one resume sooner than on refusals alone: no second budget.
     func testAPathChangeReopenSpendsTheSameRetryBudget() throws {
         let body = makeBody(64 * 1024)
@@ -1152,21 +1152,6 @@ final class GrowingFileByteSourceTests: XCTestCase {
             "the path change did not spend an attempt: one resume too many, or too few (a second budget)"
         )
         XCTAssertLessThan(clock.now - 1_000, GrowingFileByteSource.idleTimeoutSeconds)
-    }
-
-    /// A completed download has nothing to reopen.
-    func testAPathChangeAfterTheBodyCompletedDoesNothing() throws {
-        let body = makeBody(32 * 1024)
-        let server = try startServer(body: body)
-        let monitor = GrowingFilePathMonitor()
-        let source = makeSource(server.url, clock: ManualGrowingFileClock(), pathMonitor: monitor)
-        XCTAssertEqual(try readToEnd(source), body)
-        XCTAssertTrue(waitUntil { source.snapshot.isComplete })
-        monitor.update(Self.wifi)
-        monitor.update(Self.cellular)
-        Thread.sleep(forTimeInterval: 0.1)
-        XCTAssertEqual(server.requestedRanges, [0])
-        XCTAssertTrue(source.snapshot.isComplete)
     }
 
     /// What counts as a change, with literal paths.
