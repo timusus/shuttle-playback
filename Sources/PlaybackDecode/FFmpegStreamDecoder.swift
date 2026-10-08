@@ -287,7 +287,7 @@ public final class FFmpegStreamDecoder {
                 throw StreamDecoderError.unseekable
             default:
                 // Not latched: a source still offline fails the seek, and the next seek, once it
-                // is back, must read again rather than rethrow (as 0.3.2 did).
+                // is back, must read again rather than rethrow.
                 reason = .failure
                 throw StreamDecoderError.failed(status: status)
             }
