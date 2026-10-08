@@ -19,7 +19,7 @@ answers. The host only detects: it notices starvation and resumes playing.
 
 A new network path (Wi-Fi gone to cellular, the link back after none) ends the transaction in flight
 at once instead of waiting out the 6 s. It is one more failure of this layer, not a second
-recovery path: `DownloadRetry` decides on it from the same budget, and the retry resumes from the
+recovery path: the retry budget decides on it from the same budget, and the retry resumes from the
 frontier as after any drop. The signal is one `NWPathMonitor` shared by every source.
 
 ## Alternatives rejected
@@ -35,7 +35,8 @@ frontier as after any drop. The signal is one `NWPathMonitor` shared by every so
   three and change the bytes. This was accepted as rarer than the cost of refetching.
 - Past the retry budget the read throws a transport error at the frontier. A player should play out
   what it has decoded and then show an error at that position, not the end of the stream.
-- The policy is a value type with no clock, lock or network (`DownloadRetry`), so each rule is tested
-  with literal numbers, and the source is tested against a loopback server with fault knobs.
+- The layer is one state machine with no clock, lock, file or network (`GrowingFileDownload`, its
+  retry budget `GrowingFileDownload.Retry`), so each rule and each event sequence is tested with
+  literal numbers, and the source, its adapter, is tested against a loopback server with fault knobs.
 
 Links: [architecture](../architecture.md).

@@ -31,7 +31,7 @@ load ends and are swept at launch.
   on purpose: FFmpeg's MP3 open seeks to the last 128 bytes for an ID3v1 tag. While the host has set
   `isProbing` around `open()`, a read there past the frontier answers end of file at once, which FFmpeg
   takes as "no footer", so the head download is not cancelled for a look at the tail
-  (`GrowingFileReadRule.footerBytes`). Outside the probe the same read waits, or the last frames would
+  (`GrowingFileDownload.ReadRule.footerBytes`). Outside the probe the same read waits, or the last frames would
   be cut.
 - The whole resource is downloaded, on cellular and in Low Data Mode too, even if the listener
   stops early.

@@ -119,7 +119,7 @@ final class GrowingFileContractTests: GrowingFileContractCase {
                 try source.seek(to: Int64(body.count) + 10)
                 let context = "strict416=\(strict) html=\(html)"
                 assertTransport(finish(readAsync(source, 1), within: 30, context), context)
-                XCTAssertEqual(server.requestedRanges.count, 1 + DownloadRetry.maxAttempts, context)
+                XCTAssertEqual(server.requestedRanges.count, 1 + GrowingFileDownload.Retry.maxAttempts, context)
             }
         }
     }
@@ -198,13 +198,13 @@ final class GrowingFileContractTests: GrowingFileContractCase {
                 server.reject(host: "127.0.0.1:\(server.port)", status: status)
                 let context = "status=\(status) html=\(html)"
                 assertTransport(finish(readAsync(makeSource(server.url), 1), within: 30, context), context)
-                XCTAssertEqual(server.requestHeads.count, 1 + DownloadRetry.maxAttempts, context)
+                XCTAssertEqual(server.requestHeads.count, 1 + GrowingFileDownload.Retry.maxAttempts, context)
             }
             let server = try startServer(body: body)
             server.htmlErrorBodies = html
             let context = "missing path html=\(html)"
             assertTransport(finish(readAsync(makeSource(server.missingURL), 1), within: 30, context), context)
-            XCTAssertEqual(server.requestHeads.count, 1 + DownloadRetry.maxAttempts, context)
+            XCTAssertEqual(server.requestHeads.count, 1 + GrowingFileDownload.Retry.maxAttempts, context)
         }
         XCTAssertEqual(partials(), [])
     }

@@ -6,11 +6,11 @@ import Testing
 /// **The download's retry budget, pinned without a network**: answered failures spend
 /// attempts, unanswered ones spend the link window, the backoff doubles to its cap, and only a
 /// response or a reset gives anything back. Times are literal seconds.
-struct DownloadRetryTests {
+struct GrowingFileDownloadRetryTests {
 
     @Test("a host's answered failures get three retries, then the read fails")
     func answeredFailuresSpendAttempts() {
-        var retry = DownloadRetry()
+        var retry = GrowingFileDownload.Retry()
         #expect(retry.failed(answered: true, retryable: true, now: 0) == .retry(after: 0.1))
         #expect(retry.failed(answered: true, retryable: true, now: 1) == .retry(after: 0.2))
         #expect(retry.failed(answered: true, retryable: true, now: 2) == .retry(after: 0.4))
@@ -20,7 +20,7 @@ struct DownloadRetryTests {
 
     @Test("a failure no retry fixes fails at once and spends nothing")
     func notRetryableFailsAtOnce() {
-        var retry = DownloadRetry()
+        var retry = GrowingFileDownload.Retry()
         #expect(retry.failed(answered: true, retryable: false, now: 0) == .fail)
         #expect(retry.attempts == 0)
         #expect(retry.failuresInRow == 0)
@@ -28,7 +28,7 @@ struct DownloadRetryTests {
 
     @Test("an unanswered link is retried while the next attempt starts inside the window, then fails")
     func unansweredFailuresSpendTheWindow() {
-        var retry = DownloadRetry()
+        var retry = GrowingFileDownload.Retry()
         // By the eighth failure the backoff is at its 2 s cap, so 128 s is the last that can retry.
         for second in 0..<28 {
             guard case .retry = retry.failed(answered: false, retryable: true, now: 100 + Double(second)) else {
@@ -43,7 +43,7 @@ struct DownloadRetryTests {
 
     @Test("the window runs from when the link went quiet, and the attempt's wait stops at its end")
     func theWindowRunsFromWhenTheLinkWentQuiet() {
-        var retry = DownloadRetry()
+        var retry = GrowingFileDownload.Retry()
         #expect(retry.linkWindowLeft(now: 0) == nil, "the link is up")
         // A body silent since 60 s, ended by the idle check at 66 s: answered, but the link is quiet.
         #expect(retry.failed(answered: true, retryable: true, quietSince: 60, now: 66) == .retry(after: 0.1))
@@ -59,7 +59,7 @@ struct DownloadRetryTests {
 
     @Test("an unanswered attempt's window starts when it was sent, not when it gave up")
     func anUnansweredAttemptStartsTheWindowWhenSent() {
-        var retry = DownloadRetry()
+        var retry = GrowingFileDownload.Retry()
         #expect(retry.failed(answered: false, retryable: true, quietSince: 0, now: 20) == .retry(after: 0.1))
         #expect(retry.linkDownSince == 0)
         #expect(abs((retry.linkWindowLeft(now: 20.1) ?? 0) - 9.9) < 1e-9)
@@ -67,7 +67,7 @@ struct DownloadRetryTests {
 
     @Test("the backoff doubles from 0.1 s and stops at 2 s")
     func backoffDoublesToItsCap() {
-        var retry = DownloadRetry()
+        var retry = GrowingFileDownload.Retry()
         let backoffs = (0..<8).map { _ -> TimeInterval? in
             guard case .retry(let after) = retry.failed(answered: false, retryable: true, now: 0) else { return nil }
             return after
@@ -77,7 +77,7 @@ struct DownloadRetryTests {
 
     @Test("a response ends the outage: the next unanswered failure starts a fresh window")
     func aResponseRestartsTheWindow() {
-        var retry = DownloadRetry()
+        var retry = GrowingFileDownload.Retry()
         _ = retry.failed(answered: false, retryable: true, now: 0)
         retry.linkAnswered()
         #expect(retry.linkDownSince == nil)
@@ -89,18 +89,18 @@ struct DownloadRetryTests {
 
     @Test("a response does not give answered attempts back; a reset gives everything back")
     func resetIsTheOnlyRefund() {
-        var retry = DownloadRetry(linkWindow: 5)
+        var retry = GrowingFileDownload.Retry(linkWindow: 5)
         for _ in 0..<3 { _ = retry.failed(answered: true, retryable: true, now: 0) }
         retry.linkAnswered()
         #expect(retry.failed(answered: true, retryable: true, now: 0) == .fail)
         retry.reset()
-        #expect(retry == DownloadRetry(linkWindow: 5))
+        #expect(retry == GrowingFileDownload.Retry(linkWindow: 5))
         #expect(retry.failed(answered: true, retryable: true, now: 0) == .retry(after: 0.1))
     }
 
     @Test("mixed failures share one backoff run")
     func mixedFailuresShareTheBackoff() {
-        var retry = DownloadRetry()
+        var retry = GrowingFileDownload.Retry()
         #expect(retry.failed(answered: false, retryable: true, now: 0) == .retry(after: 0.1))
         #expect(retry.failed(answered: true, retryable: true, now: 1) == .retry(after: 0.2))
         #expect(retry.failed(answered: false, retryable: true, now: 2) == .retry(after: 0.4))

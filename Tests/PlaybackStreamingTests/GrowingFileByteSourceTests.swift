@@ -262,7 +262,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         clock.advance(by: GrowingFileByteSource.retryRequestTimeoutSeconds - 0.5)
         Thread.sleep(forTimeInterval: 0.1)
         XCTAssertEqual(server.requestedRanges.count, 3, "the restart was given up on before a retry's wait")
-        clock.advance(by: 0.5 + DownloadRetry.firstBackoffSeconds * 2 + 0.1)
+        clock.advance(by: 0.5 + GrowingFileDownload.Retry.firstBackoffSeconds * 2 + 0.1)
         XCTAssertTrue(waitUntil { server.requestedRanges.count == 4 }, "the restart waited longer than a retry's wait")
         XCTAssertEqual(server.requestedRanges.last, 10_000)
     }
@@ -348,7 +348,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         let pending = readAsync(source, 100)
         XCTAssertTrue(pending.finished(within: 20), "every restart is from byte 0 and ends before 100 000")
         assertTransport(pending.result)
-        XCTAssertEqual(server.requestedRanges.count, 1 + DownloadRetry.maxAttempts)
+        XCTAssertEqual(server.requestedRanges.count, 1 + GrowingFileDownload.Retry.maxAttempts)
     }
 
     func testAuthHeadersRideEveryRequestAndRedirectHopAndRestartsGoStraightToTheEnd() throws {
@@ -496,10 +496,10 @@ final class GrowingFileByteSourceTests: XCTestCase {
         assertTransport(pending.result)
         // It stops asking once the next attempt would start past the window: at most one backoff early.
         XCTAssertGreaterThanOrEqual(
-            clock.now - 1_000, DownloadRetry.linkWindowSeconds - DownloadRetry.maxBackoffSeconds,
+            clock.now - 1_000, GrowingFileDownload.Retry.linkWindowSeconds - GrowingFileDownload.Retry.maxBackoffSeconds,
             "the read failed before the window closed"
         )
-        XCTAssertLessThanOrEqual(clock.now - 1_000, DownloadRetry.linkWindowSeconds + 1, "the window ran long")
+        XCTAssertLessThanOrEqual(clock.now - 1_000, GrowingFileDownload.Retry.linkWindowSeconds + 1, "the window ran long")
     }
 
     /// A link that swallows every request (a captive portal, a dead Wi-Fi that still connects):
@@ -518,17 +518,17 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertEqual(server.requestedRanges.count, 1, "the first request was given up on before its header wait")
 
         // +20 s: the first wait ends; 0.1 s later the retry goes out with the short wait.
-        clock.advance(by: 0.5 + DownloadRetry.firstBackoffSeconds + 0.01)
+        clock.advance(by: 0.5 + GrowingFileDownload.Retry.firstBackoffSeconds + 0.01)
         XCTAssertTrue(waitUntil { server.requestedRanges.count == 2 }, "no retry after the first wait")
         // +28.1 s: the retry's wait ends; 0.2 s later the last one goes out with what is left of the window.
-        clock.advance(by: GrowingFileByteSource.retryRequestTimeoutSeconds + DownloadRetry.firstBackoffSeconds * 2)
+        clock.advance(by: GrowingFileByteSource.retryRequestTimeoutSeconds + GrowingFileDownload.Retry.firstBackoffSeconds * 2)
         XCTAssertTrue(waitUntil { server.requestedRanges.count == 3 }, "no retry inside the window")
         XCTAssertFalse(pending.finished(within: 0.1), "the read failed inside the window")
 
         clock.advance(by: 1.7 + 0.01)
         XCTAssertTrue(pending.finished(within: 10), "an attempt ran past the window's end")
         assertTransport(pending.result)
-        XCTAssertEqual(clock.now - 1_000, DownloadRetry.linkWindowSeconds, accuracy: 0.05)
+        XCTAssertEqual(clock.now - 1_000, GrowingFileDownload.Retry.linkWindowSeconds, accuracy: 0.05)
         XCTAssertEqual(server.requestedRanges, [0, 0, 0])
     }
 
@@ -551,8 +551,8 @@ final class GrowingFileByteSourceTests: XCTestCase {
             XCTAssertTrue(clock.drive(timeout: 30) { rest.finished(within: 0) }, "the read never failed")
             assertTransport(rest.result)
             let quietFor = clock.now - 1_000
-            XCTAssertGreaterThanOrEqual(quietFor, DownloadRetry.linkWindowSeconds - DownloadRetry.maxBackoffSeconds, "\(redirected)")
-            XCTAssertLessThanOrEqual(quietFor, DownloadRetry.linkWindowSeconds + 1.5, "the window ran long: \(redirected)")
+            XCTAssertGreaterThanOrEqual(quietFor, GrowingFileDownload.Retry.linkWindowSeconds - GrowingFileDownload.Retry.maxBackoffSeconds, "\(redirected)")
+            XCTAssertLessThanOrEqual(quietFor, GrowingFileDownload.Retry.linkWindowSeconds + 1.5, "the window ran long: \(redirected)")
             XCTAssertEqual(server.requestedRanges.first, 0)
             XCTAssertTrue(server.requestedRanges.dropFirst().allSatisfy { $0 == 20_000 }, "a retry did not resume")
         }
@@ -577,7 +577,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         _ = clock.drive { clock.now - 1_000 >= 20 }
         XCTAssertFalse(rest.finished(within: 0), "the outage failed the read")
         XCTAssertGreaterThan(
-            server.requestHeads.count - server.requestedRanges.count, DownloadRetry.maxAttempts,
+            server.requestHeads.count - server.requestedRanges.count, GrowingFileDownload.Retry.maxAttempts,
             "the outage was asked about more often than the attempts a host's refusal gets"
         )
 
@@ -643,7 +643,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
 
         // The body has been silent for the idle timeout on the clock (its chunk is stuck in the
         // write): the task is ended, and a backoff later the resume asks for the frontier.
-        clock.advance(by: GrowingFileByteSource.idleTimeoutSeconds + DownloadRetry.firstBackoffSeconds + 0.01)
+        clock.advance(by: GrowingFileByteSource.idleTimeoutSeconds + GrowingFileDownload.Retry.firstBackoffSeconds + 0.01)
         XCTAssertTrue(waitUntil { server.requestedRanges.count == 2 }, "no resume")
         XCTAssertEqual(server.requestedRanges, [0, frontier])
 
@@ -972,7 +972,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertTrue(waitUntil { source.snapshot.isComplete })
 
         // Well past the idle timeout and the link window on the source's clock.
-        clock.advance(by: DownloadRetry.linkWindowSeconds * 2)
+        clock.advance(by: GrowingFileDownload.Retry.linkWindowSeconds * 2)
         Thread.sleep(forTimeInterval: 0.1)
         XCTAssertEqual(try readToEnd(source), body.suffix(from: 1000))
         XCTAssertEqual(server.requestedRanges, [0])
@@ -1078,7 +1078,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         let pending = readAsync(source, 1)
         XCTAssertTrue(pending.finished(within: 20))
         assertTransport(pending.result)
-        XCTAssertEqual(mismatched.requestedRanges.count, 1 + DownloadRetry.maxAttempts)
+        XCTAssertEqual(mismatched.requestedRanges.count, 1 + GrowingFileDownload.Retry.maxAttempts)
 
         for status in [404, 416] {
             let server = try startServer(body: body)
@@ -1086,7 +1086,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
             let pending = readAsync(makeSource(server.url), 1)
             XCTAssertTrue(pending.finished(within: 20), "\(status)")
             assertTransport(pending.result)
-            XCTAssertEqual(server.requestHeads.count, 1 + DownloadRetry.maxAttempts, "\(status)")
+            XCTAssertEqual(server.requestHeads.count, 1 + GrowingFileDownload.Retry.maxAttempts, "\(status)")
         }
     }
 
@@ -1119,7 +1119,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
 
         server.stallsAfterBodyBytes = nil
         monitor.update(Self.cellular)
-        clock.advance(by: DownloadRetry.firstBackoffSeconds + 0.01)
+        clock.advance(by: GrowingFileDownload.Retry.firstBackoffSeconds + 0.01)
         XCTAssertTrue(waitUntil { server.requestedRanges.count == 2 }, "the new path did not reopen the transaction")
         XCTAssertLessThan(clock.now - 1_000, GrowingFileByteSource.idleTimeoutSeconds / 2)
         XCTAssertEqual(try readToEnd(source), body.suffix(from: 10_000))
@@ -1148,7 +1148,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertTrue(clock.drive(step: 0.1) { rest.finished(within: 0) }, "the read never failed")
         assertTransport(rest.result)
         XCTAssertEqual(
-            server.requestedRanges, [0] + Array(repeating: 20_000, count: DownloadRetry.maxAttempts),
+            server.requestedRanges, [0] + Array(repeating: 20_000, count: GrowingFileDownload.Retry.maxAttempts),
             "the path change did not spend an attempt: one resume too many, or too few (a second budget)"
         )
         XCTAssertLessThan(clock.now - 1_000, GrowingFileByteSource.idleTimeoutSeconds)

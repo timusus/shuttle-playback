@@ -49,14 +49,16 @@ it reads from its `StreamByteReader` only as much as the caller's next chunk nee
 decoder reads that file, and a read at the end of the written bytes waits
 ([ADR-0003](decisions/0003-growing-file-playback.md)). Vocabulary: a *transaction* is one `GET` and its
 file; *base* is the resource offset of the file's first byte; *frontier* is one past its last readable
-byte; a restart is a new transaction.
+byte; a restart is a new transaction. Every rule below is `GrowingFileDownload`'s, a state machine
+with no lock, task, file or clock: events in (a read, a seek, a response, bytes, a task's end, a timer,
+a path change), effects out (serve, park, open a file, send a request, schedule a timer, fail). The
+source is its adapter: one lock, the URLSession delegate, the file descriptors and the clock.
 
-- **A read is decided when it happens, not at the seek** (`GrowingFileReadRule`, a pure function with no
-  clock or lock): the MP3 footer probe seeks to the tail and back, and deciding at the seek would cancel
+- **A read is decided when it happens, not at the seek** (`GrowingFileDownload.ReadRule`, a pure function): the MP3 footer probe seeks to the tail and back, and deciding at the seek would cancel
   the head download for a read that never needed the network. A small gap ahead waits; a far one, or a
   position behind `base`, restarts the download there.
 - **Recovery lives only in this class** ([ADR-0004](decisions/0004-one-recovery-layer-in-the-byte-source.md)).
-  `DownloadRetry` (a pure value type) spends 3 attempts on failures the host answered and a 30 s link
+  `GrowingFileDownload.Retry` (a pure value type) spends 3 attempts on failures the host answered and a 30 s link
   window on ones nothing answered. A retry resumes from the frontier when the host gives the same range
   and total, otherwise restarts at the decoder's position. A body silent for 6 s, or a network path
   change, ends the transaction like a drop.

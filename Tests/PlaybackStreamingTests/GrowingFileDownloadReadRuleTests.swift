@@ -4,7 +4,7 @@ import XCTest
 
 /// **The seek-wait rule**: what a read at a position of a growing file
 /// does, pinned with literals.
-final class GrowingFileReadRuleTests: XCTestCase {
+final class GrowingFileDownloadReadRuleTests: XCTestCase {
 
     private func action(
         _ position: Int64,
@@ -15,8 +15,8 @@ final class GrowingFileReadRuleTests: XCTestCase {
         probing: Bool = false,
         rangeIgnored: Bool = false,
         rate: Double? = 100
-    ) -> GrowingFileReadRule.Action {
-        GrowingFileReadRule.action(
+    ) -> GrowingFileDownload.ReadRule.Action {
+        GrowingFileDownload.ReadRule.action(
             position: position, base: base, frontier: frontier, totalLength: total,
             isComplete: complete, isProbing: probing, rangeIgnored: rangeIgnored, downloadBytesPerSecond: rate
         )

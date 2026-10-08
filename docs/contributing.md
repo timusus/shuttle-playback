@@ -11,10 +11,11 @@ commands to build, test, rebuild FFmpeg and release, and the engineering princip
 |---|---|
 | `PlaybackDecodeTests` | The decoder against `AVAssetReader` on three committed tone fixtures. |
 | `PlaybackDecodeConformanceTests` | Every fixture through a faulting reader, then seeks, against goldens. |
-| `PlaybackStreamingTests` | `GrowingFileByteSource`, `DownloadRetry`, `GrowingFileReadRule`, `GrowingFileStore` and the loopback server. Also runs on an iOS simulator. |
+| `PlaybackStreamingTests` | `GrowingFileByteSource`, its state machine `GrowingFileDownload`, `GrowingFileStore` and the loopback server. Also runs on an iOS simulator. |
 
-`DownloadRetry` and `GrowingFileReadRule` take no clock, lock or network, so their tests use literal
-numbers; the byte source's tests drive a manual clock and their own `GrowingFilePathMonitor`, so backoffs
+`GrowingFileDownload` (with its `ReadRule` and `Retry`) takes no clock, lock, file or network, so its
+tests feed it event sequences with literal times and check the effects it answers with; the byte
+source's tests are contract tests against the loopback server, on a manual clock and their own `GrowingFilePathMonitor`, so backoffs
 and the 30 s link window run in milliseconds and the machine's network never reaches a test. A test
 needing a 30-minute MP3 with no Xing header generates it with a host `ffmpeg` and is skipped without one (and on the simulator, which has none).
 

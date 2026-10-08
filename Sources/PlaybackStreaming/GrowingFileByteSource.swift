@@ -1,8 +1,5 @@
 import Foundation
-import OSLog
 import PlaybackDecode
-
-private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback", category: "download")
 
 /// **One download per transaction, to one file; the decoder reads the file and waits at the
 /// frontier**. Unthrottled, no window, no run cache, no redirect cache.
@@ -13,8 +10,8 @@ private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback
 ///   read waits for its position. A body from byte 0 that completes is renamed into
 ///   ``GrowingFileStore``'s cache.
 /// - A dropped connection, a silent body or a refused status is tried again after the backoff
-///   ``DownloadRetry`` decides, until it says the read fails with `.transport`: a few attempts for
-///   failures the host answered, the link window for ones nothing answered. A request
+///   ``GrowingFileDownload/Retry`` decides, until it says the read fails with `.transport`: a few
+///   attempts for failures the host answered, the link window for ones nothing answered. A request
 ///   nothing answers in time (``requestTimeoutSeconds`` for a transaction's first, the shorter
 ///   ``retryRequestTimeoutSeconds`` for a retry, neither past the link window's end) is ended as
 ///   one nothing answered, so a dead link fails about 30 s after it went quiet. A retry whose
@@ -26,21 +23,26 @@ private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback
 ///   Retries and resumes go straight to the redirect chain's remembered end, so a slow chain is
 ///   not walked again inside a retry's short wait. A request there that is refused (a `4xx`, a
 ///   page) or unanswered forgets it, a signed hop may have expired, and the next request walks the
-///   chain from the requested URL once with the generous wait (``chainEndForgotten``).
+///   chain from the requested URL once with the generous wait.
 /// - A new network path (``GrowingFilePathMonitor``) ends a transaction still on the network at
 ///   once, as a drop the retry above decides on, instead of leaving it to the idle timeout.
 /// - A transaction whose answer says the resource ends exactly at its base or resume point (`416` with
 ///   `bytes */N`, or a range clamped to the last byte) is a zero-length open, as in media3: the
-///   length is learned and the read is at its end (``totalEndingAt(_:status:contentRange:)``).
+///   length is learned and the read is at its end (``GrowingFileDownload/totalEndingAt(_:status:contentRange:)``).
 /// - ``snapshot`` is the only read surface for anyone but the decoder; ``GrowingFileEvent``s
 ///   go to `onEvent`, on the session's delegate queue or the decoder's thread.
 ///
+/// Every rule above is ``GrowingFileDownload``'s, a state machine with no lock, task, file or
+/// clock. This class is its adapter: it feeds the machine the decoder's calls, the session's
+/// callbacks, the clock's timers and the path monitor's changes, and carries out the effects it
+/// answers with.
+///
 /// Threading: the decoder's thread calls the ``StreamByteReader`` methods, and they block; the
-/// session's serial delegate queue writes. Both meet under `condition`. File I/O runs outside it,
-/// each side holding the ``Transaction`` it works on, which owns the descriptor: a restart can
-/// retire a transaction mid-`pread` and its descriptor stays open until the read lets go. Time
-/// (the backoff, the link window, the throughput window, the recheck, the body's idle check) is the
-/// ``GrowingFileClock``'s.
+/// session's serial delegate queue writes. Both meet under `condition`, which guards the machine.
+/// File I/O runs outside it, each side holding the ``Transaction`` it works on, which owns the
+/// descriptor: a restart can retire a transaction mid-`pread` and its descriptor stays open until
+/// the read lets go. Time (the backoff, the link window, the throughput window, the recheck, the
+/// body's idle check) is the ``GrowingFileClock``'s.
 ///
 /// **``cancel()`` must be called**: a running task retains its delegate, this object.
 public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFileSnapshotSource, URLSessionDataDelegate {
@@ -57,24 +59,23 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     /// How many of a body's first bytes the media sniff needs.
     static let sniffBytes = 12
     /// How long a body may go without a byte, once its response has arrived, before the source
-    /// ends the transaction itself (``scheduleIdleCheckLocked(_:)``, on the clock). A connection
-    /// that falls silent (a dead Wi-Fi, a host that stops sending without closing) is then an
-    /// ordinary failure that ``DownloadRetry`` decides on. This is the player's only network
-    /// recovery; with URLSession's default 60 s a silent link held the read that long. A constant
-    /// consumers may read, in seconds.
+    /// ends the transaction itself (on the clock). A connection that falls silent (a dead Wi-Fi, a
+    /// host that stops sending without closing) is then an ordinary failure that
+    /// ``GrowingFileDownload/Retry`` decides on. This is the player's only network recovery; with
+    /// URLSession's default 60 s a silent link held the read that long. A constant consumers may
+    /// read, in seconds.
     public static let idleTimeoutSeconds: TimeInterval = 6
-    /// How long a transaction's first request waits for its response, on the clock
-    /// (``sendLocked(_:for:timeout:)``); also the session's `timeoutIntervalForRequest`, a backstop
-    /// restarted on every redirect hop. Generous, so a cold origin or a long chain of
-    /// redirects (5.3 s to the first byte on a real host) is waited for rather than failed; the
-    /// body's silence is ``idleTimeoutSeconds``'s alone.
+    /// How long a transaction's first request waits for its response, on the clock; also the
+    /// session's `timeoutIntervalForRequest`, a backstop restarted on every redirect hop. Generous,
+    /// so a cold origin or a long chain of redirects (5.3 s to the first byte on a real host) is
+    /// waited for rather than failed; the body's silence is ``idleTimeoutSeconds``'s alone.
     static let requestTimeoutSeconds: TimeInterval = 20
     /// How long a retry or resume waits for its response. Short: the host was just talking to
     /// this source or the link just went quiet, the request goes to the chain's remembered end
     /// rather than through the chain, and each wait the link window must cover is one of these, so
-    /// a dead link fails about ``DownloadRetry/linkWindowSeconds`` after it went quiet instead of
-    /// after three ``requestTimeoutSeconds``. The one retry that walks the chain again after its
-    /// end was refused or unanswered waits ``requestTimeoutSeconds``, within the window.
+    /// a dead link fails about ``GrowingFileDownload/Retry/linkWindowSeconds`` after it went quiet
+    /// instead of after three ``requestTimeoutSeconds``. The one retry that walks the chain again
+    /// after its end was refused or unanswered waits ``requestTimeoutSeconds``, within the window.
     static let retryRequestTimeoutSeconds: TimeInterval = 8
 
     /// One process-wide session, so a host's connection stays warm between plays and restarts.
@@ -90,51 +91,29 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         return URLSession(configuration: configuration, delegate: nil, delegateQueue: delegateQueue)
     }
 
-    /// One transaction's file and task. Mutable state is behind the source's `condition`.
+    /// The current transaction's file and task, which the machine knows only by its effects.
+    /// Mutable state is behind the source's `condition`.
     private final class Transaction {
-        var generation: Int
-        var seekGeneration: Int?
         let descriptor: Int32
-        /// Nil once the partial is deleted: nothing of it is readable any more.
+        /// Nil once the partial is deleted.
         var fileURL: URL?
-        /// The current request went to the redirect chain's remembered end, not the requested URL.
-        var remembered: Bool
         var task: URLSessionDataTask?
-        /// A resume is in flight: the byte its `206` must start at. Nil once it is answered.
-        var resumeAt: Int64?
-        /// The first response's strong ETag, the resume's `If-Range`.
-        var entityTag: String?
-        var base: Int64
-        /// This transaction's own, from its response; never inherited from an earlier transaction's body.
-        var totalLength: Int64?
-        /// Bytes in the file.
-        var written: Int64 = 0
-        /// The body's first bytes are not yet proven to be media; nothing is readable until they are.
-        var sniffPending = false
-        /// A response arrived, whatever it said. A failure before one is the link's, not the host's.
-        var answered = false
-        /// The clock's time the current request went out.
-        var attemptStartedAt: TimeInterval = 0
-        /// Done with the network: complete, failed, or handed to a retry.
-        var ended = false
-        var isComplete = false
-        var isCached = false
-        /// The clock's time of the response or the last body chunk, whichever came later.
-        var lastByteAt: TimeInterval = 0
-        /// An idle check is on the clock; one at a time.
-        var idleCheckPending = false
-        var frontier: Int64 { base + (sniffPending || fileURL == nil ? 0 : written) }
+        /// The machine's name for `task`'s request.
+        var attempt = 0
 
-        init(generation: Int, seekGeneration: Int?, descriptor: Int32, fileURL: URL, remembered: Bool, base: Int64) {
-            self.generation = generation
-            self.seekGeneration = seekGeneration
+        init(descriptor: Int32, fileURL: URL) {
             self.descriptor = descriptor
             self.fileURL = fileURL
-            self.remembered = remembered
-            self.base = base
         }
 
         deinit { Foundation.close(descriptor) }
+    }
+
+    /// What waits until `condition` is released.
+    private enum Deferred {
+        case makeRoom(Int64)
+        case evict
+        case emit(GrowingFileEvent)
     }
 
     private let url: URL
@@ -152,41 +131,9 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
 
     // Behind `condition`.
     private let condition = NSCondition()
+    private var machine: GrowingFileDownload
+    /// The machine's current transaction's file and task.
     private var current: Transaction?
-    private var offset: Int64 = 0
-    private var generation = 0
-    private var parks = 0
-    /// A seek announced by ``willSeek(generation:)`` that no read has answered yet. The read that
-    /// answers it claims it, once: it opens the transaction that carries it, or finds its bytes
-    /// already in the file and reports ``GrowingFileEvent/seekLanded(seekGeneration:)``. `sought`
-    /// says the decoder moved the read position for it; one it answered from its own buffer never
-    /// did, and the read after it is no seek's, so it tags nothing.
-    private var unclaimedSeek: (generation: Int, sought: Bool)?
-    private var retry: DownloadRetry
-    /// A parked read's recheck is on the clock; one at a time however often the read wakes.
-    private var recheckPending = false
-    /// Why the current transaction cannot deliver more; a read at its frontier throws it.
-    private var failure: String?
-    /// The failure a read threw, until the next ``seek(to:)`` or ``willSeek(generation:)``: a read
-    /// after the throw throws it again instead of opening a transaction nobody asked for.
-    private var stickyFailure: String?
-    /// The resource's length as the last accepted response gave it: what ``totalLength`` and the
-    /// ``snapshot`` answer once a failed read has dropped the transaction that knew it.
-    private var lastKnownTotalLength: Int64?
-    private var cancelled = false
-    private var interrupted = false
-    private var probing = false
-    private var rangeIgnored = false
-    /// The end of the redirect chain, from the first response; later requests go straight there
-    /// until one there is refused or unanswered.
-    private var finalURL: URL?
-    /// The chain's end was just forgotten: the next request walks the chain from `url` with the
-    /// generous wait, even as a retry. Once; the request it goes with clears it.
-    private var chainEndForgotten = false
-    private var startupValue = Startup()
-    private var samples: [(at: TimeInterval, bytes: Int)] = []
-    private var firstSampleAt: TimeInterval?
-    private var lastDownloadEventAt: TimeInterval = -.infinity
 
     /// - Parameters:
     ///   - authHeaders: resolved by the caller before construction; values are never logged.
@@ -235,7 +182,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         self.session = session
         self.clock = clock
         self.pathMonitor = pathMonitor
-        self.retry = DownloadRetry()
+        self.machine = GrowingFileDownload(url: url)
         self.onEvent = onEvent
         super.init()
         let observer = pathMonitor.addObserver { [weak self] in self?.networkPathChanged() }
@@ -245,24 +192,13 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     // MARK: - Published state
 
     public var snapshot: GrowingFileSnapshot {
-        locked {
-            GrowingFileSnapshot(
-                base: current?.base ?? offset,
-                frontier: current?.frontier ?? offset,
-                totalLength: current?.totalLength ?? lastKnownTotalLength,
-                isComplete: current?.isComplete ?? false,
-                fileURL: current?.fileURL,
-                transactionGeneration: generation,
-                seekGeneration: current?.seekGeneration,
-                downloadBytesPerSecond: downloadBytesPerSecondLocked()
-            )
-        }
+        locked { machine.snapshot(fileURL: current?.fileURL, now: clock.now) }
     }
 
-    /// Set around the decoder's `open()`; see ``GrowingFileReadRule/action(position:base:frontier:totalLength:isComplete:isProbing:rangeIgnored:downloadBytesPerSecond:)``.
+    /// Set around the decoder's `open()`; see ``GrowingFileDownload/ReadRule``.
     public var isProbing: Bool {
-        get { locked { probing } }
-        set { locked { probing = newValue } }
+        get { locked { machine.isProbing } }
+        set { locked { machine.isProbing = newValue } }
     }
 
     /// The player's seek of `generation` is about to be issued. The transaction the decoder's next
@@ -270,14 +206,11 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     /// transaction (the probe's, a retry's, the one after a failed read) carries a seek generation.
     /// Nil is a seek that anchors nothing: it only drops a claim no read has taken.
     public func willSeek(generation: Int?) {
-        locked {
-            unclaimedSeek = generation.map { ($0, false) }
-            stickyFailure = nil
-        }
+        locked { machine.willSeek(generation: generation) }
     }
 
     /// Reads that have parked at the frontier so far: what a test waits on instead of a clock.
-    var parkCount: Int { locked { parks } }
+    var parkCount: Int { locked { machine.parks } }
 
     /// What the first accepted response cost, for the start timing. Times are the clock's:
     /// `systemUptime` seconds outside a test.
@@ -293,85 +226,49 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         public var remembered = false
     }
 
-    public var startup: Startup { locked { startupValue } }
+    public var startup: Startup { locked { machine.startup } }
 
     // MARK: - StreamByteReader
 
     /// The current transaction's, nil until its response. Known before `AVSEEK_SIZE` is first
     /// asked: the decoder's first call is a read (`probe_id3_offset`), which waits for a byte.
-    public var totalLength: Int64? { locked { current?.totalLength ?? lastKnownTotalLength } }
+    public var totalLength: Int64? { locked { machine.totalLength } }
 
-    public var position: Int64 { locked { offset } }
+    public var position: Int64 { locked { machine.offset } }
 
     public func read(into buffer: UnsafeMutableRawPointer, maxLength: Int) throws -> Int {
         guard maxLength > 0 else { return 0 }
         condition.lock()
         defer { condition.unlock() }
         while true {
-            if cancelled { throw StreamByteReaderError.cancelled }
-            if interrupted { throw StreamByteReaderError.interrupted }
-            guard let tx = current else {
-                if let reason = stickyFailure { throw StreamByteReaderError.transport(reason) }
-                startLocked(at: offset, seekGeneration: claimSeekLocked())
-                if current == nil { throw StreamByteReaderError.transport(failure ?? "no transaction") }
-                continue
-            }
-            let action = GrowingFileReadRule.action(
-                position: offset, base: tx.base, frontier: tx.frontier, totalLength: tx.totalLength,
-                isComplete: tx.isComplete, isProbing: probing, rangeIgnored: rangeIgnored,
-                downloadBytesPerSecond: downloadBytesPerSecondLocked()
-            )
-            switch action {
-            case .serve:
-                let count = Int(min(Int64(maxLength), tx.frontier - offset))
-                let fileOffset = off_t(offset - tx.base)
-                let landed = landSeekLocked()
+            let step = machine.read(maxLength: maxLength, now: clock.now)
+            performUnlocked(runLocked(step.effects))
+            switch step.action {
+            case .serve(let fileOffset, let count, let landed):
+                guard let tx = current else { throw StreamByteReaderError.transport("no transaction") }
                 condition.unlock()
                 if let landed { onEvent?(.seekLanded(seekGeneration: landed)) }
                 var got: Int
-                repeat { got = pread(tx.descriptor, buffer, count, fileOffset) } while got < 0 && errno == EINTR
+                repeat { got = pread(tx.descriptor, buffer, count, off_t(fileOffset)) } while got < 0 && errno == EINTR
                 condition.lock()
                 guard got > 0 else { throw StreamByteReaderError.transport("pread failed at \(fileOffset)") }
-                offset += Int64(got)
+                machine.advance(by: got)
                 return got
-            case .endOfStream:
-                if let landed = landSeekLocked() {
-                    condition.unlock()
-                    onEvent?(.seekLanded(seekGeneration: landed))
-                    condition.lock()
-                }
+            case .endOfStream(let landed):
+                if let landed { performUnlocked([Deferred.emit(.seekLanded(seekGeneration: landed))]) }
                 return 0
-            case .restart:
-                resetRetriesLocked()
-                startLocked(at: offset, seekGeneration: claimSeekLocked())
-            case .wait:
-                if let reason = failure {
-                    // The failed transaction goes with the error. The error stays until a seek
-                    // (Play once the player shows it seeks to where it stopped), whose read opens
-                    // a fresh one there with a fresh budget; the total length stays known.
-                    retireLocked(tx)
-                    current = nil
-                    failure = nil
-                    stickyFailure = reason
-                    resetRetriesLocked()
-                    throw StreamByteReaderError.transport(reason)
-                }
-                parks += 1
-                scheduleRecheckLocked()
+            case .park:
                 condition.wait()
+            case .again:
+                continue
+            case .fail(let error):
+                throw error
             }
         }
     }
 
     public func seek(to newOffset: Int64) throws {
-        try locked {
-            if cancelled { throw StreamByteReaderError.cancelled }
-            if interrupted { throw StreamByteReaderError.interrupted }
-            guard newOffset >= 0 else { throw StreamByteReaderError.unseekable }
-            offset = newOffset
-            unclaimedSeek?.sought = true
-            stickyFailure = nil
-        }
+        try locked { try machine.seek(to: newOffset) }
     }
 
     /// Ends the download and deletes the partial (a cached complete file stays): a new load or
@@ -382,17 +279,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
             return pathObserver
         }
         if let observer { pathMonitor.removeObserver(observer) }
-        locked {
-            guard !cancelled else { return }
-            cancelled = true
-            if let tx = current {
-                let wasted = max(0, tx.frontier - max(offset, tx.base))
-                let share = tx.totalLength.map { $0 > 0 ? Double(wasted) / Double($0) : 0 } ?? 0
-                downloadLog.info("download: cancel bytes_wasted=\(wasted) share=\(share, format: .fixed(precision: 3))")
-                retireLocked(tx)
-            }
-            condition.broadcast()
-        }
+        perform(locked { runLocked(machine.cancel()) })
     }
 
     /// ``cancel()`` after a load whose bytes the decoder could not open: the complete file the
@@ -401,10 +288,9 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     public func cancelDiscardingCache() {
         cancel()
         locked {
-            guard let tx = current, tx.isCached, let file = tx.fileURL else { return }
+            guard let tx = current, let file = tx.fileURL, machine.dropCachedFile() else { return }
             store.discard(file)
             tx.fileURL = nil
-            tx.isCached = false
         }
     }
 
@@ -412,229 +298,99 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     /// as its delegate, so what is left is the file.
     deinit {
         if let pathObserver { pathMonitor.removeObserver(pathObserver) }
-        if let tx = current, !tx.isCached, let file = tx.fileURL { store.discard(file) }
+        if let tx = current, machine.current?.isCached == false, let file = tx.fileURL { store.discard(file) }
     }
 
     public func interrupt() {
-        locked {
-            interrupted = true
-            condition.broadcast()
-        }
+        perform(locked { runLocked(machine.interrupt()) })
     }
 
     public func clearInterrupt() {
-        locked { interrupted = false }
+        locked { machine.clearInterrupt() }
     }
 
-    // MARK: - Transactions (all under `condition`)
+    // MARK: - Carrying out the machine's effects
 
-    /// Retires the current transaction and opens one at `start` (0 once the host ignores ranges).
-    /// When no file can be opened, `current` stays nil and `failure` says why.
-    /// - Parameters:
-    ///   - seekGeneration: the seek this transaction answers, nil when none asked for it.
-    ///   - retrying: a retry's restart, whose request waits the shorter time (``targetLocked(retrying:)``).
-    private func startLocked(at start: Int64, seekGeneration: Int?, retrying: Bool = false) {
-        defer { condition.broadcast() }
-        if let old = current { retireLocked(old) }
-        current = nil
-        failure = nil
-        let base = rangeIgnored ? 0 : start
+    /// Does `effects` in order, under `condition`; what must wait until it is released comes back.
+    private func runLocked(_ effects: [GrowingFileDownload.Effect]) -> [Deferred] {
+        var deferred: [Deferred] = []
+        for effect in effects {
+            switch effect {
+            case .retire(let discardFile):
+                current?.task?.cancel()
+                if discardFile, let file = current?.fileURL {
+                    store.discard(file)
+                    current?.fileURL = nil
+                }
+            case .release:
+                current = nil
+            case .openFile:
+                current = makeTransaction()
+                deferred += runLocked(machine.opened(fileReady: current != nil, now: clock.now))
+            case .cancelTask:
+                current?.task?.cancel()
+            case .send(let send):
+                var request = request(for: send.url, from: send.from)
+                if let entityTag = send.ifRange { request.setValue(entityTag, forHTTPHeaderField: "If-Range") }
+                let task = session.dataTask(with: request)
+                current?.task = task
+                current?.attempt = send.attempt
+                task.delegate = self
+                task.resume()
+            case .schedule(let timer, let seconds):
+                clock.schedule(after: seconds) { [weak self] in
+                    guard let self else { return }
+                    self.perform(self.locked { self.runLocked(self.machine.fire(timer, now: self.clock.now)) })
+                }
+            case .wake:
+                condition.broadcast()
+            case .promote:
+                if let tx = current, let file = tx.fileURL, let cached = store.promote(file, for: cacheKey) {
+                    tx.fileURL = cached
+                    machine.promoted()
+                    deferred.append(.evict)
+                }
+            case .makeRoom(let bytes):
+                deferred.append(.makeRoom(bytes))
+            case .emit(let event):
+                deferred.append(.emit(event))
+            }
+        }
+        return deferred
+    }
+
+    /// A new partial and its descriptor; nil when none can be opened.
+    private func makeTransaction() -> Transaction? {
         let file = try? store.makePartial()
         let fd = file?.withUnsafeFileSystemRepresentation { $0.map { Foundation.open($0, O_RDWR) } ?? -1 } ?? -1
         guard let file, fd >= 0 else {
             if let file { store.discard(file) }
-            failure = "cannot open a partial"
-            return
+            return nil
         }
-        generation += 1
-        let tx = Transaction(
-            generation: generation, seekGeneration: seekGeneration, descriptor: fd, fileURL: file,
-            remembered: finalURL != nil, base: base
-        )
-        current = tx
-        if startupValue.requestIssuedAt == nil { startupValue.requestIssuedAt = clock.now }
-        let target = targetLocked(retrying: retrying)
-        sendLocked(session.dataTask(with: request(for: target.url, from: base)), for: tx, timeout: target.timeout)
-        downloadLog.info("download: open gen=\(tx.generation) base=\(base) host=\(self.url.host ?? "?", privacy: .public)")
+        return Transaction(descriptor: fd, fileURL: file)
     }
 
-    /// The seek waiting for a read, taken by the read that answers it: its generation when the
-    /// read is at the position that seek moved to, the tag for a transaction this read opens.
-    private func claimSeekLocked() -> Int? {
-        defer { unclaimedSeek = nil }
-        guard let claim = unclaimedSeek, claim.sought else { return nil }
-        return claim.generation
-    }
-
-    /// The seek waiting for a read, answered from the file: whether or not the decoder moved for
-    /// it, no transaction will carry it.
-    private func landSeekLocked() -> Int? {
-        defer { unclaimedSeek = nil }
-        return unclaimedSeek?.generation
-    }
-
-    /// Cancels the task and deletes the file unless it is the cache's now.
-    private func retireLocked(_ tx: Transaction) {
-        tx.ended = true
-        tx.task?.cancel()
-        if let file = tx.fileURL, !tx.isCached {
-            store.discard(file)
-            tx.fileURL = nil
-        }
-    }
-
-    /// The transaction delivers no more. Retryable with retries left: after a backoff, a resume
-    /// from the frontier or a restart at the decoder's position (``retryLocked(_:)``), the file
-    /// still read until then. Otherwise the read reports
-    /// `reason` at the frontier, and a failure no retry fixes (a page, a full disk) deletes the file.
-    ///
-    /// An outage the host never answered spends no attempt while the link window lasts: the read
-    /// waits through it, which the player shows as buffering, instead of failing a second into it
-    /// The window runs from when the link went quiet: `quietSince` when given (a silent
-    /// body's last byte), else the start of the attempt nothing answered.
-    ///
-    /// `refused`: the host said no to this URL (a `4xx`, a page). That, or no answer at all, from
-    /// the chain's remembered end forgets it: a signed hop may have expired. `pathChanged`: the
-    /// source ended the request itself for a new network path, so no answer yet is not the end's.
-    private func endLocked(
-        _ tx: Transaction, _ reason: String, retryable: Bool, refused: Bool = false, pathChanged: Bool = false,
-        quietSince: TimeInterval? = nil
-    ) {
-        tx.ended = true
-        tx.task?.cancel()
-        if tx.remembered, refused || (!tx.answered && !pathChanged), let end = finalURL {
-            finalURL = nil
-            // Without a chain there is nothing to walk again, so no longer wait for it either.
-            chainEndForgotten = end != url
-        }
-        let decision = retry.failed(
-            answered: tx.answered, retryable: retryable,
-            quietSince: quietSince ?? (tx.answered ? nil : tx.attemptStartedAt), now: clock.now
-        )
-        guard case .retry(let backoff) = decision else {
-            downloadLog.error("download: failed gen=\(tx.generation) \(reason, privacy: .public)")
-            if !retryable { retireLocked(tx) }
-            failure = reason
-            condition.broadcast()
-            return
-        }
-        downloadLog.error(
-            "download: retry gen=\(tx.generation) attempt=\(self.retry.failuresInRow) answered=\(tx.answered) \(reason, privacy: .public)"
-        )
-        clock.schedule(after: backoff) { [weak self] in
-            guard let self else { return }
-            self.locked {
-                guard !self.cancelled, self.current === tx else { return }
-                self.retryLocked(tx)
+    /// Outside `condition`.
+    private func perform(_ deferred: [Deferred]) {
+        for item in deferred {
+            switch item {
+            case .makeRoom(let bytes): store.makeRoom(forBytes: bytes)
+            case .evict: store.evict(excluding: cacheKey)
+            case .emit(let event): onEvent?(event)
             }
         }
     }
 
-    /// The retry `endLocked` scheduled. A file that holds the decoder's position is resumed from
-    /// its frontier, keeping every byte ahead of the decoder; anything else (nothing proven in it
-    /// yet, a seek that left it, a host that ignores ranges) restarts at the decoder's position.
-    /// Neither is the seek's: a restart carries no seek generation and claims none, and a resume
-    /// keeps the one its transaction had.
-    private func retryLocked(_ tx: Transaction) {
-        let resumable = !rangeIgnored && tx.fileURL != nil && !tx.isCached && !tx.sniffPending
-            && tx.written > 0 && offset >= tx.base && offset <= tx.frontier
-        guard resumable else {
-            startLocked(at: offset, seekGeneration: nil, retrying: true)
-            return
-        }
-        let from = tx.frontier
-        tx.ended = false
-        tx.answered = false
-        tx.resumeAt = from
-        tx.remembered = finalURL != nil
-        let target = targetLocked(retrying: true)
-        var request = request(for: target.url, from: from)
-        if let entityTag = tx.entityTag { request.setValue(entityTag, forHTTPHeaderField: "If-Range") }
-        sendLocked(session.dataTask(with: request), for: tx, timeout: target.timeout)
-        downloadLog.info("download: resume gen=\(tx.generation) at=\(from) decoder=\(self.offset)")
+    /// ``perform(_:)`` from inside `condition`, which is released around it.
+    private func performUnlocked(_ deferred: [Deferred]) {
+        guard !deferred.isEmpty else { return }
+        condition.unlock()
+        perform(deferred)
+        condition.lock()
     }
 
-    /// Where the next request goes and how long it waits for its response: the chain's remembered
-    /// end when there is one, else the requested URL. A retry waits ``retryRequestTimeoutSeconds``
-    /// unless it walks the chain again because its end was just forgotten; that one, like a
-    /// transaction's first request, waits ``requestTimeoutSeconds``. ``sendLocked(_:for:timeout:)``
-    /// cuts either at the link window's end.
-    private func targetLocked(retrying: Bool) -> (url: URL, timeout: TimeInterval) {
-        defer { chainEndForgotten = false }
-        let short = retrying && (finalURL != nil || !chainEndForgotten)
-        return (finalURL ?? url, short ? Self.retryRequestTimeoutSeconds : Self.requestTimeoutSeconds)
-    }
-
-    /// Makes `task` `tx`'s request and sends it. A response that has not arrived `timeout` later
-    /// on the clock, or by the link window's end if that comes first, ends the attempt as one
-    /// nothing answered: the session's own timeout is real time, restarted on every hop, and longer.
-    private func sendLocked(_ task: URLSessionDataTask, for tx: Transaction, timeout: TimeInterval) {
-        tx.task = task
-        tx.attemptStartedAt = clock.now
-        task.delegate = self
-        let wait = min(timeout, retry.linkWindowLeft(now: clock.now) ?? timeout)
-        clock.schedule(after: wait) { [weak self, weak tx, weak task] in
-            guard let self, let tx, let task else { return }
-            self.locked {
-                guard !self.cancelled, self.current === tx, tx.task === task, !tx.answered, !tx.ended else { return }
-                self.endLocked(tx, "no_response_s=\(Int(self.clock.now - tx.attemptStartedAt))", retryable: true)
-            }
-        }
-        task.resume()
-    }
-
-    /// A fresh budget: the decoder's position passed, or a restart nobody's failure caused.
-    private func resetRetriesLocked() {
-        retry.reset()
-    }
-
-    /// Wakes a parked read after ``recheckSeconds`` on the clock, whatever else does.
-    private func scheduleRecheckLocked() {
-        guard !recheckPending else { return }
-        recheckPending = true
-        clock.schedule(after: Self.recheckSeconds) { [weak self] in
-            guard let self else { return }
-            self.locked {
-                self.recheckPending = false
-                self.condition.broadcast()
-            }
-        }
-    }
-
-    /// Ends `tx` once its body has been silent for ``idleTimeoutSeconds`` on the clock: a failure
-    /// like a drop, into the retry. Looks again when a chunk came in the meantime, and stops once
-    /// the transaction is done with the network. The link went quiet at the last byte, so that is
-    /// where the link window starts if nothing answers the retry. Nothing is checked before the
-    /// response arrives: that wait is ``sendLocked(_:for:timeout:)``'s.
-    private func scheduleIdleCheckLocked(_ tx: Transaction, after seconds: TimeInterval = idleTimeoutSeconds) {
-        guard !tx.idleCheckPending else { return }
-        tx.idleCheckPending = true
-        clock.schedule(after: seconds) { [weak self, weak tx] in
-            guard let self, let tx else { return }
-            self.locked {
-                tx.idleCheckPending = false
-                guard !self.cancelled, self.current === tx, tx.answered, !tx.ended, !tx.isComplete else { return }
-                let silent = self.clock.now - tx.lastByteAt
-                guard silent >= Self.idleTimeoutSeconds else {
-                    self.scheduleIdleCheckLocked(tx, after: Self.idleTimeoutSeconds - silent)
-                    return
-                }
-                self.endLocked(tx, "idle_s=\(Int(silent)) at=\(tx.frontier)", retryable: true, quietSince: tx.lastByteAt)
-            }
-        }
-    }
-
-    /// A usable network path replaced the one the transaction's connection is on (Wi-Fi gone to
-    /// cellular). That connection may never say another word, and the idle check would take
-    /// ``idleTimeoutSeconds`` to notice; the transaction is ended now instead, like a drop, and
-    /// ``DownloadRetry`` decides on it as on any other: a resume from the frontier after the
-    /// backoff, from the same budget. A transaction done with the network, or whose every byte is
-    /// in and only its completion is still on the way, is left alone.
     private func networkPathChanged() {
-        locked {
-            guard !cancelled, let tx = current, !tx.ended, !tx.isComplete, tx.frontier != tx.totalLength else { return }
-            endLocked(tx, "path_changed at=\(tx.frontier)", retryable: true, pathChanged: true)
-        }
+        perform(locked { runLocked(machine.pathChanged(now: clock.now)) })
     }
 
     private func request(for target: URL, from base: Int64) -> URLRequest {
@@ -659,12 +415,10 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     /// The current transaction's task: what a test hands ``certificateRejected(task:)``.
     var currentTask: URLSessionTask? { locked { current?.task } }
 
-    private func downloadBytesPerSecondLocked(now: TimeInterval? = nil) -> Double? {
-        guard let firstSampleAt else { return nil }
-        let now = now ?? clock.now
-        samples.removeAll { now - $0.at > Self.throughputWindowSeconds }
-        let span = min(Self.throughputWindowSeconds, max(0.25, now - firstSampleAt))
-        return Double(samples.reduce(0) { $0 + $1.bytes }) / span
+    /// The machine's name for `task`'s request, when it is the current one's.
+    private func attemptLocked(_ task: URLSessionTask) -> Int? {
+        guard let tx = current, tx.task === task else { return nil }
+        return tx.attempt
     }
 
     // MARK: - URLSessionDataDelegate (the session's serial delegate queue)
@@ -688,9 +442,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         } else {
             removeServerHeaders(from: &next)
         }
-        locked {
-            if startupValue.firstResponseAt == nil, let host = next.url?.host { startupValue.hosts.append(host) }
-        }
+        locked { machine.redirected(toHost: next.url?.host) }
         completionHandler(next)
     }
 
@@ -730,10 +482,10 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     /// The system refused the origin's certificate and the user trusted no such leaf: the read fails
     /// at once, with no retry.
     func certificateRejected(task: URLSessionTask) {
-        locked {
-            guard !cancelled, let tx = current, tx.task === task, !tx.ended else { return }
-            endLocked(tx, GrowingFileConnectionPolicy.untrustedCertificateReason, retryable: false)
-        }
+        perform(locked { () -> [Deferred] in
+            guard let attempt = attemptLocked(task) else { return [] }
+            return runLocked(machine.certificateRejected(attempt: attempt, now: clock.now))
+        })
     }
 
     public func urlSession(
@@ -742,209 +494,50 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         didReceive response: URLResponse,
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
-        var events: [GrowingFileEvent] = []
-        var roomFor: Int64?
-        let disposition: URLSession.ResponseDisposition = locked {
-            guard !cancelled, let tx = current, tx.task === dataTask, !tx.ended else { return .cancel }
-            // The link is up, whatever the host says next.
-            tx.answered = true
-            retry.linkAnswered()
-            let http = response as? HTTPURLResponse
-            let status = http?.statusCode ?? 0
-            let contentRange = http?.value(forHTTPHeaderField: "Content-Range")
-            let range = Self.contentRange(contentRange)
-            if let total = Self.totalEndingAt(tx.resumeAt ?? tx.base, status: status, contentRange: contentRange),
-               lastKnownTotalLength.map({ $0 == total }) ?? true {
-                // The host says the resource ends exactly where this transaction starts: a `416`
-                // with `bytes */N`, or a range clamped to the last byte, at position N. As media3
-                // does, that is a zero-length open: the length is learned and the read is at its
-                // end. A resume at the frontier is the same open, there. A total that differs from
-                // the one already known (the file shrank) is refused like any other answer.
-                downloadLog.info("download: open_at_end gen=\(tx.generation) status=\(status) total=\(total)")
-                tx.resumeAt = nil
-                tx.ended = true
-                tx.isComplete = true
-                tx.totalLength = total
-                lastKnownTotalLength = total
-                if finalURL == nil { finalURL = response.url }
-                if startupValue.firstResponseAt == nil {
-                    startupValue.firstResponseAt = clock.now
-                    startupValue.status = status
-                    startupValue.remembered = tx.remembered
-                }
-                events = [
-                    .transaction(base: tx.base, generation: tx.generation, seekGeneration: tx.seekGeneration, httpStatus: status),
-                    .download(frontier: tx.frontier, downloadBytesPerSecond: downloadBytesPerSecondLocked(), complete: true),
-                ]
-                condition.broadcast()
-                return .cancel
-            }
-            if let resumeAt = tx.resumeAt {
-                tx.resumeAt = nil
-                // The same bytes from the frontier on, as far as the host lets that be checked:
-                // the start asked for, and the total the file was begun under.
-                let sameTotal = range?.total.map { tx.totalLength == nil || $0 == tx.totalLength } ?? true
-                switch status {
-                case 206 where range?.start == resumeAt && sameTotal:
-                    break
-                case 200, 206, 416:
-                    // The range ignored, or a different file behind the URL: not these bytes' end.
-                    downloadLog.warning(
-                        "download: resume_refused gen=\(tx.generation) status=\(status) content-range=\(contentRange ?? "-", privacy: .public)"
-                    )
-                    // A retry's restart, to the end of the chain that just answered: the short wait.
-                    if finalURL == nil { finalURL = response.url }
-                    startLocked(at: offset, seekGeneration: nil, retrying: true)
-                    return .cancel
-                default:
-                    endLocked(
-                        tx, "status=\(status) content-range=\(contentRange ?? "-")", retryable: true,
-                        refused: (400..<500).contains(status)
-                    )
-                    return .cancel
-                }
-                if Self.isMedia(mimeType: response.mimeType) == false {
-                    endLocked(tx, "not audio: content-type=\(response.mimeType ?? "?")", retryable: tx.remembered, refused: true)
-                    return .cancel
-                }
-                if tx.totalLength == nil { tx.totalLength = range?.total }
-                lastKnownTotalLength = tx.totalLength
-                roomFor = tx.totalLength.map { $0 - resumeAt }
-                if finalURL == nil { finalURL = response.url }
-                tx.lastByteAt = clock.now
-                scheduleIdleCheckLocked(tx)
-                condition.broadcast()
-                return .allow
-            }
-            switch status {
-            case 200:
-                if tx.base > 0 {
-                    // The host ignored the range: this body is the file from byte 0, and the read
-                    // waits for its position to arrive. Restarting would only get 200 again. A new
-                    // base is a new generation, so a frontier never moves back within one.
-                    if !rangeIgnored {
-                        downloadLog.warning("download: range_ignored host=\(self.url.host ?? "?", privacy: .public) asked=\(tx.base)")
-                    }
-                    rangeIgnored = true
-                    tx.base = 0
-                    generation += 1
-                    tx.generation = generation
-                    // Byte 0 is not where the seek landed, so it is no anchor for it.
-                    tx.seekGeneration = nil
-                }
-            case 206 where range?.start == tx.base:
-                break
-            default:
-                endLocked(
-                    tx, "status=\(status) content-range=\(contentRange ?? "-")", retryable: true,
-                    refused: (400..<500).contains(status)
-                )
-                return .cancel
-            }
-            switch Self.isMedia(mimeType: response.mimeType) {
-            case false?:
-                // From the remembered end of the chain, the page may be its signature expiring.
-                endLocked(tx, "not audio: content-type=\(response.mimeType ?? "?")", retryable: tx.remembered, refused: true)
-                return .cancel
-            case nil: tx.sniffPending = tx.base == 0
-            case true?: break
-            }
-            tx.totalLength = range?.total
-                ?? (response.expectedContentLength > 0 ? response.expectedContentLength + tx.base : nil)
-            lastKnownTotalLength = tx.totalLength
-            roomFor = tx.totalLength.map { $0 - tx.base }
-            if let tag = http?.value(forHTTPHeaderField: "ETag"), !tag.hasPrefix("W/") { tx.entityTag = tag }
-            if finalURL == nil { finalURL = response.url }
-            if startupValue.firstResponseAt == nil {
-                startupValue.firstResponseAt = clock.now
-                startupValue.status = status
-                startupValue.remembered = tx.remembered
-            }
-            events = [.transaction(base: tx.base, generation: tx.generation, seekGeneration: tx.seekGeneration, httpStatus: status)]
-            tx.lastByteAt = clock.now
-            scheduleIdleCheckLocked(tx)
-            condition.broadcast()
-            return .allow
+        let http = response as? HTTPURLResponse
+        let answer = GrowingFileDownload.Response(
+            status: http?.statusCode ?? 0,
+            contentRange: http?.value(forHTTPHeaderField: "Content-Range"),
+            mimeType: response.mimeType,
+            expectedContentLength: response.expectedContentLength,
+            entityTag: http?.value(forHTTPHeaderField: "ETag"),
+            url: response.url
+        )
+        let (allow, deferred) = locked { () -> (Bool, [Deferred]) in
+            guard let attempt = attemptLocked(dataTask) else { return (false, []) }
+            let decision = machine.received(answer, attempt: attempt, now: clock.now)
+            return (decision.allow, runLocked(decision.effects))
         }
-        if let roomFor { store.makeRoom(forBytes: roomFor) }
-        completionHandler(disposition)
-        events.forEach { onEvent?($0) }
+        // The store makes room before the body is let in; the events follow it.
+        perform(deferred.filter { if case .makeRoom = $0 { return true } else { return false } })
+        completionHandler(allow ? .allow : .cancel)
+        perform(deferred.filter { if case .makeRoom = $0 { return false } else { return true } })
     }
 
     public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        let claim = locked { () -> (tx: Transaction, fileOffset: Int64)? in
-            guard !cancelled, let tx = current, tx.task === dataTask, !tx.ended else { return nil }
-            return (tx, tx.written)
+        let claim = locked { () -> (tx: Transaction, attempt: Int, fileOffset: Int64)? in
+            guard let attempt = attemptLocked(dataTask), let tx = current,
+                  let fileOffset = machine.chunkOffset(attempt: attempt) else { return nil }
+            return (tx, attempt, fileOffset)
         }
-        guard let tx = claim?.tx, let fileOffset = claim?.fileOffset else { return }
-        let writeError = writeAll(data, to: tx.descriptor, at: fileOffset)
-        var event: GrowingFileEvent?
-        locked {
-            // Still this task's: across the write, an idle check may have ended it and a resume
-            // gone out from the frontier this chunk would move, under the same transaction.
-            guard current === tx, tx.task === dataTask, !tx.ended else { return }
-            if let writeError {
-                endLocked(tx, "write failed errno=\(writeError)", retryable: false)
-                return
-            }
-            tx.written += Int64(data.count)
-            let now = clock.now
-            tx.lastByteAt = now
-            if tx.sniffPending, tx.written >= Self.sniffBytes {
+        guard let claim else { return }
+        let writeError = writeAll(data, to: claim.tx.descriptor, at: claim.fileOffset)
+        perform(locked { () -> [Deferred] in
+            guard current === claim.tx else { return [] }
+            let effects = machine.chunkWritten(data.count, attempt: claim.attempt, writeError: writeError, now: clock.now) {
                 var head = [UInt8](repeating: 0, count: Self.sniffBytes)
-                guard pread(tx.descriptor, &head, head.count, 0) == head.count,
-                      Self.isMedia(mimeType: nil, head: head) == true else {
-                    endLocked(tx, "not audio: body sniff", retryable: tx.remembered, refused: true)
-                    return
-                }
-                tx.sniffPending = false
+                return pread(claim.tx.descriptor, &head, head.count, 0) == head.count ? head : nil
             }
-            // Progress is the decoder's: a host that drops before the read position (a 200 from
-            // byte 0, every time) spends its retries instead of looping.
-            if tx.frontier > offset { resetRetriesLocked() }
-            if firstSampleAt == nil { firstSampleAt = now }
-            samples.append((now, data.count))
-            if now - lastDownloadEventAt >= Self.downloadEventSeconds {
-                lastDownloadEventAt = now
-                event = .download(frontier: tx.frontier, downloadBytesPerSecond: downloadBytesPerSecondLocked(now: now), complete: false)
-            }
-            condition.broadcast()
-        }
-        if let event { onEvent?(event) }
+            return runLocked(effects)
+        })
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        var event: GrowingFileEvent?
-        var promoted = false
-        locked {
-            guard !cancelled, let tx = current, tx.task === task, !tx.ended else { return }
-            if let error {
-                endLocked(tx, "error=\((error as NSError).code)", retryable: true)
-                return
-            }
-            if tx.sniffPending {
-                endLocked(tx, "not audio: body of \(tx.written) bytes", retryable: tx.remembered, refused: true)
-                return
-            }
-            if let total = tx.totalLength, tx.frontier < total {
-                endLocked(tx, "short body ended=\(tx.frontier) total=\(total)", retryable: true)
-                return
-            }
-            tx.ended = true
-            tx.isComplete = true
-            if tx.totalLength == nil { tx.totalLength = tx.frontier }
-            lastKnownTotalLength = tx.totalLength
-            if tx.base == 0, let file = tx.fileURL, let cached = store.promote(file, for: cacheKey) {
-                tx.fileURL = cached
-                tx.isCached = true
-                promoted = true
-            }
-            downloadLog.info("download: complete gen=\(tx.generation) base=\(tx.base) frontier=\(tx.frontier) cached=\(tx.isCached)")
-            event = .download(frontier: tx.frontier, downloadBytesPerSecond: downloadBytesPerSecondLocked(), complete: true)
-            condition.broadcast()
-        }
-        if promoted { store.evict(excluding: cacheKey) }
-        if let event { onEvent?(event) }
+        perform(locked { () -> [Deferred] in
+            guard let attempt = attemptLocked(task) else { return [] }
+            let code = error.map { ($0 as NSError).code }
+            return runLocked(machine.completed(attempt: attempt, errorCode: code, now: clock.now))
+        })
     }
 
     // MARK: - Helpers
@@ -968,50 +561,5 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
             }
             return nil
         }
-    }
-
-    /// `X` and `Z` of `bytes X-Y/Z`; `Z` is nil for `*`.
-    static func contentRange(_ header: String?) -> (start: Int64, total: Int64?)? {
-        guard let header, header.hasPrefix("bytes ") else { return nil }
-        let parts = header.dropFirst("bytes ".count).split(whereSeparator: { "-/".contains($0) })
-        guard parts.count == 3, let start = Int64(parts[0].trimmingCharacters(in: .whitespaces)) else { return nil }
-        return (start, Int64(parts[2].trimmingCharacters(in: .whitespaces)))
-    }
-
-    /// The resource's total when an answer says it ends exactly at `base` (a request's start or a
-    /// resume's frontier): a `416`
-    /// with `Content-Range: bytes */<base>`, or a `206` clamped to the last byte (`bytes X-Y/<base>`
-    /// with `X` before `base`). Nil for any other answer.
-    static func totalEndingAt(_ base: Int64, status: Int, contentRange header: String?) -> Int64? {
-        guard let header, header.hasPrefix("bytes ") else { return nil }
-        let spec = header.dropFirst("bytes ".count)
-        let total: Int64?
-        switch status {
-        case 416:
-            guard spec.hasPrefix("*/") else { return nil }
-            total = Int64(spec.dropFirst(2).trimmingCharacters(in: .whitespaces))
-        case 206:
-            guard let range = contentRange(header), range.start < base else { return nil }
-            total = range.total
-        default:
-            return nil
-        }
-        return total == base ? base : nil
-    }
-
-    /// Whether a body is media. A page by its type, what a signed URL past its expiry
-    /// answers with, never is; an audio or video type is. Otherwise (`application/octet-stream`
-    /// names nothing) the body's first ``sniffBytes`` decide when given: an mp3 or ADTS frame sync,
-    /// an ID3 tag, or a container's magic, which a page never starts with. Nil: undecided.
-    static func isMedia(mimeType: String?, head: [UInt8]? = nil) -> Bool? {
-        let type = mimeType?.lowercased() ?? ""
-        if type == "text/html" || type == "application/xhtml+xml" { return false }
-        if type.hasPrefix("audio/") || type.hasPrefix("video/") || type == "application/ogg" { return true }
-        guard let head else { return nil }
-        guard head.count >= sniffBytes else { return false }
-        if head[0] == 0xFF, head[1] & 0xE0 == 0xE0 { return true }
-        let magic = String(decoding: head[0..<4], as: UTF8.self)
-        return magic.hasPrefix("ID3") || ["OggS", "fLaC", "RIFF"].contains(magic)
-            || String(decoding: head[4..<8], as: UTF8.self) == "ftyp"
     }
 }
