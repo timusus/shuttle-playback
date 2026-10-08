@@ -30,7 +30,7 @@
   <g text-anchor="middle">
     <text x="120" y="177" font-weight="600">base &lt;= p &lt; frontier</text><text x="120" y="195" font-size="11" fill="#444">serve from the file</text>
     <text x="360" y="177" font-weight="600">p at the end</text><text x="360" y="195" font-size="11" fill="#444">return 0 (end of stream)</text>
-    <text x="595" y="177" font-weight="600">just ahead (&lt; 3 s)</text><text x="595" y="195" font-size="11" fill="#444">wait for bytes</text>
+    <text x="595" y="177" font-weight="600">just ahead</text><text x="595" y="195" font-size="11" fill="#444">wait if sooner than a request</text>
     <text x="805" y="177" font-weight="600">behind or far ahead</text><text x="805" y="195" font-size="11" fill="#444">restart: new file</text>
   </g>
   <text x="20" y="246" font-size="12" fill="#666">A FAILED TRANSACTION (GrowingFileDownload.Retry: 3 answered attempts, 30 s link window, backoff 0.1 s to 2 s)</text>

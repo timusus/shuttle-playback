@@ -271,6 +271,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         let body = makeBody(512 * 1024)
         let server = try startServer(body: body)
         server.bytesPerSecond = 64 * 1024
+        server.delayForEveryRange = 1
         let source = makeSource(server.url)
 
         _ = try read(source, 1)
@@ -278,7 +279,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         let near = source.snapshot.frontier + 24 * 1024
         try source.seek(to: near)
         XCTAssertEqual(try read(source, 1000), body.subdata(in: Int(near)..<Int(near) + 1000))
-        XCTAssertEqual(source.snapshot.transactionGeneration, 1, "about 0.4 s away: the read waited")
+        XCTAssertEqual(source.snapshot.transactionGeneration, 1, "about 0.4 s away, a request 1 s: the read waited")
 
         source.willSeek(generation: 7)
         try source.seek(to: 400_000)
@@ -297,6 +298,30 @@ final class GrowingFileByteSourceTests: XCTestCase {
         try source.seek(to: 100)
         XCTAssertEqual(try read(source, 100), body.subdata(in: 100..<200), "before the base restarts")
         XCTAssertEqual(source.snapshot.transactionGeneration, 3)
+    }
+
+    /// Issue #68: a far seek the download would close in a couple of seconds is still a new
+    /// request when a request answers sooner, as media3's `seekToUs` resets the loader at the target.
+    /// On a throttled link with a 0.3 s response latency, the first byte at the target arrives
+    /// within that latency and a margin, not after the 2.5 s the running download would take.
+    func testAFarSeekThatARequestAnswersSoonerThanTheDownloadIsANewRequest() throws {
+        let rate = 128 * 1024
+        let latency = 0.3
+        let body = makeBody(2 * 1024 * 1024)
+        let server = try startServer(body: body)
+        server.bytesPerSecond = rate
+        server.delayForEveryRange = latency
+        let source = makeSource(server.url)
+
+        _ = try read(source, 1)
+        XCTAssertTrue(waitUntil { source.snapshot.frontier >= 128 * 1024 })
+        let target = source.snapshot.frontier + Int64(rate) * 5 / 2
+        try source.seek(to: target)
+        let started = Date()
+        XCTAssertEqual(try read(source, 1000), body.subdata(in: Int(target)..<Int(target) + 1000))
+        let waited = Date().timeIntervalSince(started)
+        XCTAssertLessThan(waited, latency + 0.5, "the seek waited for the running download")
+        XCTAssertEqual(server.requestedRanges, [0, target])
     }
 
     func testTheProbesFooterLookIsEndOfStreamAndLeavesTheHeadDownloading() throws {

@@ -14,11 +14,13 @@ final class GrowingFileDownloadReadRuleTests: XCTestCase {
         complete: Bool = false,
         probing: Bool = false,
         rangeIgnored: Bool = false,
-        rate: Double? = 100
+        rate: Double? = 100,
+        latency: TimeInterval? = 3
     ) -> GrowingFileDownload.ReadRule.Action {
         GrowingFileDownload.ReadRule.action(
             position: position, base: base, frontier: frontier, totalLength: total,
-            isComplete: complete, isProbing: probing, rangeIgnored: rangeIgnored, downloadBytesPerSecond: rate
+            isComplete: complete, isProbing: probing, rangeIgnored: rangeIgnored, downloadBytesPerSecond: rate,
+            responseLatency: latency
         )
     }
 
@@ -40,10 +42,14 @@ final class GrowingFileDownloadReadRuleTests: XCTestCase {
         XCTAssertEqual(action(1200, total: nil, rate: 1000), .wait)
     }
 
-    func testAheadWaitsWhenTheGapClosesInUnderWaitSecondsElseRestarts() {
-        // 100 B/s: 299 bytes ahead is 2.99 s, 300 is 3 s.
+    func testAheadWaitsOnlyWhileTheDownloadBeatsANewRequest() {
+        // 100 B/s against a 3 s response: 299 bytes ahead is 2.99 s, 300 is 3 s.
         XCTAssertEqual(action(1299), .wait)
         XCTAssertEqual(action(1300), .restart)
+        // The same gap against a 0.3 s response restarts; 29 bytes (0.29 s) still waits.
+        XCTAssertEqual(action(1029, latency: 0.3), .wait)
+        XCTAssertEqual(action(1030, latency: 0.3), .restart)
+        XCTAssertEqual(action(1001, latency: nil), .restart, "no response measured yet restarts")
         XCTAssertEqual(action(1001, rate: nil), .restart, "no throughput sample yet restarts")
         XCTAssertEqual(action(1001, rate: 0), .restart, "a stopped download restarts")
     }

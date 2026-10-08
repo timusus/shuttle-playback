@@ -174,6 +174,9 @@ struct GrowingFileDownload {
     /// The chain's end was just forgotten: the next request walks the chain from `url` with the
     /// generous wait, even as a retry. Once; the request it goes with clears it.
     private var chainEndForgotten = false
+    /// The last accepted response's time from its request going out: what a new request costs,
+    /// which ``ReadRule`` weighs a seek's wait against.
+    private(set) var responseLatency: TimeInterval?
     private var samples: [(at: TimeInterval, bytes: Int)] = []
     private var firstSampleAt: TimeInterval?
     private var lastDownloadEventAt: TimeInterval = -.infinity
@@ -254,10 +257,13 @@ struct GrowingFileDownload {
             readOpened = true
             return step(.again)
         }
+        // A failure that deleted the file (a page, a full disk) took its frontier with it, so the
+        // decoder's next read is no seek ahead: it gets the failure.
+        if let reason = failure, !tx.hasFile { return reportFailure(reason) }
         let action = ReadRule.action(
             position: offset, base: tx.base, frontier: tx.frontier, totalLength: tx.totalLength,
             isComplete: tx.isComplete, isProbing: isProbing, rangeIgnored: rangeIgnored,
-            downloadBytesPerSecond: downloadBytesPerSecond(now: now)
+            downloadBytesPerSecond: downloadBytesPerSecond(now: now), responseLatency: responseLatency
         )
         switch action {
         case .serve:
@@ -270,18 +276,7 @@ struct GrowingFileDownload {
             start(at: offset, seekGeneration: claimSeek())
             return step(.again)
         case .wait:
-            if let reason = failure {
-                // The failed transaction goes with the error. The error stays until a seek
-                // (Play once the player shows it seeks to where it stopped), whose read opens
-                // a fresh one there with a fresh budget; the total length stays known.
-                retireCurrent()
-                current = nil
-                effects.append(.release)
-                failure = nil
-                stickyFailure = reason
-                retry.reset()
-                return step(.fail(.transport(reason)))
-            }
+            if let reason = failure { return reportFailure(reason) }
             parks += 1
             if !recheckPending {
                 recheckPending = true
@@ -289,6 +284,19 @@ struct GrowingFileDownload {
             }
             return step(.park)
         }
+    }
+
+    /// The failed transaction goes with the error. The error stays until a seek (Play once the
+    /// player shows it seeks to where it stopped), whose read opens a fresh one there with a fresh
+    /// budget; the total length stays known.
+    private mutating func reportFailure(_ reason: String) -> ReadStep {
+        retireCurrent()
+        current = nil
+        effects.append(.release)
+        failure = nil
+        stickyFailure = reason
+        retry.reset()
+        return step(.fail(.transport(reason)))
     }
 
     /// A served read copied `count` bytes.
@@ -580,7 +588,7 @@ struct GrowingFileDownload {
             current?.totalLength = total
             lastKnownTotalLength = total
             if finalURL == nil { finalURL = response.url }
-            recordFirstResponse(status: status, remembered: tx.remembered, now: now)
+            recordResponse(tx, status: status, now: now)
             effects.append(.emit(.transaction(base: tx.base, generation: tx.generation, seekGeneration: tx.seekGeneration, httpStatus: status)))
             effects.append(.emit(.download(frontier: tx.frontier, downloadBytesPerSecond: downloadBytesPerSecond(now: now), complete: true)))
             effects.append(.wake)
@@ -618,6 +626,7 @@ struct GrowingFileDownload {
             lastKnownTotalLength = current?.totalLength
             if let total = current?.totalLength { effects.append(.makeRoom(bytes: total - resumeAt)) }
             if finalURL == nil { finalURL = response.url }
+            recordResponse(tx, status: status, now: now)
             current?.lastByteAt = now
             scheduleIdleCheck()
             effects.append(.wake)
@@ -665,7 +674,7 @@ struct GrowingFileDownload {
         if let total { effects.append(.makeRoom(bytes: total - accepted.base)) }
         if let tag = response.entityTag, !tag.hasPrefix("W/") { current?.entityTag = tag }
         if finalURL == nil { finalURL = response.url }
-        recordFirstResponse(status: status, remembered: accepted.remembered, now: now)
+        recordResponse(accepted, status: status, now: now)
         effects.append(.emit(.transaction(
             base: accepted.base, generation: accepted.generation, seekGeneration: accepted.seekGeneration, httpStatus: status
         )))
@@ -675,11 +684,13 @@ struct GrowingFileDownload {
         return true
     }
 
-    private mutating func recordFirstResponse(status: Int, remembered: Bool, now: TimeInterval) {
+    /// An accepted response to `tx`'s current request: its latency, and the startup's first answer.
+    private mutating func recordResponse(_ tx: Transaction, status: Int, now: TimeInterval) {
+        responseLatency = now - tx.attemptStartedAt
         guard startup.firstResponseAt == nil else { return }
         startup.firstResponseAt = now
         startup.status = status
-        startup.remembered = remembered
+        startup.remembered = tx.remembered
     }
 
     /// Where a chunk of the request `attempt`'s body goes in the file; nil when that body is no
@@ -807,9 +818,6 @@ extension GrowingFileDownload {
     /// literal numbers.
     enum ReadRule {
 
-        /// A gap ahead of the frontier that the download closes in less than this is waited for; a
-        /// longer one restarts the download at the position. One named number, no byte floor.
-        static let seekWaitSeconds: Double = 3
         /// The tail FFmpeg's MP3 open looks at while probing, and why it is the one footer rule
         /// left (ADR-0003): `mp3_read_header` reads an ID3v1 tag from exactly the last 128 bytes
         /// (`ff_id3v1_read`) and an APE footer from the last 32, inside it. Answering that look
@@ -831,6 +839,11 @@ extension GrowingFileDownload {
         /// footer, reads it and seeks back, and deciding at the seek would cancel the head download for
         /// a read that never needed the network.
         ///
+        /// A gap ahead of the frontier is waited for only while the download closes it sooner than a
+        /// new request would answer (`gap / rate < responseLatency`); otherwise the download restarts
+        /// at the position (issue #68). media3's `seekToUs` never waits on a seek its buffer cannot
+        /// serve: it cancels the loader and loads from the target.
+        ///
         /// - Parameters:
         ///   - isProbing: the decoder is inside `open()`; a footer look past the frontier is then
         ///     answered EOF at once (FFmpeg reads that as "no footer"). Outside the probe the same read
@@ -838,6 +851,8 @@ extension GrowingFileDownload {
         ///   - rangeIgnored: the host answered a ranged request with `200`; a restart would only be
         ///     answered from byte 0 again, so everything ahead is waited for.
         ///   - downloadBytesPerSecond: the observed download rate; nil (no sample yet) restarts.
+        ///   - responseLatency: how long this source's last accepted response took to arrive after
+        ///     its request went out; nil (none yet) restarts.
         static func action(
             position: Int64,
             base: Int64,
@@ -846,7 +861,8 @@ extension GrowingFileDownload {
             isComplete: Bool,
             isProbing: Bool,
             rangeIgnored: Bool,
-            downloadBytesPerSecond: Double?
+            downloadBytesPerSecond: Double?,
+            responseLatency: TimeInterval?
         ) -> Action {
             if position >= base, position < frontier { return .serve }
             if let totalLength, position >= totalLength { return .endOfStream }
@@ -854,8 +870,8 @@ extension GrowingFileDownload {
             if isComplete { return .endOfStream }
             if isProbing, let totalLength, position >= totalLength - footerBytes { return .endOfStream }
             if position == frontier || rangeIgnored { return .wait }
-            guard let downloadBytesPerSecond, downloadBytesPerSecond > 0 else { return .restart }
-            return Double(position - frontier) / downloadBytesPerSecond < seekWaitSeconds ? .wait : .restart
+            guard let downloadBytesPerSecond, downloadBytesPerSecond > 0, let responseLatency else { return .restart }
+            return Double(position - frontier) / downloadBytesPerSecond < responseLatency ? .wait : .restart
         }
     }
 }
