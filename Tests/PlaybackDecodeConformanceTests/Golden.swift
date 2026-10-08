@@ -81,7 +81,7 @@ enum GoldenStore {
          * OutputFormatTests. The chained Ogg pair is not byte-reproducible and has known bugs
          * (#48, #49); the two FLACs are covered by their own decoder tests (StreamDecodeTests,
          * OutputFormatTests). */
-        let skip: Set<String> = ["NOTICE", "make-fixtures.sh", "README.md",
+        let skip: Set<String> = ["NOTICE", "LICENSE-APACHE-2.0", "make-fixtures.sh", "README.md",
                                  "stitch_44k_48k_64k.mp3", "stitch_48k_44k_64k.mp3",
                                  "stitch_stereo_mono_64k.mp3",
                                  "chained_vorbis_44k_48k.ogg", "chained_opus_mono_stereo.opus",
