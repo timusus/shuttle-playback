@@ -2,7 +2,7 @@
   "bytesBeforeFirstAudioMax" : 32768,
   "channels" : 1,
   "durationAtEofS" : 3.320453514739229,
-  "durationS" : 3.51,
+  "durationS" : 3.49,
   "expect" : "decodes",
   "fixture" : "sample_with_id3.adts",
   "frames" : 146432,

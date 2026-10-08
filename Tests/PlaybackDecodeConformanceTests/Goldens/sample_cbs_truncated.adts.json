@@ -2,7 +2,7 @@
   "bytesBeforeFirstAudioMax" : 32768,
   "channels" : 1,
   "durationAtEofS" : 3.297233560090703,
-  "durationS" : 3.5,
+  "durationS" : 3.48,
   "expect" : "decodes",
   "fixture" : "sample_cbs_truncated.adts",
   "frames" : 145408,

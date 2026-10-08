@@ -2,7 +2,7 @@
   "bytesBeforeFirstAudioMax" : 87040,
   "channels" : 1,
   "durationAtEofS" : 0.9752380952380952,
-  "durationS" : 1.06,
+  "durationS" : 1.04,
   "expect" : "decodes",
   "fixture" : "bt601.mov",
   "frames" : 43008,
