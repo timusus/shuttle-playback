@@ -153,6 +153,10 @@ struct StreamDecoder {
     /* Native FLAC only: where the first frame starts (AVIO offset), once `flac_audio_start` has
      * found it; 0 until then. */
     int64_t      flac_audio_pos;
+    /* Set by `demux_seek` when a FLAC seek's target was beyond reach of the nearest frame it found
+     * before it: the decode runs on from that frame, at this time (stream time base), rather than
+     * dropping up to the target. AV_NOPTS_VALUE otherwise. */
+    int64_t      flac_short_at;
 
     /* The first bytes of the media as libavformat read them (offset 0 is `base_offset`), kept so
      * the Xing/Info/VBRI frame can be read without a second request. */
@@ -769,6 +773,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     d->next_pts = AV_NOPTS_VALUE;
     d->seek_first_pts = AV_NOPTS_VALUE;
     d->seek_from = AV_NOPTS_VALUE;
+    d->flac_short_at = AV_NOPTS_VALUE;
 
     /* Before anything reads: hide the ID3v2 tag, which on a real published MP3 is megabytes of
      * cover art that libavformat would otherwise consume in full. */
@@ -1995,35 +2000,35 @@ static int64_t flac_audio_start(StreamDecoder *d, int64_t *spent) {
  * refill, about as many bytes as another probe and its restart cost. */
 static const int64_t kFLACNearBytes = 32 * 1024;
 
-/* What the search for one FLAC seek may spend: a probe costs at least one 4 KiB read and up to two
- * frames, and a bracket whose bitrate jumps (silence beside noise) takes up to ten to close. */
-static const int kFLACMaxProbes = 10;
-static const int64_t kFLACProbeBytes = 2 * kSeekBudgetBytes;
-
 /*
  * Find the frame of a FLAC stream with no seek table that holds `target` (stream time base), or
  * one at most `kFLACNearBytes` before it, by interpolation between frames whose place and time are
- * both known (issue #38).
+ * both known (issues #38, #42).
  *
  * libavformat seeks such a stream by bisection over `flac_read_timestamp`, which reads the file's
  * tail for its last timestamp and buffers ten frames per probe through the parser, so it outruns
- * the seek budget on any file of more than a few seconds. The byte estimate that took over landed
- * on whatever frame followed its byte and reported the time asked for, though the frame said
- * which it was: thousands of samples off. Here the bracket starts from what the index already
- * knows (the first frame, frames decoded so far, a seek table) and the file's end, and each probe
- * reads the frame header at the interpolated byte, aimed one frame early, and narrows the bracket
- * to the true time it finds. Convergence is quick where the bitrate changes slowly, and bisection
- * takes over where it jumps; probing stops after `kFLACMaxProbes` probes or `kFLACProbeBytes` read.
+ * the seek budget on any file of more than a few seconds. Here the bracket starts from what the
+ * index already knows (the first frame, frames decoded so far, a seek table) and the file's end,
+ * and each probe reads the frame header at the interpolated byte, aimed one frame early, and
+ * narrows the bracket to the true time it finds. As media3's `FlacBinarySearchSeeker` (over
+ * `BinarySearchSeeker`) does, the search runs until the bracket is small, not for a number of
+ * probes: a fixed ten (and 128 KiB) ended a search from the end of a file across a quiet stretch
+ * beside a loud one unplaced (issue #42). Where the bitrate changes slowly, interpolation converges
+ * in a probe or two; where it jumps, or a tag after the last frame counts in the length, the
+ * search bisects (see below), so it takes at most twice bisection's probes, each reading at most
+ * two of the largest frames: at most 24 on a 100 MB file.
  *
  * Sets `*pos` and `*dts` to the frame, which the decode then runs on from, dropping what is before
- * the target. `*pos` stays -1 when the stream is not native FLAC, has no length, or the search
- * ended further from the target than `kSeekBudgetBytes` (`*unplaced` is then set: the byte
- * estimate is used straight away, the bisection being no better). Returns STREAM_DECODE_OK, or a
- * cancel or an interruption.
+ * the target. Where that frame is further before the target than `kSeekBudgetBytes` (a probe gave
+ * up: a read failed, or no header could be believed), `*short_of` is set: the seek lands on the
+ * frame and says so. The byte estimate it used to take landed on whatever frame followed its byte
+ * and reported the time asked for, though the frame said which it was: seconds off. `*pos` stays
+ * -1 when the stream is not native FLAC, has no length, or its first frame is not where its
+ * metadata ends. Returns STREAM_DECODE_OK, or a cancel or an interruption.
  */
-static int flac_frame_before(StreamDecoder *d, int64_t target, int64_t *pos, int64_t *dts, int *unplaced) {
+static int flac_frame_before(StreamDecoder *d, int64_t target, int64_t *pos, int64_t *dts, int *short_of) {
     *pos = -1;
-    *unplaced = 0;
+    *short_of = 0;
     FLACInfo si;
     if (!flac_info(d, &si) || !can_estimate_bytes(d)) return STREAM_DECODE_OK;
     AVStream *st = d->fmt->streams[d->audio_idx];
@@ -2059,27 +2064,28 @@ static int flac_frame_before(StreamDecoder *d, int64_t target, int64_t *pos, int
     if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
 
     /* Interpolation alone crawls where the bitrate jumps (a quiet passage beside a loud one), each
-     * probe moving the same end of the bracket a little; after two such, the next one bisects. */
-    int last_side = 0, same_side = 0;
-    for (int probes = 0; hi > lo && hi_pos > lo_pos; probes++) {
+     * probe moving the same end of the bracket a little: one that leaves more than half of it
+     * makes the next one bisect. So does an upper end that is not a frame's: a probe that found no
+     * frame after it (a tag after the last frame) bounds the bracket, but the bytes before it are
+     * not audio, and interpolating against it aims at the tag again. */
+    int bisect = 0, hi_framed = 1;
+    while (hi > lo && hi_pos > lo_pos) {
         double bytes_per_sample = (double)(hi_pos - lo_pos) / (double)(hi - lo);
         double gap = (double)(want - lo) * bytes_per_sample;
-        if (gap <= (double)kFLACNearBytes || probes >= kFLACMaxProbes || spent >= kFLACProbeBytes) break;
-        int64_t probe_at = same_side >= 2
+        if (gap <= (double)kFLACNearBytes) break;
+        int64_t probe_at = bisect
             ? lo_pos + (hi_pos - lo_pos) / 2
             : lo_pos + (int64_t)(gap - si.max_blocksize * bytes_per_sample);
         if (probe_at <= lo_pos) probe_at = lo_pos + 1;
         if (probe_at >= hi_pos) break;
         int result;
-        int64_t found_pos = -1, found = 0;
+        int64_t found_pos = -1, found = 0, width = hi_pos - lo_pos;
         int rc = flac_probe(d, &si, probe_at, hi_pos, lo, hi, want, &result, &found_pos, &found, &spent);
         if (rc != STREAM_DECODE_OK) return rc;
         if (result == FLAC_PROBE_GAVE_UP) break;
-        int side = result == FLAC_PROBE_FOUND && found <= want ? -1 : 1;
-        same_side = side == last_side ? same_side + 1 : 1;
-        last_side = side;
         if (result == FLAC_PROBE_NONE) {
             hi_pos = probe_at;   /* the frame before `hi` starts before the probe */
+            hi_framed = 0;
         } else if (found <= want) {
             lo = found;
             lo_pos = found_pos;
@@ -2088,13 +2094,12 @@ static int flac_frame_before(StreamDecoder *d, int64_t target, int64_t *pos, int
              * as well as the frame's own does, and up to a frame tighter. */
             hi = found;
             hi_pos = probe_at;
+            hi_framed = 1;
         }
+        bisect = !hi_framed || hi_pos - lo_pos > width / 2;
     }
     double bytes_per_sample = hi > lo ? (double)(hi_pos - lo_pos) / (double)(hi - lo) : 0;
-    if ((double)(want - lo) * bytes_per_sample > (double)kSeekBudgetBytes) {
-        *unplaced = 1;
-        return STREAM_DECODE_OK;
-    }
+    *short_of = (double)(want - lo) * bytes_per_sample > (double)kSeekBudgetBytes;
     *pos = lo_pos;
     *dts = d->start_time + av_rescale_q(lo, per_sample, d->time_base);
     /* The generic seek reads forward from the index's last entry rather than going to it, and as
@@ -2286,7 +2291,10 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
         if (placed != kSeekPlaced) return placed;
 
         decoder->seek_from = from;
-        int status = land_exactly(decoder, target);
+        /* A FLAC frame further before the target than a seek may decode lands where it is, at the
+         * time its header gives, rather than at the target with the audio elsewhere (issue #42). */
+        int64_t land_at = decoder->flac_short_at != AV_NOPTS_VALUE ? decoder->flac_short_at : target;
+        int status = land_exactly(decoder, land_at);
         if (status == STREAM_DECODE_OK && !from_start && !last && decoder->seek_first_pts != AV_NOPTS_VALUE
             && decoder->seek_first_pts > target) {
             continue;
@@ -2452,10 +2460,12 @@ static int demux_seek(StreamDecoder *decoder, double seconds, int64_t target, do
         }
     }
     /* A FLAC frame says which it is, so one found at a byte is a frame of known time too. */
-    int flac_unplaced = 0;
+    decoder->flac_short_at = AV_NOPTS_VALUE;
     if (!decoder->mp3_header_ok) {
-        int found = flac_frame_before(decoder, target, &anchor_pos, &anchor_dts, &flac_unplaced);
+        int short_of = 0;
+        int found = flac_frame_before(decoder, target, &anchor_pos, &anchor_dts, &short_of);
         if (found != STREAM_DECODE_OK) return found;
+        if (short_of) decoder->flac_short_at = anchor_dts;
     }
     if (anchor_pos >= 0 && anchor_dts != AV_NOPTS_VALUE) {
         av_add_index_entry(decoder->fmt->streams[decoder->audio_idx], anchor_pos, anchor_dts, 0, 0,
@@ -2507,11 +2517,9 @@ static int demux_seek(StreamDecoder *decoder, double seconds, int64_t target, do
      * FORWARD FROM THE START until the timestamps reach the target: measured at 12 MB for one seek
      * to 25 minutes, on a fixture whose whole open cost 32 KiB. It is refused here rather than
      * paid for, and the byte estimate below takes over. Everything with a real index — every mp4,
-     * an mp3 with a TOC — lands well inside the budget and never reaches the fallback. A FLAC
-     * search that ended too far from its target skips the bisection, which would spend the budget
-     * on the file's tail and get no nearer. */
-    int walked = 0, rc = -1;
-    if (!flac_unplaced) rc = budgeted_seek(decoder, seek_min, seek_ts, seek_ts, seek_flags, &walked);
+     * an mp3 with a TOC — lands well inside the budget and never reaches the fallback. */
+    int walked = 0;
+    int rc = budgeted_seek(decoder, seek_min, seek_ts, seek_ts, seek_flags, &walked);
     decoder->fmt->flags = fmt_flags;
 
     if (rc < 0 || walked) {

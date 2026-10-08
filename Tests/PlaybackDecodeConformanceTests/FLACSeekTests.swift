@@ -8,18 +8,30 @@ import XCTest
 /// outruns the seek budget and the byte estimate is all a seek used to have, is generated here.
 final class FLACSeekTests: XCTestCase {
 
-    /// A file reader that counts what it serves and how often it is sent somewhere.
+    /// A file reader that counts what it serves and how often it is sent somewhere. With
+    /// `failOnceFrom`, the first read at or after that byte fails, as a read the byte source gave up
+    /// on would.
     private final class CountingReader: StreamByteReader {
+        private struct ReadFailed: Error {}
+
         private let inner: FileByteReader
+        private var failOnceFrom: Int64?
         private(set) var bytesRead: Int64 = 0
         private(set) var seeks = 0
 
-        init(_ url: URL) throws { inner = try FileByteReader(url: url) }
+        init(_ url: URL, failOnceFrom: Int64? = nil) throws {
+            inner = try FileByteReader(url: url)
+            self.failOnceFrom = failOnceFrom
+        }
 
         var totalLength: Int64? { inner.totalLength }
         var position: Int64 { inner.position }
 
         func read(into buffer: UnsafeMutableRawPointer, maxLength: Int) throws -> Int {
+            if let from = failOnceFrom, inner.position >= from {
+                failOnceFrom = nil
+                throw ReadFailed()
+            }
             let n = try inner.read(into: buffer, maxLength: maxLength)
             bytesRead += Int64(n)
             return n
@@ -196,12 +208,57 @@ final class FLACSeekTests: XCTestCase {
         try assertSeeksExactly(to: [25.5, 33.3, 21.0, 39.0, 55.123, 52.2], lookalikes: true)
     }
 
+    /// **A search that needs many probes still lands where it says (issue #42).**
+    ///
+    /// From near the end, 55.123 s lies across the quiet stretch at 40-50 s from the noise either
+    /// side, and the bracket narrowed past ten probes. The search stopped there, unplaced, and the
+    /// byte estimate began on whatever frame followed its byte while reporting 55.123.
+    func testASeekNeedingManyProbesLandsWhereItSays() throws {
+        try assertSeeksExactly(to: [59.9, 59.99, 55.123])
+    }
+
+    /// **A FLAC followed by a very large tag lands where it says (issue #42).**
+    ///
+    /// 256 KiB of zeros after the last frame counted in the byte estimate the search used to fall
+    /// back on, which landed seconds early while reporting the target. Once a probe has found no
+    /// frame after it, the bytes before it are not all audio, so the search bisects rather than
+    /// interpolating into the tag again: about eight probes from the end on this file, so it is
+    /// allowed twice the usual probing.
+    ///
+    /// A seek inside the last frame is left out: with only that frame's header in hand, FFmpeg's
+    /// FLAC parser drops it once 160 KiB follow with no other header, so nothing decodes.
+    func testAFLACFollowedByAVeryLargeTagLandsWhereItSays() throws {
+        try assertSeeksExactly(to: [59.9, 55.123, 45.0, 30.5], trailing: 256 * 1024, probing: 256 * 1024)
+    }
+
+    /// **A search that cannot finish lands on the frame it has, and says so (issue #42).**
+    ///
+    /// One read fails a megabyte in, where the first probe for 45 s reads, so the probe gives up.
+    /// The only frame the seek knows before its target is then seconds back, further than a seek
+    /// may decode: it lands there and reports that frame's time, where the byte estimate it used
+    /// to take reported 45 s over audio from somewhere else.
+    func testASearchThatGivesUpLandsOnTheFrameItHasAndSaysSo() throws {
+        let (url, pcm, _) = try writeFLAC(variable: false)
+        let decoder = FFmpegStreamDecoder(reader: try CountingReader(url, failOnceFrom: 1 << 20))
+        _ = try decoder.open()
+        let landed = try decoder.seek(toSeconds: 45.0)
+        XCTAssertLessThan(landed, 40.0, "landed \(landed)")
+        let window = 4096
+        var got: [Float] = []
+        while got.count < window * 2, let chunk = decoder.nextChunk() { got += chunk }
+        let start = Int((landed * Double(Self.rate)).rounded()) * 2
+        XCTAssertEqual(start % (4096 * 2), 0, "landed \(landed), not on a frame")
+        let want = pcm[start..<start + window * 2].map { Float($0) / 32768 }
+        XCTAssertEqual(Array(got.prefix(window * 2)), want, "PCM differs from the stream's at the landing")
+    }
+
     /// Seek the generated FLAC, fixed and variable blocksize, to each target in turn, and require
     /// the landing, the PCM after it and the bytes read before it to be what an exact seek gives.
-    /// The bytes are bounded by 128 KiB of probing (plus the probe that crosses it, at most two
-    /// frames), a placement at most 64 KiB before the target, the ten frames the FLAC parser
-    /// buffers before it hands out the first, and one AVIO refill.
+    /// The bytes are bounded by `probing` (plus the probe that crosses it, at most two frames), a
+    /// placement at most 64 KiB before the target, the ten frames the FLAC parser buffers before it
+    /// hands out the first, and one AVIO refill.
     private func assertSeeksExactly(to targets: [Double], trailing: Int = 0, lookalikes: Bool = false,
+                                    probing: Int = 128 * 1024,
                                     file: StaticString = #filePath, line: UInt = #line) throws {
         for variable in [false, true] {
             let (url, pcm, maxFrame) = try writeFLAC(variable: variable, trailing: trailing, lookalikes: lookalikes)
@@ -209,7 +266,7 @@ final class FLACSeekTests: XCTestCase {
             let decoder = FFmpegStreamDecoder(reader: reader)
             let format = try decoder.open()
             XCTAssertEqual(format.sampleRate, Double(Self.rate), file: file, line: line)
-            let budget = Int64(128 * 1024 + 2 * maxFrame + 64 + 64 * 1024 + 11 * maxFrame + 32 * 1024)
+            let budget = Int64(probing + 2 * maxFrame + 64 + 64 * 1024 + 11 * maxFrame + 32 * 1024)
             let window = 4096
 
             for target in targets {
@@ -224,7 +281,9 @@ final class FLACSeekTests: XCTestCase {
 
                 XCTAssertEqual(landed, target, accuracy: 0.5 / Double(Self.rate), "\(label): landed \(landed)",
                                file: file, line: line)
-                let start = Int((target * Double(Self.rate)).rounded()) * 2
+                // The PCM is checked at the reported landing, so a landing reported at the target
+                // with the audio elsewhere fails here as well as above.
+                let start = min(max(Int((landed * Double(Self.rate)).rounded()) * 2, 0), pcm.count)
                 let want = pcm[start..<min(start + window * 2, pcm.count)].map { Float($0) / 32768 }
                 XCTAssertEqual(got.count, want.count, "\(label): frames after the landing", file: file, line: line)
                 if let miss = zip(got, want).enumerated().first(where: { $0.element.0 != $0.element.1 })?.offset {
