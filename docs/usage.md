@@ -120,6 +120,11 @@ refuses throws `StreamDecoderError.unseekable`, distinct from `.failed(status:)`
 The decoder has failed after it: `endReason` is `.failure` and reads return nothing, so open a new
 decoder over a seekable source. A seek that libavformat can serve from bytes it still holds succeeds.
 
+Chained Ogg (streams concatenated byte for byte) decodes sequentially across its links, including a
+change of channel count or sample rate, which is converted to the open format. Seeking into a later
+link is unsupported ([#48](https://github.com/timusus/shuttle-playback/issues/48)), as in FFmpeg and
+media3: the seek lands in the first link.
+
 With a growing-file source, a seek past the frontier restarts the download at the target into a new
 file (a short hop ahead waits instead). Call `source.willSeek(generation:)` first only if you want the
 transaction paired with your seek in `snapshot` and events.

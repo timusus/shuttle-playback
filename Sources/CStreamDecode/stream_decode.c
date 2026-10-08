@@ -583,8 +583,7 @@ static int pump(StreamDecoder *d) {
 
     for (;;) {
         if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-        /* A reopen reads nothing until its held packet is in the new codec; an interruption before
-         * then would leave a packet a resume reads again. */
+        /* Harmless while a reopen drains the codec: nothing reads the source then. */
         if (d->interrupted && !d->reopening) return STREAM_DECODE_ERR_INTERRUPTED;
 
         int rc = avcodec_receive_frame(d->dec, d->frame);
