@@ -243,6 +243,46 @@ final class StreamDecodeTests: XCTestCase {
         }
     }
 
+    /// The Opus chain's boundary (#49): no packet dropped or repeated, no pre-skip left in or cut
+    /// twice. Each link is 3 s of 48 kHz input; libopus writes its pre-skip (312 samples) in the
+    /// header and the Ogg end granule says where the audio ends, so FFmpeg trims the pre-skip off
+    /// the start and the padding off the end and each link decodes to exactly 144,000 frames.
+    /// A lost or repeated 20 ms packet (960 frames) or an untrimmed pre-skip would change that.
+    /// The first link is mono, so the output is mono; the second link is 440 Hz left and 660 Hz
+    /// right, downmixed by (L + R) / sqrt(2), and is compared against that sum from its first frame.
+    func testChainedOpusBoundaryHasNoDroppedOrRepeatedAudio() throws {
+        try skipUnlessAvailable()
+        let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: try Fixture.url("chained_opus_mono_stereo.opus")))
+        let format = try decoder.open()
+        XCTAssertEqual(format.channelCount, 1)
+        let pcm = decodeAll(decoder)
+        XCTAssertEqual(pcm.count, 288_000, "two links of exactly 3 s")
+
+        /* No silent gap at the boundary: the longest run of near-zero samples in 2.9 to 3.1 s is
+         * only a tone's zero crossing (a few samples), not a lost packet or a pre-skip of silence. */
+        var longest = 0, run = 0
+        for i in 139_200..<148_800 {
+            if abs(pcm[i]) < 0.005 { run += 1; longest = max(longest, run) } else { run = 0 }
+        }
+        XCTAssertLessThan(longest, 48, "gap of \(longest) near-silent frames at the boundary")
+
+        /* The second link, from its first frame, matches the two tones it was made from; the same
+         * comparison shifted by a packet or the pre-skip does not. */
+        func error(shift: Int) -> Double {
+            var sum = 0.0
+            let count = 9_600
+            for i in 0..<count {
+                let t = Double(i) / 48_000
+                let want = 0.7 * (sin(2 * .pi * 440 * t) + sin(2 * .pi * 660 * t)) / 2.0.squareRoot()
+                let d = Double(pcm[144_000 + shift + i]) - want
+                sum += d * d
+            }
+            return (sum / Double(count)).squareRoot()
+        }
+        XCTAssertLessThan(error(shift: 0), 0.05, "second link's tones are phase-continuous from its start")
+        XCTAssertGreaterThan(error(shift: 312), 0.2, "(control) a pre-skip's shift is visible to this check")
+    }
+
     /// A fixed output format at a rate and channel count neither stream has still gets both streams
     /// at that format, at the length they have.
     func testChainedOggUnderASetOutputFormat() throws {
