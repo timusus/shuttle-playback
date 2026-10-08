@@ -212,6 +212,55 @@ struct GrowingFileDownloadTests {
         #expect(h.opens == 5)
         #expect(h.requests.last == h.request(5, from: 0))
     }
+
+    /// Issue #68: the read rule weighs the latency of the last accepted response, measured from
+    /// its request going out, on the resume path and on the normal one alike.
+    @Test("the response latency is recorded per accepted response and decides a seek ahead: wait, or a new request")
+    func responseLatencyDecidesASeekAhead() {
+        let h = Harness()
+        #expect(h.machine.responseLatency == nil)
+        h.read()
+        h.clock.advance(by: 0.3)
+        h.respond(206, range: "bytes 0-999999/1000000", etag: "\"v1\"")
+        #expect(abs(h.machine.responseLatency! - 0.3) < 1e-9)
+        h.body(1000)
+        h.read(1000)
+
+        // A drop, and the resume goes out 0.1 s later: its answer 0.2 s after that replaces it.
+        h.end(error: -1005)
+        h.clock.advance(by: 0.1)
+        #expect(h.requests.last == h.request(2, from: 1000, ifRange: "\"v1\""))
+        h.clock.advance(by: 0.2)
+        h.respond(206, range: "bytes 1000-999999/1000000")
+        #expect(abs(h.machine.responseLatency! - 0.2) < 1e-9, "a resume's response is measured from its own request")
+        h.body(1000)
+        h.read(1000)
+
+        // 0.15 s of the download's rate ahead beats a 0.2 s request; 0.25 s does not.
+        let rate = h.machine.downloadBytesPerSecond(now: h.now)!
+        #expect(rate > 0)
+        let frontier = h.machine.current!.frontier
+        h.machine.willSeek(generation: nil)
+        try? h.machine.seek(to: frontier + Int64(rate * 0.15))
+        #expect(h.read() == .park)
+        #expect(h.requests.count == 2, "a gap the download closes in 0.15 s waits")
+        try? h.machine.seek(to: frontier + Int64(rate * 0.25))
+        #expect(h.read() == .park)
+        #expect(h.requests.count == 3, "a gap the download closes in 0.25 s is a new request")
+        #expect(h.requests.last == h.request(3, from: frontier + Int64(rate * 0.25)))
+
+        // The normal path, 0.5 s to answer: the same 0.25 s gap now waits.
+        h.clock.advance(by: 0.5)
+        h.respond(206, range: "bytes \(h.requests.last!.from)-999999/1000000")
+        #expect(abs(h.machine.responseLatency! - 0.5) < 1e-9)
+        h.body(1000)
+        h.read(1000)
+        let rate2 = h.machine.downloadBytesPerSecond(now: h.now)!
+        let frontier2 = h.machine.current!.frontier
+        try? h.machine.seek(to: frontier2 + Int64(rate2 * 0.25))
+        #expect(h.read() == .park)
+        #expect(h.requests.count == 3, "against a 0.5 s response the same gap waits")
+    }
 }
 
 /// Carries out ``GrowingFileDownload``'s effects as the adapter would, minus the lock, files and
