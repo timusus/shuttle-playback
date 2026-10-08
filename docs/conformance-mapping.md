@@ -31,9 +31,9 @@ ReplayGain; this repo decodes audio only), **sniff** (media3's `peekLimit` forma
 | `mp3SampleWithVbriHeader` | `bear-vbr-vbri-header.mp3` |
 | `mp3SampleWithVbriHeaderWithTruncatedToC` | `bear-vbr-vbri-header-truncated-toc.mp3` |
 | `mp3SampleWithCbrSeeker` | `bear-cbr-variable-frame-size-no-seek-table.mp3` (flag variants n/a: API) |
-| `mp3Sample_withIndexSeekingFlag_usesCbrSeekerForKnownLength` | `bear-vbr-no-seek-table.mp3`; its 1.872 s seek lands 896 frames early in the golden (VBR with no tag, issue #3) |
+| `mp3Sample_withIndexSeekingFlag_usesCbrSeekerForKnownLength` | `bear-vbr-no-seek-table.mp3`; its 1.872 s seek lands 896 frames early in the golden (VBR with no tag: a seek far from a frame of known time lands by bitrate estimate, as in media3; accepted) |
 | `mp3CbrSampleWithIndexSeekingFlagAndUnknownLength_reportsUnsetAverageBitrate` | `bear-cbr-variable-frame-size-no-seek-table.mp3` under the `unknownLength` combinations; bitrate getter is n/a (API) |
-| `mp3CbrSampleWithNoSeekTableAndTrailingGarbage` | `bear-cbr-no-seek-table-trailing-garbage.mp3` (golden duration 12.2 s is the bitrate estimate over the garbage; the decoded frames are 2.82 s) |
+| `mp3CbrSampleWithNoSeekTableAndTrailingGarbage` | `bear-cbr-no-seek-table-trailing-garbage.mp3` (media3 reports 2.82 s, its dump `durationUs` 2821187; ours over-reports 12.2 s via the bitrate estimate over the trailing garbage; tracked by issue #53) |
 | `trimmedMp3Sample` | `play-trimmed.mp3`; finding #51 (a single-frame file does not open; the golden records the error) |
 | `mp3SampleWithId3` | `bear-id3.mp3` (audio only; metadata n/a) |
 | `mp3SampleWithId3NumericGenre` | `bear-id3-numeric-genre.mp3` (audio only; metadata n/a) |
@@ -76,5 +76,7 @@ ReplayGain; this repo decodes audio only), **sniff** (media3's `peekLimit` forma
 | `getTimeUsAtEndOfStream_xingLengthLongerThanStream`, `getSeekPointsAtEndOfStream_xingLengthLongerThanStream`, `getTimeForAllPositions_xingLengthLongerThanStream` | `vbr_xing_longer_than_stream.mp3` |
 | `getTimeUsAtEndOfStream_streamLengthNotKnown`, `getSeekPointsAtEndOfStream_streamLengthNotKnown`, `getTimeForAllPositions_streamLengthNotKnown` | the `unknownLength` fault combinations of every Xing fixture |
 | `getSeekPointsAtStartOfStream`, `getSeekPointsAtEndOfStream`, `getTimeForAllPositions` | golden seeks of the Xing fixtures, `testXingVBRMP3SeeksExactlyNearAndCheaplyFar` |
+
+`sine-wave-cbr-trailing-id3v1.mp3` is ported but media3 uses it only in `test_utils/.../AssetInfo.java`, not in the five extractor test classes; it is covered here by the conformance matrix and its golden.
 
 Not ported: `1024_incrementing_bytes.mp3` (not audio; no MP3 test above uses it).

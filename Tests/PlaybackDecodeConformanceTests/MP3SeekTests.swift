@@ -109,8 +109,9 @@ final class MP3SeekTests: XCTestCase {
     /// seven frames back), an 8 kHz MPEG-2.5 stream and an Info-tagged CBR stream, each long enough
     /// that its seeks land by frame placement rather than by decoding forward from the first frame.
     func testMP3SeeksDecodeTheCleanPCMFromTheTargetSample() throws {
-        // A VBR stream with no Xing/VBRI tag lands by bitrate estimate and cannot match (issue #3;
-        // the golden pins its landings). play-trimmed.mp3 does not open (issue #51).
+        // A VBR stream with no Xing/VBRI tag lands by bitrate estimate and cannot match. Accepted:
+        // a tagless VBR MP3 far from a known-time frame seeks by estimate, as in media3; the
+        // golden pins its landings. play-trimmed.mp3 does not open (issue #51).
         let skipped: Set = ["bear-vbr-no-seek-table.mp3", "play-trimmed.mp3"]
         for url in GoldenStore.fixtureURLs() where url.pathExtension == "mp3" && !skipped.contains(url.lastPathComponent) {
             let (format, clean) = try decodeAll(url)
