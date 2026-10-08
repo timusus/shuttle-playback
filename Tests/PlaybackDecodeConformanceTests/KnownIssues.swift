@@ -12,8 +12,7 @@
 /// byte budget (`kSeekBudgetBytes`, a few seconds of audio) is placed by its Xing TOC or bitrate,
 /// and nothing in an MP3 frame says what time it is (issue #3). Other exceptions pinned in the goldens
 /// (the decoder's time zero is not where the first frame sits, so the landing is wrong, the PCM right):
-/// sample.mp4, bt601.mov and sample_mdat_too_long.mp4 (#63), sample_empty_track.mp4 and
-/// sample_partially_fragmented.mp4 (#64), sample_fragmented.mp4 (#65).
+/// sample_empty_track.mp4 and sample_partially_fragmented.mp4 (#64), sample_fragmented.mp4 (#65).
 enum KnownIssues {
     struct Rule {
         var issue: String

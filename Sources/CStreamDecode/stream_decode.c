@@ -64,6 +64,7 @@ struct StreamDecoder {
     int64_t     end_pts;          /* MP4: where the edit list ends the audio (stream time base), else NOPTS */
     int         prime_skip;       /* MP4 AAC: encoder priming to drop when the file's own edit list does not (issue #25), else 0 */
     int64_t     prime_start;      /* the timestamp of the packet that carries it */
+    int64_t     decoder_trim;     /* AAC: what the decoder drops from the first packet on its own (issue #63), in time base units, else 0 */
     int         flushing;         /* a NULL packet has been sent to the decoder */
     int         reopening;        /* draining the codec to reopen it for the held packet's new parameters */
     int         ended;            /* the decoder and the resampler are both drained */
@@ -654,6 +655,42 @@ static int mp4_aac_prime_skip(const StreamDecoder *d, const AVCodecParameters *p
     return 1024;
 }
 
+/*
+ * Samples the AAC decoder drops from the start of the first packet on its own (issue #63). It
+ * recognises a libfaac stream by the encoder string in the first frame's fill element and drops
+ * that frame, 1024 samples, with no skip-samples side data to say so, so the first audio comes out
+ * a frame after the first packet's timestamp. A throwaway decoder with AV_CODEC_FLAG2_SKIP_MANUAL
+ * decodes the held packet and reports the drop instead of making it. Packet side data overrides
+ * the decoder's count, and the demuxer's start_time already includes it, so such a packet is 0.
+ * In time base units.
+ */
+static int64_t aac_decoder_trim(const StreamDecoder *d, const AVCodecParameters *par) {
+    if (av_packet_get_side_data(d->held, AV_PKT_DATA_SKIP_SAMPLES, NULL)) return 0;
+    const AVCodec *codec = avcodec_find_decoder(par->codec_id);
+    AVCodecContext *dec = codec ? avcodec_alloc_context3(codec) : NULL;
+    AVFrame *frame = av_frame_alloc();
+    int64_t trim = 0;
+    if (dec && frame && avcodec_parameters_to_context(dec, par) >= 0) {
+        dec->thread_count = 1;
+        dec->pkt_timebase = d->time_base;
+        dec->flags2 |= AV_CODEC_FLAG2_SKIP_MANUAL;
+        if (avcodec_open2(dec, codec, NULL) >= 0 && avcodec_send_packet(dec, d->held) >= 0
+            && avcodec_receive_frame(dec, frame) >= 0) {
+            const AVFrameSideData *sd = av_frame_get_side_data(frame, AV_FRAME_DATA_SKIP_SAMPLES);
+            if (sd && sd->size >= 4) {
+                uint32_t skip = (uint32_t)sd->data[0] | (uint32_t)sd->data[1] << 8
+                              | (uint32_t)sd->data[2] << 16 | (uint32_t)sd->data[3] << 24;
+                if (skip < 16384 && frame->sample_rate > 0) {   /* output samples, the SBR rate for HE-AAC */
+                    trim = av_rescale_q(skip, (AVRational){ 1, frame->sample_rate }, d->time_base);
+                }
+            }
+        }
+    }
+    av_frame_free(&frame);
+    avcodec_free_context(&dec);
+    return trim;
+}
+
 static int is_mpeg_audio(enum AVCodecID codec_id) {
     return codec_id == AV_CODEC_ID_MP3 || codec_id == AV_CODEC_ID_MP2 || codec_id == AV_CODEC_ID_MP1;
 }
@@ -1013,6 +1050,29 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
                 d->start_time +=av_rescale_q(d->prime_skip, (AVRational){ 1, d->sample_rate },
                                               d->time_base);
             }
+        }
+    }
+    if (d->prime_skip == 0 && (par->codec_id == AV_CODEC_ID_AAC || par->codec_id == AV_CODEC_ID_AAC_LATM)) {
+        /* Time zero is where the first audio comes out, after whatever the decoder drops on its
+         * own (`aac_decoder_trim`), as media3's Mp4Extractor puts it at the first sample the edit
+         * list and the gapless trim leave: a seek to 0 lands on the clean decode's first frame. A
+         * decode from the start still begins at the first packet (`seek_to`). */
+        if (!d->has_held) {
+            int rc;
+            while ((rc = av_read_frame(d->fmt, d->held)) >= 0 && d->held->stream_index != d->audio_idx) {
+                av_packet_unref(d->held);
+            }
+            if (rc < 0) {
+                if (d->cancelled) { local_status = STREAM_DECODE_ERR_CANCELLED; goto fail; }
+                if (d->interrupted) { local_status = STREAM_DECODE_ERR_INTERRUPTED; goto fail; }
+                avio_clear_latched_error(d);
+            } else {
+                hold_first_packet(d);
+            }
+        }
+        if (d->has_held) {
+            d->decoder_trim = aac_decoder_trim(d, par);
+            d->start_time += d->decoder_trim;
         }
     }
 
@@ -2554,7 +2614,8 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
          * file (12 MB measured). After two re-placements the landing stands, reported as it is. */
         int last = attempt >= 2;
         int from_start = from <= decoder->start_time;
-        if (from_start) from = decoder->start_time;
+        /* From the first packet, which a decoder trim (issue #63) puts before time zero. */
+        if (from_start) from = decoder->start_time - decoder->decoder_trim;
         int placed = demux_seek(decoder, seconds, from, landed_seconds);
         if (placed != kSeekPlaced) return placed;
 
