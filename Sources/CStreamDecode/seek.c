@@ -117,14 +117,17 @@ static int budgeted_seek(StreamDecoder *d, int64_t min_ts, int64_t ts, int64_t m
     return rc;
 }
 
-/* Put the demuxer at byte `byte` (AVIO offset) for the byte-estimate seek, ready to decode. */
+/* Put the demuxer at byte `byte` (AVIO offset) for the byte-estimate seek, ready to decode.
+ *
+ * libavformat's byte seek (seek_frame_byte) ignores what `avio_seek` answers and reports success,
+ * so a reader that refused the move would leave the demuxer where it was, and the decode would play
+ * on from there labelled as the estimate (issue #69). A failed reader seek during it is the
+ * seek's failure, and a refusal (`unseekable`, already latched) is reported as such. */
 static int seek_to_byte(StreamDecoder *d, int64_t byte) {
+    int64_t failed = d->failed_seeks;
     int rc = avformat_seek_file(d->fmt, d->audio_idx, INT64_MIN, byte, byte,
                                 AVSEEK_FLAG_BYTE | AVSEEK_FLAG_BACKWARD);
-    if (rc < 0) {
-        if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-        return STREAM_DECODE_ERR_SEEK;
-    }
+    if (rc < 0 || d->failed_seeks != failed) return seek_failure(d);
     after_seek_reset(d);
     return sd_init_swr(d);
 }

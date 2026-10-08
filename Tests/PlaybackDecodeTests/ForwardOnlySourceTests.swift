@@ -16,6 +16,8 @@ private final class ForwardOnlyByteReader: StreamByteReader {
     private let refusesAllSeeks: Bool
     /// Reads at or past this offset fail with a transport error (an outage), until it is cleared.
     var outageFrom: Int64?
+    /// Serves backward seeks too while set (an open that a later refusal must not affect).
+    var allowsBackwardSeeks = false
 
     init(_ data: Data, knowsLength: Bool = false, refusesAllSeeks: Bool = false) {
         self.data = data
@@ -37,7 +39,7 @@ private final class ForwardOnlyByteReader: StreamByteReader {
     }
 
     func seek(to newOffset: Int64) throws {
-        guard newOffset >= offset, !refusesAllSeeks else {
+        guard newOffset >= offset || allowsBackwardSeeks, !refusesAllSeeks else {
             refusedSeeks += 1
             refusedTargets.append(newOffset)
             throw StreamByteReaderError.unseekable
@@ -235,6 +237,32 @@ final class ForwardOnlySourceTests: XCTestCase {
             XCTAssertEqual(source.refusedSeeks, 1, fixture)
             XCTAssertGreaterThan(forward.count, 0, fixture)
             XCTAssertEqual(forward, seekable, fixture)
+        }
+    }
+
+    /// Issue #69: a known length gives the seek a byte estimate to fall back on, and that fallback
+    /// must not turn the refusal into a landing. The reader serves the open's seeks, then refuses
+    /// every backward one. Read about 8 s (three quarters of a shorter fixture), ask for 0.5 s: the
+    /// seek throws `.unseekable` and no PCM follows, from the read position or anywhere else.
+    func testBackwardSeekOnAKnownLengthReaderIsUnseekable() throws {
+        let conformance = "../../PlaybackDecodeConformanceTests/Fixtures/"
+        let fixtures = ["tone.mp3", "tone_moov_first.m4a", conformance + "flac_stereo.flac",
+                        conformance + "bbb_6ch_8kHz_opus.ogg", conformance + "bear_flac.ogg"]
+        for fixture in fixtures {
+            let source = ForwardOnlyByteReader(try Data(contentsOf: fixtureURL(fixture)), knowsLength: true)
+            source.allowsBackwardSeeks = true
+            let decoder = FFmpegStreamDecoder(reader: source)
+            let format = try decoder.open()
+            source.allowsBackwardSeeks = false
+            let readTo = min(8, 0.75 * (format.duration ?? 0))
+            while Double(decoder.mediaFramesRead) < readTo * format.sampleRate, decoder.nextChunk() != nil {}
+            XCTAssertEqual(decoder.endReason, .running, fixture)
+            XCTAssertThrowsError(try decoder.seek(toSeconds: 0.5), fixture) { error in
+                XCTAssertEqual(error as? StreamDecoderError, .unseekable, fixture)
+            }
+            XCTAssertGreaterThan(source.refusedSeeks, 0, fixture)
+            XCTAssertEqual(decoder.endReason, .failure, fixture)
+            XCTAssertNil(decoder.nextChunk(), fixture)
         }
     }
 

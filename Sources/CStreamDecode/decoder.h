@@ -72,6 +72,9 @@ struct StreamDecoder {
     /* The reader refused a seek as `STREAM_READ_UNSEEKABLE` since the last `stream_decoder_seek`
      * began; lets that seek report "cannot seek" instead of a generic failure. */
     int          unseekable;
+    /* Reader seeks that failed, for any reason, since the open: libavformat's byte seek drops
+     * `avio_seek`'s answer, so `seek_to_byte` (seek.c) compares this before and after. */
+    int64_t      failed_seeks;
     int64_t      bytes_read;
     /* The reader itself said end of stream (`STREAM_READ_EOF`) since the last reader seek.
      * libavformat reports a broken read as end of file too, and only this tells them apart. */

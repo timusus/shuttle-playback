@@ -159,6 +159,7 @@ static int64_t avio_seek_packet(void *opaque, int64_t offset, int whence) {
     d->lead_len = d->lead_pos = 0;   /* the reader is repositioned: the unread lead is stale */
     int rc = d->cb.seek(d->opaque, target + d->base_offset);
     if (rc == 0) { d->source_eof = 0; d->io_pos = target; return target; }
+    d->failed_seeks++;
     switch (rc) {
         case STREAM_READ_CANCELLED:   d->cancelled = 1; return AVERROR_EXIT;
         case STREAM_READ_INTERRUPTED: d->interrupted = 1; return AVERROR_EXIT;
