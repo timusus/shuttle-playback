@@ -2196,6 +2196,15 @@ static int flac_frame_before(StreamDecoder *d, int64_t target, int64_t *pos, int
     int64_t want = av_rescale_q(target - d->start_time, d->time_base, per_sample);
     if (want < 0) want = 0;
     if (want > total) want = total;
+    /* FFmpeg's FLAC parser drops its buffer when a large tag follows a lone frame header, so a
+     * seek that lands on one of the last frames (the one frame in it, with 160 KiB or more of
+     * tag after it) decodes nothing (issue #52). Two frames' worth earlier, the parser has the
+     * headers that keep it. media3's FlacExtractor reads frames by header and CRC and has no
+     * such lookahead; the cost here is two frames decoded and dropped. */
+    if (total - want < 3 * (int64_t)si.max_blocksize) {
+        want -= 2 * (int64_t)si.max_blocksize;
+        if (want < 0) want = 0;
+    }
 
     int64_t spent = 0;
     int64_t lo_pos = flac_audio_start(d, &spent), lo = 0;

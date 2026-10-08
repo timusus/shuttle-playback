@@ -239,10 +239,11 @@ final class FLACSeekTests: XCTestCase {
     /// interpolating into the tag again: about eight probes from the end on this file, so it is
     /// allowed twice the usual probing.
     ///
-    /// A seek inside the last frame is left out: with only that frame's header in hand, FFmpeg's
-    /// FLAC parser drops it once 160 KiB follow with no other header, so nothing decodes.
+    /// A seek inside the last frame (59.99 s) is included (issue #52): FFmpeg's FLAC parser drops a
+    /// lone frame header once 160 KiB follow with no other, so the seek lands two frames earlier
+    /// and decodes on to the target.
     func testAFLACFollowedByAVeryLargeTagLandsWhereItSays() throws {
-        try assertSeeksExactly(to: [59.9, 55.123, 45.0, 30.5], trailing: 256 * 1024, probing: 256 * 1024)
+        try assertSeeksExactly(to: [59.9, 59.99, 55.123, 45.0, 30.5], trailing: 256 * 1024, probing: 256 * 1024)
     }
 
     /// **A search that cannot finish lands on the frame it has, and says so (issue #42).**
