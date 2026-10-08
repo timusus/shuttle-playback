@@ -14,6 +14,8 @@ private final class ForwardOnlyByteReader: StreamByteReader {
     private let knowsLength: Bool
     /// Refuses every seek, forward ones too (a pure stream).
     private let refusesAllSeeks: Bool
+    /// Reads at or past this offset fail with a transport error (an outage), until it is cleared.
+    var outageFrom: Int64?
 
     init(_ data: Data, knowsLength: Bool = false, refusesAllSeeks: Bool = false) {
         self.data = data
@@ -25,7 +27,9 @@ private final class ForwardOnlyByteReader: StreamByteReader {
     var position: Int64 { offset }
 
     func read(into buffer: UnsafeMutableRawPointer, maxLength: Int) throws -> Int {
-        let take = min(Int(Int64(data.count) - offset), maxLength)
+        let end = outageFrom ?? Int64(data.count)
+        if offset >= end, outageFrom != nil { throw URLError(.networkConnectionLost) }
+        let take = min(Int(min(end, Int64(data.count)) - offset), maxLength)
         if take <= 0 { return 0 }
         data.withUnsafeBytes { memcpy(buffer, $0.baseAddress!.advanced(by: Int(offset)), take) }
         offset += Int64(take)
@@ -151,6 +155,34 @@ final class ForwardOnlySourceTests: XCTestCase {
         XCTAssertEqual(source.refusedSeeks, refused)
         XCTAssertEqual(source.position, position)
         XCTAssertEqual(decoder.endReason, .failure)
+    }
+
+    /// A failed read is not terminal, but the seek that follows it on a forward-only source is
+    /// still a refusal: it fails as unseekable, and stays so once the source is back.
+    func testASeekAfterAFailedReadOnTheForwardOnlyReaderIsRefusedAndStaysRefused() throws {
+        let source = try reader()
+        source.outageFrom = 120_000
+        let decoder = FFmpegStreamDecoder(reader: source)
+        _ = try decoder.open()
+        _ = drain(decoder)
+        XCTAssertEqual(decoder.endReason, .failure)
+
+        XCTAssertThrowsError(try decoder.seek(toSeconds: 0)) { error in
+            XCTAssertEqual(error as? StreamDecoderError, .unseekable)
+        }
+        XCTAssertGreaterThan(source.refusedSeeks, 0)
+
+        source.outageFrom = nil
+        let refused = source.refusedSeeks
+        let position = source.position
+        // Forward, so the reader would serve it: only the latch refuses it.
+        XCTAssertThrowsError(try decoder.seek(toSeconds: 18)) { error in
+            XCTAssertEqual(error as? StreamDecoderError, .unseekable)
+        }
+        XCTAssertEqual(source.refusedSeeks, refused)
+        XCTAssertEqual(source.position, position)
+        XCTAssertEqual(decoder.endReason, .failure)
+        XCTAssertNil(decoder.nextChunk())
     }
 
     /// A refusal is per decoder and per seek: a fresh decoder, and a later seek that the source

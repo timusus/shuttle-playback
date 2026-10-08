@@ -845,9 +845,56 @@ final class StreamDecodeTests: XCTestCase {
         let landed = try decoder.seek(toSeconds: stoppedAt)
         XCTAssertEqual(landed, stoppedAt, accuracy: 0.01)
         XCTAssertEqual(decoder.endReason, .running, "the seek did not clear the failed read")
-        let rest = decodeAll(decoder).count / format.channelCount
+        let rest = decodeAll(decoder)
         XCTAssertEqual(decoder.endReason, .eof)
-        XCTAssertEqual(Double(rest), Double(Fixture.frameCount) - stoppedAt * format.sampleRate, accuracy: 1)
+        XCTAssertEqual(Double(rest.count / format.channelCount), Double(Fixture.frameCount) - stoppedAt * format.sampleRate, accuracy: 1)
+        let reference = try referenceDecode(url, from: stoppedAt)
+        XCTAssertEqual(landed, reference.landed)
+        XCTAssertTrue(rest == reference.pcm, "the resumed decode differs from a clean decode seeked to \(stoppedAt) s")
+    }
+
+    /// A seek that fails because the source is still offline is not a refusal by the source: it
+    /// throws for that call only, and the next seek, once the source is back, reads again. 0.4.0
+    /// latched it like an unseekable source's refusal, so a Play pressed during the outage killed
+    /// the episode for every later Play.
+    func testASeekThatFailsInAnOutageLeavesTheDecoderSeekable() throws {
+        try skipUnlessAvailable()
+        let url = try Fixture.url(Fixture.mp3)
+        let size = try XCTUnwrap(try FileByteReader(url: url).totalLength)
+        let reader = try OutageFileByteReader(url: url, cutoff: size / 2)
+        let decoder = FFmpegStreamDecoder(reader: reader)
+        _ = try decoder.open()
+        _ = decodeAll(decoder)
+        XCTAssertEqual(decoder.endReason, .failure)
+
+        // Well past the cutoff, so the seek must read bytes the outage withholds.
+        let target = 15.0
+        XCTAssertThrowsError(try decoder.seek(toSeconds: target), "a seek into the outage succeeded") { error in
+            guard case .failed = error as? StreamDecoderError else {
+                return XCTFail("an outage is not a refused seek: got \(error)")
+            }
+        }
+        XCTAssertEqual(decoder.endReason, .failure)
+
+        reader.heal()
+        let landed = try decoder.seek(toSeconds: target)
+        XCTAssertEqual(landed, target, accuracy: 0.01)
+        XCTAssertEqual(decoder.endReason, .running, "the seek after the outage did not clear the failed one")
+        let rest = decodeAll(decoder)
+        XCTAssertEqual(decoder.endReason, .eof)
+        let reference = try referenceDecode(url, from: target)
+        XCTAssertEqual(landed, reference.landed)
+        XCTAssertTrue(rest == reference.pcm, "the decode after the outage differs from a clean decode seeked to \(target) s")
+    }
+
+    /// A clean decoder over `url`, seeked to `seconds` and decoded to the end.
+    private func referenceDecode(_ url: URL, from seconds: Double) throws -> (landed: Double, pcm: [Float]) {
+        let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
+        _ = try decoder.open()
+        let landed = try decoder.seek(toSeconds: seconds)
+        let pcm = decodeAll(decoder)
+        XCTAssertEqual(decoder.endReason, .eof)
+        return (landed, pcm)
     }
 
     // MARK: - No Content-Length

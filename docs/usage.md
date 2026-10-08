@@ -125,6 +125,8 @@ an unknown-length chunked transcode) opens and decodes MP3, FLAC, Ogg and MP4 se
 refuses throws `StreamDecoderError.unseekable`, distinct from `.failed(status:)` (a corrupt stream).
 The decoder has failed after it: `endReason` is `.failure` and reads return nothing, so open a new
 decoder over a seekable source. A seek that libavformat can serve from bytes it still holds succeeds.
+A seek or read that fails on a source error (`.failed(status:)`, say a network still down) is not
+terminal: a later seek reads again, so a player resumes the same decoder once the source is back.
 
 Chained Ogg (streams concatenated byte for byte) decodes sequentially across its links, including a
 change of channel count or sample rate, which is converted to the open format. Seeking into a later
