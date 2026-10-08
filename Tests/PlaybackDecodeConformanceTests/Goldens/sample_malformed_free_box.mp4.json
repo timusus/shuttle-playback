@@ -1,0 +1,16 @@
+{
+  "bytesBeforeFirstAudioMax" : 0,
+  "channels" : 0,
+  "durationS" : 0,
+  "expect" : "error:streaming decode failed, status 3",
+  "fixture" : "sample_malformed_free_box.mp4",
+  "frames" : 0,
+  "pcmSha256PerSecondInt16" : [
+
+  ],
+  "sampleRate" : 0,
+  "seeks" : [
+
+  ],
+  "sha256" : "d00a61b8eb1c8a3a2f03c13d1856fab8f78608c41d5a06fef1cd0b7b4174d3b3"
+}

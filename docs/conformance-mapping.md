@@ -139,3 +139,49 @@ Assets are copied from `libraries/test_data/src/test/assets/media/wav/`. Seven o
 | `sample_float64` | `sample_float64.wav` |
 
 Other WAV assets in media3 (used by the muxer, playback and transformer tests, not `WavExtractorTest`) are ported too, since they widen the format coverage: `sample_8bit.wav`, `sample_float32.wav`, `sample_96khz.wav`, `sample_192khz.wav` (the 192 kHz mono case), `sine_24le.wav`, `sine_32le.wav`, `bbb_2ch_44kHz.wav` and `sample_80KHz_mono_20_repeating_1_samples.wav` (20 frames). No media3 asset in either folder was skipped for size except `random_1000_pages`.
+
+## MP4 (`libraries/extractor/.../mp4/`)
+
+The decoder is audio-only, so a media3 asset with video is ported only when its audio track is the point or the file shows a container structure (fragmentation, a bad box, an empty track); the video decodes are not compared. Assets over 1 MB are skipped. Extra n/a reason: **video** (video, subtitle, metadata or auxiliary track behaviour only), **codec** (a codec outside the FFmpeg build: AC-3, E-AC-3, AC-4, DTS, TrueHD, MPEG-H, IAMF, VVC, AV1, APV).
+
+### Mp4ExtractorParameterizedTest (one row per asset; each runs the 4 `.N.dump` seek variants and `unknown_length`)
+
+| media3 asset | Ours |
+|---|---|
+| `sample.mp4` | `sample.mp4` |
+| `sample_alac.mp4`, `sample_alac_20bit.mp4` | same names |
+| `sample_opus.mp4` | `sample_opus.mp4` |
+| `sample_mp2_audio.mp4` | `sample_mp2_audio.mp4` (MP3 in MP4) |
+| `sample_fpcm_32be/32le/64be/64le.mp4`, `sample_ipcm_16be/24le.mp4`, `sowt_pcm_variable_sample_size.mp4` | same names |
+| `sample_fixed_rechunk_no_elst.mp4` | same name (`FixedSampleSizeRechunkerTest` itself is n/a: API) |
+| `sample_empty_track.mp4` | same name |
+| `sample_mdat_too_long.mp4` | same name; finding #60 (unknown length ends in failure) |
+| `sample_missing_stsd.mp4` | same name; the golden expects "no decodable audio" (status 4): without an `stsd` the audio track has no codec, so there is nothing to decode |
+| `bt601.mov` | same name (QuickTime, AAC audio) |
+| `sample_2_byte_NAL_length.mp4`, `sample_18byte_nclx_colr.mp4`, `sample_android_slow_motion.mp4`, `sample_with_btrt.mp4`, `sample_with_color_info.mp4`, `sample_with_colr_mdcv_and_clli.mp4`, `sample_with_invalid_nalu.mp4`, `sample_unrecognized_hevc_sei.mp4`, `sample_with_it35_track.mp4`, `sample_with_fake_auxiliary_tracks*.mp4`, `sample_rotate_and_reflect.mp4`, `h265_bframes.mp4`, `sample_with_av1c.mp4`, `water_180_mvhevc_5frames.mov` | n/a (video: audio track identical to `sample.mp4` or none) |
+| `sample_with_metadata.mp4`, `sample_with_numeric_genre.mp4`, `sample_with_chapters.mp4`, `sample_with_nero_chapters_only.mp4` | n/a (metadata: tags and chapters; audio is `sample.mp4`'s) |
+| `sample_ac3.mp4`, `sample_eac3.mp4`, `sample_eac3joc.mp4`, `sample_ac4*.mp4`, `sample_dthd.mp4`, `sample_dts_express.mp4`, `sample_dts_hd_ma.mp4`, `sample_mhm1_*.mp4`, `sample_mpegh_*.mp4`, `sample_iamf.mp4`, `sample_vvc.mp4` | n/a (codec) |
+| `sample_edit_list.mp4` (3.3 MB), `sample_edit_list_no_sync_frame_before_edit.mp4` (3.3 MB), `sample_with_original_quicktime_specification.mov` (4.7 MB), `sample_with_apvc.mp4` (8.5 MB), `h265_4k_bframes_emulation_prevention.mp4` (17 MB), `pixel-motion-photo-2-hevc-tracks.mp4` (3.5 MB) | not ported (over 1 MB; the edit-list asset is video-led, the repo's `aac_edit_list.m4a` covers audio edit lists) |
+
+### Mp4ExtractorNonParameterizedTest
+
+| media3 test | Ours |
+|---|---|
+| `extract_withMalformedFreeBox_succeeds` | `sample_malformed_free_box.mp4`; finding #59 (fails to open: free box declares size 3); the golden records the failure |
+| `getSeekPoints_withEmptyTracks_returnsValidInformation` | `sample_empty_track.mp4` |
+| `sniff_reportsUnsupportedBrandsFailure`, `sniff_reportsWrongFragmentationFailure`, `sniff_returnsTrueWithoutPeekingLargeStbl` | n/a (sniff); `large_stbl_truncated_after_moov.m4b` (1.1 MB) not ported |
+| `extract_fileHavingAuxiliaryTracks*`, `extract_withOmitTrackSampleTableFlag*`, `extract_h264/h265WithoutGopParsingFlags`, `extract_withPoorlyMuxedIt35Track_*` | n/a (API: flags; video) |
+
+### FragmentedMp4ExtractorParameterizedTest and NonParameterizedTest
+
+| media3 asset or test | Ours |
+|---|---|
+| `sample_fragmented.mp4` | same name |
+| `sample_fragmented_seekable.mp4`, `sample_fragmented_large_bitrates.mp4` | same names |
+| `sample_partially_fragmented.mp4` | same name; finding #62 (unknown length decodes 0 frames) |
+| `sample_opus_fragmented.mp4` | same name; finding #61 (unknown length stops at 0.5 s) |
+| `sample_fragmented_sei.mp4`, `sample_fragmented_uuid.mp4`, `sample_fragmented_sgpd_v2.mp4`, `sample_fragmented_variable_length_sgpd.mp4`, `fragmented_captions*.mp4`, `sample_fragmented_seekable_multiple_sidx.mp4` | n/a (video / metadata: no audio of interest beyond `sample_fragmented.mp4`) |
+| `sample_ac3_fragmented.mp4`, `sample_eac3*_fragmented.mp4`, `sample_ac4*_fragmented.mp4`, `sample_ac4_protected.mp4`, `sample_fragmented_dts_*.mp4`, `sample_fragmented_iamf.mp4`, `sample_mhm1_*_fragmented.mp4` | n/a (codec; `sample_ac4_protected.mp4` is also encrypted) |
+| `sniff_*`, `extract_h264/h265WithoutGopParsingFlags` | n/a (sniff; API: flags) |
+| `FragmentedMp4ExtractorNoSniffingTest` (`sample_fragmented_sideloaded_track.mp4`) | n/a (API: a side-loaded subtitle track; the file alone does not open in FFmpeg, "trun track id unknown", and nothing audible is lost) |
+| `FragmentedMp4ExtractorTest`-style other classes (`BoxParserTest`, `MetadataUtilTest`, `PsshAtomUtilTest`) | n/a (API) |

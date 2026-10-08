@@ -1,0 +1,56 @@
+{
+  "bytesBeforeFirstAudioMax" : 99328,
+  "channels" : 1,
+  "durationS" : 1.02,
+  "expect" : "decodes",
+  "fixture" : "sample_alac.mp4",
+  "frames" : 45056,
+  "pcmSha256PerSecondInt16" : [
+    "04f928af5650eb58f2094779e4ac4cf366658b7c5065eca9e6edec9d7f7334bb",
+    "348934a9891fe2218ba4999285ac601b4f5e605248b1dffda045f37f247b6e69"
+  ],
+  "sampleRate" : 44100,
+  "seeks" : [
+    {
+      "alignFrames" : 0,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "3d4d2550b13c9bcc95346e463126d4f5fb6e6b703c31c93e1e9ba602f9003144"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 0.341,
+      "toS" : 0.341,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "0c166e60894ba212f8f802cbe49144be0d2e3f78ab36930eb786c470c61a560f"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 0.681,
+      "toS" : 0.681,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "e6bdbd3847161ca6d258ea3600ddc70216e3191609dcf335a89bd81c2bdf8e38"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 0.922,
+      "toS" : 0.922,
+      "tolS" : 0.03,
+      "windowFrames" : 256,
+      "windowSha256Int16" : "076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 1.022,
+      "toS" : 1.022,
+      "tolS" : 0.03,
+      "windowFrames" : 0,
+      "windowSha256Int16" : ""
+    }
+  ],
+  "sha256" : "db8755b5b4d866b9776b69a8db21bdc312656d9478428a0bea5095577c874065"
+}

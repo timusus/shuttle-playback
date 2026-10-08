@@ -1,0 +1,16 @@
+{
+  "bytesBeforeFirstAudioMax" : 0,
+  "channels" : 0,
+  "durationS" : 0,
+  "expect" : "error:streaming decode failed, status 4",
+  "fixture" : "sample_missing_stsd.mp4",
+  "frames" : 0,
+  "pcmSha256PerSecondInt16" : [
+
+  ],
+  "sampleRate" : 0,
+  "seeks" : [
+
+  ],
+  "sha256" : "6d497e5f4c4e7af21273aa2687483fbc7b91287d6fb98498aefebd78cb7fb166"
+}

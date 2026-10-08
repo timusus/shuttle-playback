@@ -87,7 +87,40 @@ enum KnownIssues {
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/57 (Ogg FLAC resume after an I/O error repeats frames)",
              fixture: "bear_flac_noseektable.ogg", kind: .resumePCM, switches: [[.partialReads, .ioErrorOncePerPosition]],
              messages: ["PCM differs from the clean decode at sample 107520 (168432 vs 131568 frames, resumes at frames [16384, 16384, 49152, 61440, 73728])"]),
+        // An MP4 whose mdat is longer than the file ends in a failure instead of EOF without a length.
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/60 (sample_mdat_too_long: unknown length ends in failure)",
+             fixture: "sample_mdat_too_long.mp4", kind: .outcome, switches: unknownLengthCombos,
+             messages: ["outcome decoded(end: \"failure\"), clean decoded(end: \"eof\")"]),
+        // Fragmented Opus in MP4 stops after 0.5 s without a length; every seek lands there.
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/61 (sample_opus_fragmented: unknown length stops after 0.5 s)",
+             fixture: "sample_opus_fragmented.mp4", kind: .frameCount, switches: unknownLengthCombos,
+             messages: ["24000 frames, clean 120000"]),
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/61 (sample_opus_fragmented: unknown length stops after 0.5 s)",
+             fixture: "sample_opus_fragmented.mp4", kind: .seekLanding, switches: unknownLengthCombos,
+             messages: ["0.8333333333333333", "1.6666666666666665", "2.4", "2.5"].map { "seek to \($0)s landed 0.5s" }),
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/61 (sample_opus_fragmented: unknown length stops after 0.5 s)",
+             fixture: "sample_opus_fragmented.mp4", kind: .seekPCM, switches: unknownLengthCombos,
+             messages: ["0.8333333333333333", "1.6666666666666665", "2.4", "2.5"]
+                .map { "seek to \($0)s: PCM after the landing at 0.5s is not in the clean decode" }),
+        // A partially fragmented MP4 decodes nothing without a length; every seek lands at 0.11 s.
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/62 (sample_partially_fragmented: unknown length decodes 0 frames)",
+             fixture: "sample_partially_fragmented.mp4", kind: .frameCount, switches: unknownLengthCombos,
+             messages: ["0 frames, clean 45056"]),
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/62 (sample_partially_fragmented: unknown length decodes 0 frames)",
+             fixture: "sample_partially_fragmented.mp4", kind: .seekLanding, switches: unknownLengthCombos,
+             messages: partiallyFragmentedSeeks.map { "seek to \($0)s landed 0.11072562358276644s" }),
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/62 (sample_partially_fragmented: unknown length decodes 0 frames)",
+             fixture: "sample_partially_fragmented.mp4", kind: .seekPCM, switches: unknownLengthCombos,
+             messages: partiallyFragmentedSeeks
+                .map { "seek to \($0)s: PCM after the landing at 0.11072562358276644s is not in the clean decode" }),
     ]
+
+    private static let unknownLengthCombos: [FaultSwitches] = [
+        .unknownLength, [.partialReads, .unknownLength], [.ioErrorOncePerPosition, .unknownLength],
+        [.partialReads, .ioErrorOncePerPosition, .unknownLength],
+    ]
+    private static let partiallyFragmentedSeeks = ["0.0", "0.34055933484504913", "0.6811186696900983",
+                                                   "0.9216780045351475", "1.0216780045351475"]
 
     /// The rule a finding is pinned by, if any.
     static func rule(for fixture: String, kind: ConformanceMatrix.Kind, switches: FaultSwitches,
