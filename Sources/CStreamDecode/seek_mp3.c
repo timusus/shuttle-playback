@@ -43,9 +43,6 @@ int sd_mp3_parse_header(const uint8_t *p, int *spf, int *bitrate, int *sample_ra
     return 1;
 }
 
-/* What the frame before the first audio frame declares: LAME's "Info" is a CBR stream, "Xing" and
- * "VBRI" a VBR one. Read from the prologue, which holds those bytes already. */
-
 /*
  * Keep a VBRI frame's table of contents, which mp3dec reads the frame count from and otherwise
  * ignores (libavformat/mp3dec.c mp3_parse_vbri_tag). Unlike a Xing TOC, which gives a share of the
@@ -91,6 +88,8 @@ static int mp3_vbri_anchor(const StreamDecoder *d, int64_t ts, int64_t *pos, int
     return 1;
 }
 
+/* What the frame before the first audio frame declares: LAME's "Info" is a CBR stream, "Xing" and
+ * "VBRI" a VBR one. Read from the prologue, which holds those bytes already. */
 static int mp3_find_tag(StreamDecoder *d) {
     int64_t limit = d->first_pkt_pos < d->prologue_len ? d->first_pkt_pos : d->prologue_len;
     for (int64_t p = 0; p + 4 <= limit; p++) {
@@ -231,7 +230,7 @@ static int mp3_prologue_is_cbr(const StreamDecoder *d) {
 /*
  * Judge a seek's pre-roll by the frames it actually fed the codec, one frame at a time as each goes
  * in: `preroll_short` is set when the frames from the target on will not decode as an unbroken
- * run decodes them, and `seek_to` then places the seek further back.
+ * run decodes them, and `seek_to` (seek.c) then places the seek further back.
  *
  * A Layer III frame's main data begins `main_data_begin` bytes before the frame's own, inside the
  * main data of the frames before it, and a codec that was never fed those bytes decodes the frame
@@ -354,7 +353,7 @@ static int mp3_cbr_frame(StreamDecoder *d, int64_t ts, int64_t *pos, int64_t *dt
  * constant-bitrate on its first frame's word, and a VBR one that opens loud and goes on quiet has
  * frames carrying a third of the first one's main data where the seek lands. So every Layer III
  * pre-roll is also judged by the frames it actually feeds the codec, and placed further back when
- * they fall short (`mp3_measure_preroll`, `seek_to`). Anything else gets the generic pre-roll.
+ * they fall short (`mp3_measure_preroll`, `seek_to` in seek.c). Anything else gets the generic pre-roll.
  */
 static int64_t mp3_preroll_samples(const StreamDecoder *d) {
     uint32_t h = d->dec->codec_id == AV_CODEC_ID_MP3 ? mp3_cbr_header(d) : 0;
@@ -431,7 +430,7 @@ static int mp3_place(StreamDecoder *d, int64_t target, SeekPlan *plan) {
 static int mp3_landed(StreamDecoder *d, int anchored) {
     if (d->mp3.header_ok && !anchored) {
         int rc = sd_read_audio_packet(d);
-        /* Otherwise the pump reads again and meets the same end, error or interruption. */
+        /* Otherwise `sd_pump` reads again and meets the same end, error or interruption. */
         if (rc >= 0) d->has_held = 1;
         int64_t dts = rc >= 0 ? mp3_exact_dts(d, d->held) : AV_NOPTS_VALUE;
         d->landing_exact = dts != AV_NOPTS_VALUE;

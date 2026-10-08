@@ -707,14 +707,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
         info->duration_sec = (double)stream->duration * av_q2d(stream->time_base);
     }
     if (d->phantom_len) info->duration_sec = (double)d->phantom_samples / (double)d->sample_rate;
-    if (d->aac.prime_skip > 0 && info->duration_sec > 0) {
-        info->duration_sec -= (double)d->aac.prime_skip / (double)d->sample_rate;   /* the priming is not audio */
-        if (info->duration_sec < 0) info->duration_sec = 0;
-    }
-    if (d->decoder_trim > 0 && info->duration_sec > 0) {
-        info->duration_sec -= (double)d->decoder_trim * av_q2d(d->time_base);   /* the decoder's own trim is not audio either (issue #66) */
-        if (info->duration_sec < 0) info->duration_sec = 0;
-    }
+    info->duration_sec = sd_aac_audio_duration(d, info->duration_sec);
     /* Kept for the byte-estimate seek: what the media occupies in bytes and how long it lasts. */
     {
         int64_t seen = avio_size_seen(d) - d->phantom_len;

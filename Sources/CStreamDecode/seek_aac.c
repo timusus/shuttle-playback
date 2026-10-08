@@ -184,12 +184,12 @@ int sd_aac_open(StreamDecoder *d, const AVCodecParameters *par) {
         /* Time zero is where the first audio comes out, after whatever the decoder drops on its
          * own (`aac_decoder_trim`), as media3's Mp4Extractor puts it at the first sample the edit
          * list and the gapless trim leave: a seek to 0 lands on the clean decode's first frame. A
-         * decode from the start still begins at the first packet (`seek_to`). */
+         * decode from the start still begins at the first packet (`seek_to` in seek.c). */
         int rc = sd_hold_first_audio_packet(d);
         if (rc != STREAM_DECODE_OK) return rc;
         if (d->has_held) {
-            d->decoder_trim = aac_decoder_trim(d, par);
-            d->start_time += d->decoder_trim;
+            d->aac.decoder_trim = aac_decoder_trim(d, par);
+            d->start_time += d->aac.decoder_trim;
         }
     }
     return STREAM_DECODE_OK;
@@ -206,6 +206,23 @@ void sd_aac_packet_read(StreamDecoder *d, AVPacket *pkt) {
             for (int i = 0; i < 4; i++) sd[i] = (uint8_t)((uint32_t)d->aac.prime_skip >> (8 * i));
         }
     }
+}
+
+double sd_aac_audio_duration(const StreamDecoder *d, double duration_sec) {
+    if (duration_sec <= 0) return duration_sec;
+    if (d->aac.prime_skip > 0) {
+        duration_sec -= (double)d->aac.prime_skip / (double)d->sample_rate;   /* the priming is not audio */
+        if (duration_sec < 0) duration_sec = 0;
+    }
+    if (d->aac.decoder_trim > 0 && duration_sec > 0) {
+        duration_sec -= (double)d->aac.decoder_trim * av_q2d(d->time_base);   /* the decoder's own trim is not audio either (issue #66) */
+        if (duration_sec < 0) duration_sec = 0;
+    }
+    return duration_sec;
+}
+
+int64_t sd_aac_first_packet_trim(const StreamDecoder *d) {
+    return d->aac.decoder_trim;
 }
 
 void sd_aac_frame_decoded(StreamDecoder *d) {

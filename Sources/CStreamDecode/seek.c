@@ -18,6 +18,13 @@ const SeekFormat *sd_seek_format_for(const StreamDecoder *d) {
     return &sd_seek_generic;
 }
 
+/* The status of a failed seek: a cancel, then an interruption, else the seek itself failed. */
+static int seek_failure(const StreamDecoder *d) {
+    if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+    if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+    return STREAM_DECODE_ERR_SEEK;
+}
+
 /* Finish a seek: flush the codec and the resampler and clear the pull loop's state. */
 static void after_seek_reset(StreamDecoder *d) {
     avcodec_flush_buffers(d->dec);
@@ -91,9 +98,7 @@ static int resume_after_last_packet(StreamDecoder *d) {
         if (found) return STREAM_DECODE_OK;
         if (past) break;
     }
-    if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-    if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
-    return STREAM_DECODE_ERR_SEEK;
+    return seek_failure(d);
 }
 
 /* `avformat_seek_file` with the seek byte budget armed; `*walked` says it was spent. */
@@ -217,7 +222,7 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
         int last = attempt >= 2;
         int from_start = from <= decoder->start_time;
         /* From the first packet, which a decoder trim (issue #63) puts before time zero. */
-        if (from_start) from = decoder->start_time - decoder->decoder_trim;
+        if (from_start) from = decoder->start_time - sd_aac_first_packet_trim(decoder);
         SeekPlan plan;
         int anchored = 0;
         int placed = place_demuxer(decoder, seconds, from, landed_seconds, &plan, &anchored);
@@ -380,11 +385,7 @@ static int place_demuxer(StreamDecoder *decoder, double seconds, int64_t target,
             }
             rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, INT64_MIN, target, target,
                                     AVSEEK_FLAG_BACKWARD);
-            if (rc < 0) {
-                if (decoder->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-                if (decoder->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
-                return STREAM_DECODE_ERR_SEEK;
-            }
+            if (rc < 0) return seek_failure(decoder);
             return kSeekPlaced;
         }
         if (!sd_can_estimate_bytes(decoder)) {
@@ -462,11 +463,7 @@ static int place_demuxer(StreamDecoder *decoder, double seconds, int64_t target,
                 decoder->source_eof = 0;
                 rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, INT64_MIN, target, target,
                                         AVSEEK_FLAG_BACKWARD);
-                if (rc < 0) {
-                    if (decoder->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-                    if (decoder->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
-                    return STREAM_DECODE_ERR_SEEK;
-                }
+                if (rc < 0) return seek_failure(decoder);
                 return kSeekPlaced;
             }
         }

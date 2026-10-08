@@ -56,9 +56,8 @@ struct StreamDecoder {
     int         pending_offset;   /* frames already handed out */
 
     int64_t     last_frame_pts;   /* best_effort_timestamp of the most recent decoded frame */
-    int         decode_errors;    /* consecutive `avcodec_receive_frame` errors, see `pump` */
+    int         decode_errors;    /* consecutive `avcodec_receive_frame` errors, see `sd_pump` */
     int64_t     end_pts;          /* MP4: where the edit list ends the audio (stream time base), else NOPTS */
-    int64_t     decoder_trim;     /* AAC: what the decoder drops from the first packet on its own (issue #63), in time base units, else 0 */
     int         flushing;         /* a NULL packet has been sent to the decoder */
     int         reopening;        /* draining the codec to reopen it for the held packet's new parameters */
     int         ended;            /* the decoder and the resampler are both drained */
@@ -108,7 +107,7 @@ struct StreamDecoder {
     int          has_first_pkt;
     int          resumable;
 
-    /* The sample-accurate seek (see `seek_to`). Frames that end before `discard_until` are decoded
+    /* The sample-accurate seek (see `seek_to` in seek.c). Frames that end before `discard_until` are decoded
      * and dropped, and the one that straddles it is cut, so the next read starts exactly there.
      * `next_pts` is where the last decoded frame ended, and `seek_first_pts` where the first frame
      * after the last seek started. All in stream time base. */
@@ -117,10 +116,10 @@ struct StreamDecoder {
     int64_t      seek_first_pts;
 
     /* The timestamps after the last seek are the stream's true times: everything but a VBR MP3
-     * placed by its TOC or bitrate (see `land_exactly`). */
+     * placed by its TOC or bitrate (see `land_exactly` in seek.c). */
     int          landing_exact;
     /* Where the last seek asked the demuxer to go (stream time base), which is also where the
-     * decode starts if no frame after it carries a time (see `pump`). */
+     * decode starts if no frame after it carries a time (see `sd_pump`). */
     int64_t      seek_from;
     /* Tests only: see `stream_decoder_drop_timestamps_for_testing`. */
     int          drop_timestamps;
@@ -171,6 +170,10 @@ int  sd_mp3_parse_header(const uint8_t *p, int *spf, int *bitrate, int *sample_r
 int  sd_aac_open(StreamDecoder *d, const AVCodecParameters *par);
 void sd_aac_packet_read(StreamDecoder *d, AVPacket *pkt);
 void sd_aac_frame_decoded(StreamDecoder *d);
+/* `duration_sec` less the priming and the decoder's own trim, which are not audio. */
+double sd_aac_audio_duration(const StreamDecoder *d, double duration_sec);
+/* What a decode from the first packet starts before time zero, in time base units (0 if not AAC). */
+int64_t sd_aac_first_packet_trim(const StreamDecoder *d);
 
 /* Big-endian, `bytes` (1 to 4) long. */
 static inline uint32_t sd_read_be(const uint8_t *p, int bytes) {

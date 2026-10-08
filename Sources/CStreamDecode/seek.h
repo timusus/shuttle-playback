@@ -112,6 +112,8 @@ typedef struct {
     /* The stream has been seen to carry SBR (HE-AAC v1 or v2), by its parameters or by a frame the
      * codec decoded: an ADTS header says plain AAC-LC either way. Never cleared. */
     int     sbr;
+    /* What the decoder drops from the first packet on its own (issue #63), in time base units, else 0. */
+    int64_t decoder_trim;
 } AACSeekState;
 
 extern const SeekFormat sd_seek_mp3;

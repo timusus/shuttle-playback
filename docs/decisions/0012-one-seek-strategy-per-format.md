@@ -13,9 +13,16 @@ be read against all of them, and the budget and fallback ladder was hard to see 
 ## Decision
 
 Each format's seek rules are an internal module in `Sources/CStreamDecode` behind one interface,
-`SeekFormat` in `seek.h`, which answers four questions: where to place a seek (`place`, plus
-`estimate_anchor` for the fallback), how much pre-roll it needs, whether the codec is reopened, and
-what state it owns (its own struct in `StreamDecoder`, reset by its `reset` hook). The modules are
+`SeekFormat` in `seek.h`, a table of optional hooks (NULL is the generic answer): `place`,
+`has_estimate_anchor` and `estimate_anchor` (where to put the demuxer, and the fallback anchor),
+`preroll_samples`, `reopens_codec`, `can_resume`, `first_packet` (the open has read the first audio
+packet), `reset` (a seek flushes; forget what the last one measured), `landed` (the demuxer is placed,
+before the landing decode), `packet_fed` (a packet is about to enter the codec) and `preroll_short`
+(the pre-roll fell short, so place again further back). Each format keeps its state in its own struct
+in `StreamDecoder`. `mp3_landed` does its own demuxer re-seek, to the frame it landed on with that
+frame's true time, so a module's `landed` may move the demuxer again. The AAC open-time time-zero code
+(`sd_aac_open`, the priming and the decoder trim) also lives in `seek_aac.c`, with the duration
+correction (`sd_aac_audio_duration`), so no core code reads AAC state. The modules are
 `seek_mp3.c`, `seek_aac.c`, `seek_flac.c`, `seek_ogg.c` and `seek_generic.c`; the open picks one by
 demuxer and codec. `seek.c` owns the 64 KiB budget, the fallback ladder (format placement, then the
 format's estimate anchor or the byte estimate, then the paid walk) and the landing, in one place.
