@@ -1,7 +1,7 @@
 # Contributing: tests, FFmpeg and releases
 
 For the pull-request process (CLA, discuss first) see [CONTRIBUTING.md](../CONTRIBUTING.md). The
-commands to build, test, rebuild FFmpeg and release, and the engineering principles, are in
+commands to build, test, rebuild FFmpeg and release are in
 [CLAUDE.md](../CLAUDE.md). This page holds what those do not say. The repository has no hosted CI:
 `swift test` locally plus `scripts/release.sh` is the gate.
 
@@ -26,6 +26,19 @@ golden diff to review. To add a format, add a fixture (`Fixtures/make-fixtures.s
 purpose) and regenerate with `GOLDEN_UPDATE=1`. A decoder bug found and not fixed is pinned in
 `KnownIssues.swift` rather than left as a red test. Fixtures copied from androidx/media, and which
 media3 test case each one answers, are listed in [conformance-mapping.md](conformance-mapping.md).
+
+Each fixture (plus the three tone fixtures; the `stitch_*_64k.mp3` pair is skipped, since a seek into
+its resampled half is timed by byte offset and never bit-identical) is decoded through
+`FaultyByteReader` under all 7 combinations of partial reads, one-shot I/O errors and unknown length,
+and each must be bit-identical to the clean decode of the same run. Seeks to 0, 1/3, 2/3, 100 ms
+before the end and the end are compared with `Goldens/<fixture>.json` (Int16 per-second PCM hashes,
+frame count, seek landings, the fixture's sha256). `GOLDEN_UPDATE=1` writes a golden only if the
+fault matrix passes against it. Seeks are sample-accurate (`alignFrames` is 0 in every golden); the
+exception is a VBR MP3 seek far from a frame of known time, which lands by Xing TOC or bitrate
+estimate. A pinned finding in `KnownIssues.swift` names fixture, kind, exact fault combinations and
+issue number under `XCTExpectFailure`: a different value, or a finding that stops happening, fails.
+`CONFORMANCE_FIXTURE=<file name>` runs one fixture; `CONFORMANCE_PLANT_DEFECT=1` drops a frame from
+the clean decode to prove the suite fails.
 
 **Byte-source contract.** `GrowingFileContractTests` runs media3's `DataSourceContractTest` cases against
 the source over `LoopbackMediaServer`. A new server behaviour is one `Resource` in the matrix of

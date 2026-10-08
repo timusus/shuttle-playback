@@ -1,135 +1,52 @@
 # CLAUDE.md
 
 Public (GPL-3.0) Swift package holding the iOS decode layer shared by **Shuttle Podcasts**
-(`timusus/podcasts`) and, later, **Shuttle2** (`timusus/shuttle2`). It holds only decode,
-byte-source and FFmpeg code (effects such as skip-silence and Voice Boost live in the apps). Anything about podcasts, ads, queues, players or UI stays in the apps.
-
-Documentation is in `docs/` (usage, architecture, decisions, contributing); start at `README.md`.
+(`timusus/podcasts`) and **Shuttle2** (`timusus/shuttle2`, pins `exact: "0.4.0"`). It holds only decode,
+byte-source and FFmpeg code; effects (skip-silence, Voice Boost) and anything about podcasts, ads,
+queues, players or UI stay in the apps. Docs are in `docs/`; start at `README.md`.
 
 ## Layout
 
 | Product | Target(s) | What it is |
 |---|---|---|
-| `PlaybackDecode` | `PlaybackDecode`, `CStreamDecode` | `FFmpegStreamDecoder`: pull decoder over a `StreamByteReader`, Float32 interleaved at the source rate (or a fixed rate and channel count from `setOutputFormat`), via `nextChunk()` or the buffer-filling `read(into:maxFrames:)`, seekable, cancellable. `FileByteReader` is the plain-file reader. Probe budget is `StreamProbeBudget` (default 64 KiB / 1 s). |
-| `PlaybackStreaming` | `PlaybackStreaming` | Opt-in network byte source: `GrowingFileByteSource` (a `StreamByteReader` over an HTTP(S) URL that writes to a growing file and retries/resumes from the frontier; its rules are the internal state machine `GrowingFileDownload`, the source its lock-holding adapter), `GrowingFileReadAhead` (an optional cap on expensive paths, ADR-0013), `GrowingFileStore`, `GrowingFileSnapshot` and `GrowingFileListener`. Depends on `PlaybackDecode`; a decode-only consumer never links it. Auth headers arrive resolved; no feed or podcast concept lives here. |
-| `PlaybackStreamingTestSupport` | `PlaybackStreamingTestSupport` | `LoopbackMediaServer`, no fixtures. Tests of the streaming target are in `PlaybackStreamingTests` (own two tone fixtures). |
-| `FFmpeg` | `CFFmpeg` (binary) | The static FFmpeg. For an app with its own C against libavformat (Podcasts' scanner decode). An app links exactly one FFmpeg. |
+| `PlaybackDecode` | `PlaybackDecode`, `CStreamDecode` | `FFmpegStreamDecoder`: pull decoder over a `StreamByteReader`, Float32 interleaved, seekable, cancellable. `FileByteReader` is the plain-file reader. Probe budget is `StreamProbeBudget` (default 64 KiB / 1 s). |
+| `PlaybackStreaming` | `PlaybackStreaming` | Opt-in network byte source: `GrowingFileByteSource` over an HTTP(S) URL writing a growing file, with retry/resume. Rules live in the internal state machine `GrowingFileDownload`. Depends on `PlaybackDecode`. Auth headers arrive resolved; no feed or podcast concept. |
+| `PlaybackStreamingTestSupport` | same | `LoopbackMediaServer`, no fixtures. |
+| `FFmpeg` | `CFFmpeg` (binary) | The static FFmpeg, for an app with its own C against libavformat. An app links exactly one FFmpeg. |
 
-`Frameworks/FFmpeg.xcframework` holds three slices (ios-arm64, ios-arm64-simulator, macos-arm64), each one `libffmpeg.a` plus headers and a `CFFmpeg` modulemap. `VERSION.txt` inside it records the FFmpeg tag and the exact configure flags.
+`Frameworks/FFmpeg.xcframework` (ios-arm64, ios-arm64-simulator, macos-arm64) is **committed to git**
+(about 11 MB): SwiftPM does not run Git LFS and there is no CI to publish release assets. `*.a` is
+binary in `.gitattributes`. `VERSION.txt` inside it records the tag, configure flags and patches.
 
-## Where the xcframework lives, and why
+## FFmpeg
 
-It is **committed to git** (about 11 MB, three 2.5 MB static libraries plus headers), not
-downloaded:
+- LGPL-2.1 only, linked statically into closed-source apps. Never add `--enable-gpl`,
+  `--enable-version3`, `--enable-nonfree` or an external library beyond the system zlib.
+- One music-superset build for both apps (ADR-0006); the lists are at the top of
+  `scripts/build-ffmpeg.sh`. Each format needs a conformance fixture.
+- `scripts/build-ffmpeg.sh` takes several minutes; run it in the foreground and commit the framework
+  alone as `build: rebuild ffmpeg ...`. Patches live in `scripts/ffmpeg-patches/`.
 
-- **SwiftPM does not run Git LFS.** A consumer resolving by git URL would get LFS pointer files.
-- **No hosted CI publishes release assets.** `.binaryTarget(url:checksum:)` would need someone to
-  upload a zip and bump a checksum by hand on every FFmpeg rebuild.
-- **Committed means it just works.** Anyone who can clone the repo can build. The cost is repo
-  growth when FFmpeg is rebuilt, a few MB per FFmpeg bump, which is rare.
-
-`.gitattributes` marks `*.a` as binary so git never diffs or normalises it.
-
-## Build the FFmpeg
+## Commands
 
 ```sh
-scripts/build-ffmpeg.sh                     # the music superset -> Frameworks/FFmpeg.xcframework
-```
-
-- One build, linked by both apps (ADR-0006): mp3, AAC (ADTS and LATM), MP4/M4A (AAC, ALAC), Ogg
-  (Opus, Vorbis), FLAC, PCM WAV/AIFF, and Opus/Vorbis in Matroska/WebM. The lists are at the top of
-  `scripts/build-ffmpeg.sh`; each format has a conformance fixture. There are no profiles.
-- LGPL-2.1 only. Never add `--enable-gpl`, `--enable-version3`, `--enable-nonfree` or an
-  external library beyond the system zlib (Matroska): the library links statically into closed-source apps.
-- A build takes several minutes. Run it in the foreground and commit the rebuilt framework in its
-  own commit (`build: rebuild ffmpeg ...`), with `VERSION.txt` showing the change.
-
-## Test
-
-```sh
-swift test
-```
-
-This runs on macOS against the macOS slice, with no simulator. The decoder tests compare against
-`AVAssetReader` using the committed fixtures in `Tests/PlaybackDecodeTests/Fixtures`. All tests
-must pass before tagging. Consumers run their own integration tests.
-
-The streaming tests also run on an iOS simulator, selected by UDID from
-`xcrun simctl list devices available` (`release.sh` does this, using `IOS_SIM_UDID` or the first
-available iPhone):
-
-```sh
+swift test                                          # macOS slice, no simulator; the gate
+swift test --filter PlaybackDecodeConformance       # about 30 s
+GOLDEN_UPDATE=1 swift test --filter PlaybackDecodeConformance   # after an intended change; review the JSON diff
 xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreamingTests \
-  -destination 'platform=iOS Simulator,id=<UDID>'
+  -destination 'platform=iOS Simulator,id=<UDID>'   # UDID from `xcrun simctl list devices available`
+scripts/release.sh 0.1.1                            # clean main only: tests, tag (bare semver), push
 ```
 
-No test is skipped, except the one that generates a 30-minute MP3 with a host `ffmpeg` (skipped without one, and on the simulator). (A short body is closed a beat late by `LoopbackMediaServer`:
-macOS URLSession drops a body's buffered bytes if the connection ends before the delegate has
-answered the response.)
-
-**Conformance suite.** `swift test --filter PlaybackDecodeConformance` (about 30 s) decodes every
-fixture in `Tests/PlaybackDecodeConformanceTests/Fixtures` (plus the three tone fixtures in
-`PlaybackDecodeTests/Fixtures`; its two `stitch_*_64k.mp3` files are skipped, since a seek into
-their resampled half restarts the resampler on another output grid and is timed by byte offset,
-never bit-identical, and `testSeekIntoTheResampledHalfLandsWhereItSays` checks it instead) through `FaultyByteReader` under all 7 combinations of partial reads,
-one-shot I/O errors and unknown length, and requires each to be bit-identical to the clean decode in
-the same run. It then seeks to 0, 1/3, 2/3, 100 ms before the end and the end, and compares with
-`Goldens/<fixture>.json`
-(Int16 per-second PCM hashes, frame count, seek landings, the fixture's own sha256). After an
-intended decoder change, or a new fixture, regenerate with
-`GOLDEN_UPDATE=1 swift test --filter PlaybackDecodeConformance` and review the JSON diff; it writes
-a golden only if the fault matrix passes against it. Fixtures
-are made by `Fixtures/make-fixtures.sh` (needs ffmpeg, lame, afconvert; the HE-AAC, Opus and Vorbis
-files are not byte-reproducible, so re-run it only on purpose); the three androidx/media files are
-listed in `Fixtures/NOTICE`. A resumed decode must match the clean one per second outside the
-warm-ups (MP3 and MP4 resume bit-exactly), and bytes before the first audio are budgeted under every
-combination. A decoder bug the suite found and nobody has fixed is pinned in `KnownIssues.swift`:
-fixture, kind, exact fault combinations and the exact finding, with its issue number, under
-`XCTExpectFailure`. A different value, or a pinned finding that stops happening, fails; update or
-remove the rule. Seeks are sample-accurate (a pre-roll before the target, decoded and dropped up to
-it, none for FLAC, whose seek finds a frame by its headers, #38), so `alignFrames` is 0 in every seek of every golden, the seek to the end included (it lands
-where the clean decode ends, with an empty window). The one inexact landing is outside the fixtures: a VBR
-MP3 seek further from a frame of known time than one seek's byte budget lands by Xing TOC or bitrate
-estimate (#3), covered by `testXingVBRMP3SeeksExactlyNearAndCheaplyFar`.
-`CONFORMANCE_FIXTURE=<file name>` runs one fixture. `CONFORMANCE_PLANT_DEFECT=1` drops a frame from
-the clean decode to prove the suite fails. FFmpeg fixes the tag lacks live in
-`scripts/ffmpeg-patches/`, applied by `build-ffmpeg.sh` and listed in `VERSION.txt`.
-
-## Release
-
-Consumers pin a **tag** (`from: "0.1.0"`), never a branch. Releasing:
-
-```sh
-scripts/release.sh 0.1.1
-```
-
-It refuses a dirty tree or any branch other than `main`, runs `swift test`, tags `X.Y.Z` (bare
-semver, no `v` prefix: SwiftPM matches both, but the existing tags are bare), and pushes `main`
-and the tag. Then bump the consumer's `Package.swift` requirement if the change matters to it,
-and run the consumer's tests.
-
-Versioning: a public API change is a minor bump while we are at 0.x. A behaviour change in the
-decoder or a DSP stage (PCM out differs) is at least a minor bump, and the release note says what
-moved.
-
-## Engineering principles
-
-These decide every design choice, and every worker brief and review applies them.
-
-- **Testable first.** Anything that touches time, the network, the file system or the OS (clocks,
-  path monitors, trust evaluation, retries) sits behind a seam a test can drive. A behaviour without a
-  deterministic test is not done.
-- **Maintainable over clever.** One mechanism per concern (one recovery layer, one seek path), small
-  types, no speculative options. Fix the root cause; never paper over a symptom.
-- **When in doubt, follow androidx/media (media3).** Its `DataSource`, `Extractor` and
-  `DefaultHttpDataSource` code, maintainer comments and GitHub issues are the reference for edge
-  cases (range requests, 416s, seeking, priming, gapless). Cite the media3 class or issue in the
-  ADR or commit when a decision follows it, and say why when we deviate.
+No test is skipped except the 30-minute MP3 one (needs host `ffmpeg`). Conformance details, known
+issues and fixtures: `docs/contributing.md`. Consumers pin a tag, never a branch. A public API change
+is a minor bump at 0.x; so is any decoder change that alters PCM, and the release note says what moved.
 
 ## Conventions
 
-- Conventional commits (`feat:`, `fix:`, `refactor:`, `build:`, `docs:`, `test:`), pushed straight
-  to `main`. No PRs and no AI attribution in any commit.
-- Public API is the contract with two apps. Keep it small. Make something `public` only when an
-  app needs it, and keep it `Sendable`-friendly.
-- This repo has no hosted CI. `swift test` locally plus `release.sh` is the gate.
+- Engineering principles are in the global rules (`~/.claude/rules/engineering.md`). Repo-specific:
+  when in doubt follow androidx/media (media3); cite the class or issue in the ADR or commit, and say
+  why when deviating.
+- Conventional commits (`feat:`, `fix:`, `refactor:`, `build:`, `docs:`, `test:`), pushed straight to
+  `main`. No PRs, no AI attribution, no CI.
+- Public API is the contract with two apps: `public` only when an app needs it, `Sendable`-friendly.
