@@ -117,6 +117,16 @@ static int budgeted_seek(StreamDecoder *d, int64_t min_ts, int64_t ts, int64_t m
     return rc;
 }
 
+/* The unbudgeted seek to the frame at or before `target`, the ladder's fallback. Like seek_to_byte,
+ * it counts a reader seek that failed under it as the seek's failure: libavformat can drop a failed
+ * `avio_seek` and report success, which would leave the demuxer where it was (issue #69). The count
+ * is taken here, not once per placement, since the budgeted attempts before it fail on purpose. */
+static int seek_back_to(StreamDecoder *d, int64_t target) {
+    int64_t failed = d->failed_seeks;
+    int rc = avformat_seek_file(d->fmt, d->audio_idx, INT64_MIN, target, target, AVSEEK_FLAG_BACKWARD);
+    return rc >= 0 && d->failed_seeks != failed ? AVERROR(EIO) : rc;
+}
+
 /* Put the demuxer at byte `byte` (AVIO offset) for the byte-estimate seek, ready to decode.
  *
  * libavformat's byte seek (seek_frame_byte) ignores what `avio_seek` answers and reports success,
@@ -386,8 +396,7 @@ static int place_demuxer(StreamDecoder *decoder, double seconds, int64_t target,
                 *anchored = 0;
                 plan->land_at = AV_NOPTS_VALUE;
             }
-            rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, INT64_MIN, target, target,
-                                    AVSEEK_FLAG_BACKWARD);
+            rc = seek_back_to(decoder, target);
             if (rc < 0) return seek_failure(decoder);
             return kSeekPlaced;
         }
@@ -411,12 +420,8 @@ static int place_demuxer(StreamDecoder *decoder, double seconds, int64_t target,
             }
             if (!walked) return STREAM_DECODE_ERR_SEEK;
             *anchored = 0;
-            rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, INT64_MIN, target, target,
-                                    AVSEEK_FLAG_BACKWARD);
-            if (rc < 0) {
-                if (decoder->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-                return STREAM_DECODE_ERR_SEEK;
-            }
+            rc = seek_back_to(decoder, target);
+            if (rc < 0) return seek_failure(decoder);
             return kSeekPlaced;
         }
         *anchored = 0;
@@ -464,8 +469,7 @@ static int place_demuxer(StreamDecoder *decoder, double seconds, int64_t target,
             if (past_last_frame(decoder, status, seconds)) {
                 sd_avio_clear_latched_error(decoder);
                 decoder->source_eof = 0;
-                rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, INT64_MIN, target, target,
-                                        AVSEEK_FLAG_BACKWARD);
+                rc = seek_back_to(decoder, target);
                 if (rc < 0) return seek_failure(decoder);
                 return kSeekPlaced;
             }
