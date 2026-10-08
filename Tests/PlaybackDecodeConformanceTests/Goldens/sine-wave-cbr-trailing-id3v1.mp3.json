@@ -1,0 +1,56 @@
+{
+  "bytesBeforeFirstAudioMax" : 9216,
+  "channels" : 1,
+  "durationS" : 1.06,
+  "expect" : "decodes",
+  "fixture" : "sine-wave-cbr-trailing-id3v1.mp3",
+  "frames" : 46080,
+  "pcmSha256PerSecondInt16" : [
+    "f9f2c85dce1388b1abcdb4c6727bdaceefd255e6e2b51459314cd7717dcaa8bd",
+    "b3cbe4fb0a61e51992525f5c609fbe93d421297fa95cadc67f67908a33667662"
+  ],
+  "sampleRate" : 44100,
+  "seeks" : [
+    {
+      "alignFrames" : 0,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "2844835241f06b214f25e96a86c224ca49c735bb33e489a5a51f0ce1adebce24"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 0.348,
+      "toS" : 0.348,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "e488298981656bcfaedf6b3febf7cb3711f848603aeb58b71687278a30303285"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 0.697,
+      "toS" : 0.697,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "7861880cbbef2146176f54ed593accf446169a5e888206f9b9d94696a431353e"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 0.945,
+      "toS" : 0.945,
+      "tolS" : 0.03,
+      "windowFrames" : 256,
+      "windowSha256Int16" : "076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 1.045,
+      "toS" : 1.045,
+      "tolS" : 0.03,
+      "windowFrames" : 0,
+      "windowSha256Int16" : ""
+    }
+  ],
+  "sha256" : "bd105206aadabc7db07734bbb3e12b9e3f84696dd9977a4e1222e5ddf1683111"
+}

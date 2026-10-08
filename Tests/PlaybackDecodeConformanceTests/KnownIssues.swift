@@ -31,6 +31,18 @@ enum KnownIssues {
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/36 (wav_s24 reads twice with unknown length)",
              fixture: "wav_s24.wav", kind: .bytes, switches: [.unknownLength, [.partialReads, .unknownLength]],
              messages: ["65546 bytes read before the first audio, golden allows 33792"]),
+        // An Info-tagged CBR MP3 followed by 150 kB of garbage decodes 44975 frames with a known
+        // length and 44100 without one, and a seek without one lands on PCM the clean decode lacks.
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/50 (Info header + trailing garbage: unknown length decodes differently)",
+             fixture: "test-cbr-info-header-trailing-garbage.mp3", kind: .frameCount,
+             switches: [.unknownLength, [.partialReads, .unknownLength], [.ioErrorOncePerPosition, .unknownLength],
+                        [.partialReads, .ioErrorOncePerPosition, .unknownLength]],
+             messages: ["44100 frames, clean 44975"]),
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/50 (Info header + trailing garbage: unknown length decodes differently)",
+             fixture: "test-cbr-info-header-trailing-garbage.mp3", kind: .seekPCM,
+             switches: [.unknownLength, [.partialReads, .unknownLength], [.ioErrorOncePerPosition, .unknownLength],
+                        [.partialReads, .ioErrorOncePerPosition, .unknownLength]],
+             messages: ["seek to 1.0198412698412698s: PCM after the landing at 1.0s is not in the clean decode"]),
     ]
 
     /// The rule a finding is pinned by, if any.

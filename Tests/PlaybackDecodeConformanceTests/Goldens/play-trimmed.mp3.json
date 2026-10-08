@@ -1,0 +1,16 @@
+{
+  "bytesBeforeFirstAudioMax" : 0,
+  "channels" : 0,
+  "durationS" : 0,
+  "expect" : "error:streaming decode failed, status 3",
+  "fixture" : "play-trimmed.mp3",
+  "frames" : 0,
+  "pcmSha256PerSecondInt16" : [
+
+  ],
+  "sampleRate" : 0,
+  "seeks" : [
+
+  ],
+  "sha256" : "29b6fce998ce248758548635686f15948bd8b86d6fac116bfeefa647b4e0747c"
+}
