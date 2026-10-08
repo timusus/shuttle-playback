@@ -136,7 +136,7 @@ static const uint32_t kMP3SameStreamMask = 0xFFFEFCC0u;
  *
  * An MP3 frame carries no timestamp. `mp3_seek` places a seek by the Xing TOC or by bitrate,
  * syncs to the next frame after that byte and labels the frame with the time it was ASKED for
- * (or, with an Info frame count, a rounded share of it), not the time of the frame it found
+ * (or, with an Info frame count, a rounded share of it), not the time of the frame it found.
  * In a constant-bitrate stream the frame's index follows from its byte offset: frames
  * after the first are spf * bitrate / (8 * rate) bytes long on average and padding keeps each
  * within one byte of that, so the offset from the end of the first frame, divided and rounded, counts them exactly

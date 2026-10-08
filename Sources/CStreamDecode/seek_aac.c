@@ -104,9 +104,10 @@ static int mp4_fragmented_audio_without_elst(const StreamDecoder *d) {
 }
 
 /*
- * Encoder priming to drop from an MP4 AAC stream, for the packets whose edit list does not. The mov demuxer turns an edit list into skip-samples side data on the first packet; a
- * fragmented file has none, and FFmpeg then plays the encoder's priming as audio, a beat of
- * silence or a smeared start. The count is, in order: the file's iTunSMPB atom, the codec's
+ * Encoder priming to drop from an MP4 AAC stream, for the packets whose edit list does not. The
+ * mov demuxer turns an edit list into skip-samples side data on the first packet; a fragmented
+ * file has none, and FFmpeg then plays the encoder's priming as audio, a beat of silence or a
+ * smeared start. The count is, in order: the file's iTunSMPB atom, the codec's
  * reported initial padding, else the 1024 samples that are the least any AAC-LC encoder's first
  * frame holds (the MDCT overlap of a frame with nothing before it). An SBR stream is left alone:
  * its priming is in core samples and no file says how many.

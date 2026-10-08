@@ -3,7 +3,7 @@ import XCTest
 
 @testable import PlaybackDecode
 
-/// A FLAC seek on a stream with no seek table , beyond what `flac_stereo.flac`'s golden
+/// A FLAC seek on a stream with no seek table, beyond what `flac_stereo.flac`'s golden
 /// pins: that fixture is four seconds, so a far seek in a long file, where libavformat's bisection
 /// outruns the seek budget and a byte estimate is all a seek has, is generated here.
 final class FLACSeekTests: XCTestCase {

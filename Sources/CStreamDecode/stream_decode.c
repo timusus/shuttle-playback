@@ -672,7 +672,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     d->time_base = stream->time_base;
     d->start_time = stream->start_time == AV_NOPTS_VALUE ? 0 : stream->start_time;
     /* The mov demuxer trims the edit list's start (skip-samples side data) but leaves the codec's
-     * last frame whole, so the decode runs up to a frame past the duration the edit list declares
+     * last frame whole, so the decode runs up to a frame past the duration the edit list declares.
      * AVAssetReader stops at that duration; so do we. */
     if (d->fmt->iformat && d->fmt->iformat->name && strstr(d->fmt->iformat->name, "mov") &&
         stream->duration != AV_NOPTS_VALUE && stream->duration > 0) {

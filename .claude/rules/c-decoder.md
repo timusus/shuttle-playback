@@ -1,5 +1,6 @@
 ---
-paths: ["Sources/CStreamDecode/**"]
+paths:
+  - "Sources/CStreamDecode/**"
 ---
 
 # C decoder and seek modules

@@ -44,9 +44,13 @@ is a minor bump at 0.x; so is any decoder change that alters PCM, and the releas
 
 ## Conventions
 
-- Engineering principles are in the global rules (`~/.claude/rules/engineering.md`). Repo-specific:
-  when in doubt follow androidx/media (media3); cite the class or issue in the ADR or commit, and say
-  why when deviating.
+- Testable first: anything touching time, the network, the file system or the OS sits behind a seam a
+  test can drive. A behaviour without a deterministic test is not done.
+- One mechanism per concern (one recovery layer, one seek path); no speculative options. Fix the root
+  cause, never paper over a symptom.
+- When in doubt follow androidx/media (media3): its `DataSource`, `Extractor` and
+  `DefaultHttpDataSource` code and issues are the reference for edge cases. Cite the class or issue
+  in the ADR or commit, and say why when deviating.
 - Conventional commits (`feat:`, `fix:`, `refactor:`, `build:`, `docs:`, `test:`), pushed straight to
   `main`. No PRs, no AI attribution, no CI.
 - Public API is the contract with two apps: `public` only when an app needs it, `Sendable`-friendly.

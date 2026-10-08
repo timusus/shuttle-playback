@@ -1,8 +1,8 @@
 # Contributing: tests, FFmpeg and releases
 
 For the pull-request process (CLA, discuss first) see [CONTRIBUTING.md](../CONTRIBUTING.md). The
-commands to build, test, rebuild FFmpeg and release are in
-[CLAUDE.md](../CLAUDE.md). This page holds what those do not say. The repository has no hosted CI:
+commands to build, test and release, the FFmpeg licence rules, the layout and the engineering
+principles are in [CLAUDE.md](../CLAUDE.md). This page holds what those do not say. The repository has no hosted CI:
 `swift test` locally plus `scripts/release.sh` is the gate.
 
 ## Test suites
@@ -37,6 +37,11 @@ fault matrix passes against it. Seeks are sample-accurate (`alignFrames` is 0 in
 exception is a VBR MP3 seek far from a frame of known time, which lands by Xing TOC or bitrate
 estimate. A pinned finding in `KnownIssues.swift` names fixture, kind, exact fault combinations and
 issue number under `XCTExpectFailure`: a different value, or a finding that stops happening, fails.
+A resumed decode must match the clean one per second outside the warm-ups. Bytes before the first audio
+are budgeted under every fault combination. A seek to the end lands where the clean decode ends, with an
+empty window. VBR MP3 seeks are covered by `testXingVBRMP3SeeksExactlyNearAndCheaplyFar`, and a seek into
+the `stitch_*_64k.mp3` resampled half by `testSeekIntoTheResampledHalfLandsWhereItSays`. Fixture licences
+are in `Tests/PlaybackDecodeConformanceTests/Fixtures/NOTICE`.
 `CONFORMANCE_FIXTURE=<file name>` runs one fixture; `CONFORMANCE_PLANT_DEFECT=1` drops a frame from
 the clean decode to prove the suite fails.
 
