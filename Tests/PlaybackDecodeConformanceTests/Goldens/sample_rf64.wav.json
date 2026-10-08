@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 67584,
   "channels" : 2,
+  "durationAtEofS" : 0.348625,
   "durationS" : 0.35,
   "expect" : "decodes",
   "fixture" : "sample_rf64.wav",

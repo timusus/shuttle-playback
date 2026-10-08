@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 99328,
   "channels" : 2,
+  "durationAtEofS" : 1,
   "durationS" : 1,
   "expect" : "decodes",
   "fixture" : "bbb_2ch_44kHz.wav",

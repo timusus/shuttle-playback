@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 66560,
   "channels" : 2,
+  "durationAtEofS" : 1,
   "durationS" : 1,
   "expect" : "decodes",
   "fixture" : "sine_32le.wav",

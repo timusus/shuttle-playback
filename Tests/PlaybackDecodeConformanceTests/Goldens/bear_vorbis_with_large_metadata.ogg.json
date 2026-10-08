@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 163840,
   "channels" : 2,
+  "durationAtEofS" : 2.741,
   "durationS" : 2.74,
   "expect" : "decodes",
   "fixture" : "bear_vorbis_with_large_metadata.ogg",

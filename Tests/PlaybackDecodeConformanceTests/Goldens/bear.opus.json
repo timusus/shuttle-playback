@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 26624,
   "channels" : 2,
+  "durationAtEofS" : 2.74,
   "durationS" : 2.75,
   "expect" : "decodes",
   "fixture" : "bear.opus",

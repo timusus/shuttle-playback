@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 1024,
   "channels" : 1,
+  "durationAtEofS" : 0.00025,
   "durationS" : 0,
   "expect" : "decodes",
   "fixture" : "sample_80KHz_mono_20_repeating_1_samples.wav",

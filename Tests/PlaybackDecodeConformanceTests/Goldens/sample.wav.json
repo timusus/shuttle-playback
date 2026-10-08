@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 89088,
   "channels" : 1,
+  "durationAtEofS" : 1,
   "durationS" : 1,
   "expect" : "decodes",
   "fixture" : "sample.wav",

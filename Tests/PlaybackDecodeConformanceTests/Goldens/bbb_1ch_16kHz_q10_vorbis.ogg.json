@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 28672,
   "channels" : 1,
+  "durationAtEofS" : 3,
   "durationS" : 3,
   "expect" : "decodes",
   "fixture" : "bbb_1ch_16kHz_q10_vorbis.ogg",

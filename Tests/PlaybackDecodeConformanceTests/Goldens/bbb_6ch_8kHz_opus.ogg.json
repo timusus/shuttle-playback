@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 167936,
   "channels" : 6,
+  "durationAtEofS" : 3,
   "durationS" : 3.01,
   "expect" : "decodes",
   "fixture" : "bbb_6ch_8kHz_opus.ogg",
