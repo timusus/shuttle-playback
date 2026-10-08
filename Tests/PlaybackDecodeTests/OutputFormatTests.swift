@@ -274,6 +274,117 @@ final class OutputFormatTests: XCTestCase {
         }
     }
 
+    // MARK: - 5.1 downmix (#47)
+
+    /// RMS of one channel of stereo `pcm` over `range` (frames).
+    private func rms(_ pcm: [Float], range: Range<Int>, channel: Int) -> Double {
+        let sum = range.reduce(0.0) { $0 + Double(pcm[$1 * 2 + channel]) * Double(pcm[$1 * 2 + channel]) }
+        return (sum / Double(range.count)).squareRoot()
+    }
+
+    /// Magnitude of `channel` at `frequency` over `range` (frames): a single-bin DFT, the sine's amplitude.
+    private func amplitude(_ pcm: [Float], channels: Int, channel: Int, frequency: Double, range: Range<Int>, rate: Double) -> Double {
+        var re = 0.0, im = 0.0
+        for i in range {
+            let phase = 2 * Double.pi * frequency * Double(i) / rate
+            let sample = Double(pcm[i * channels + channel])
+            re += sample * cos(phase)
+            im -= sample * sin(phase)
+        }
+        return 2 * (re * re + im * im).squareRoot() / Double(range.count)
+    }
+
+    /// `flac_51_48k.flac`: FL 220, FR 330, FC 440, LFE 550, BL 660, BR 770 Hz, each 0.15. Decoded to
+    /// stereo, it is swresample's default 5.1 matrix: the front channel at 1, the centre and the back
+    /// channel on its side at 1/sqrt(2) (-3 dB; `center_mix_level` and `surround_mix_level`), the LFE not
+    /// at all (`lfe_mix_level` 0). With Float32 output swresample does not scale the matrix down to keep
+    /// a full-scale sum under 1.0 (`rematrix_maxval` is unbounded), so a tone's amplitude in the output
+    /// is 0.15 for the front channel and 0.15 / sqrt(2) = 0.106 for the centre and the back channel,
+    /// and the other side's and the LFE's tones are absent. (Full scale on every channel sums to 2.414.)
+    func testFiveOneDownmixesToStereoWithSwresamplesDefaultMatrix() throws {
+        try skipUnlessAvailable()
+        let url = try Fixture.url("flac_51_48k.flac")
+        let (native, format) = try decoder(url)
+        XCTAssertEqual(format.channelCount, 6)
+        XCTAssertEqual(decodeAll(native).count, 6 * 48000, "six channels at the source rate, untouched")
+
+        let front = 0.15
+        let side = front / 2.0.squareRoot()
+        let tones: [(hz: Double, left: Double, right: Double)] = [
+            (220, front, 0), (330, 0, front), (440, side, side), (550, 0, 0), (660, side, 0), (770, 0, side),
+        ]
+        for rate in [48000.0, 44100.0] {
+            let (stereo, _) = try decoder(url, rate: rate, channels: 2)
+            let pcm = decodeAll(stereo)
+            XCTAssertEqual(stereo.endReason, .eof)
+            XCTAssertEqual(Double(pcm.count / 2), rate, accuracy: 1, "\(rate): one second")
+            /* Half a second from a quarter in: a whole number of periods of every tone, clear of the
+             * resampler's edges. */
+            let range = Int(rate / 4)..<Int(rate * 3 / 4)
+            for tone in tones {
+                for (channel, expected) in [(0, tone.left), (1, tone.right)] {
+                    XCTAssertEqual(amplitude(pcm, channels: 2, channel: channel, frequency: tone.hz, range: range, rate: rate),
+                                   expected, accuracy: 0.003, "\(rate): \(tone.hz) Hz in channel \(channel)")
+                }
+            }
+        }
+    }
+
+    // MARK: - 192 kHz / 24-bit (#47)
+
+    /// `flac_192k_24bit.flac`, 0.5 s: decoded at its own rate, at 48 kHz, and sought. FLAC is lossless
+    /// and the seek finds a frame by its headers, so the source-rate seek is bit-exact.
+    func testHighSampleRateDecodesAtTheSourceRateAndAt48k() throws {
+        try skipUnlessAvailable()
+        let url = try Fixture.url("flac_192k_24bit.flac")
+        let (native, format) = try decoder(url)
+        XCTAssertEqual(format.sampleRate, 192000)
+        XCTAssertEqual(format.channelCount, 2)
+        let reference = decodeAll(native)
+        XCTAssertEqual(native.endReason, .eof)
+        XCTAssertEqual(reference.count, 2 * 96000, "0.5 s at 192 kHz")
+        XCTAssertEqual(pitch(reference, channels: 2, channel: 0, range: 9600..<86400, rate: 192000), 440, accuracy: 4)
+        XCTAssertEqual(pitch(reference, channels: 2, channel: 1, range: 9600..<86400, rate: 192000), 660, accuracy: 4)
+
+        let (down, _) = try decoder(url, rate: 48000)
+        let pcm = decodeAll(down)
+        XCTAssertEqual(down.endReason, .eof)
+        XCTAssertEqual(pcm.count / 2, 24000, "0.5 s at 48 kHz")
+        XCTAssertEqual(down.mediaFramesRead, 24000)
+        let range = 2400..<21600
+        XCTAssertEqual(pitch(pcm, channels: 2, channel: 0, range: range, rate: 48000), 440, accuracy: 4)
+        XCTAssertEqual(pitch(pcm, channels: 2, channel: 1, range: range, rate: 48000), 660, accuracy: 4)
+        XCTAssertEqual(rms(pcm, range: range, channel: 0), rms(reference, range: 9600..<86400, channel: 0), accuracy: 0.01,
+                       "the level survives the resample")
+    }
+
+    func testHighSampleRateSeeksExactly() throws {
+        try skipUnlessAvailable()
+        let url = try Fixture.url("flac_192k_24bit.flac")
+        let (clean, _) = try decoder(url)
+        let reference = decodeAll(clean)
+
+        for target in [0.1, 0.25, 0.4] {
+            let (seeker, _) = try decoder(url)
+            let landed = try seeker.seek(toSeconds: target)
+            XCTAssertEqual(landed, target, accuracy: 1 / 192000, "seek to \(target)s")
+            let after = decodeAll(seeker)
+            let start = Int((landed * 192000).rounded())
+            XCTAssertEqual(after.count, reference.count - 2 * start, "seek to \(target)s: frames after it")
+            XCTAssertTrue(after.elementsEqual(reference[(2 * start)...]), "seek to \(target)s: the clean decode's audio from there")
+        }
+
+        /* At 48 kHz the landing is on the 48 kHz grid and the audio from it is the clean 48 kHz decode's. */
+        let (down, _) = try decoder(url, rate: 48000)
+        let downReference = decodeAll(down)
+        let (seeker, _) = try decoder(url, rate: 48000)
+        let landed = try seeker.seek(toSeconds: 0.25)
+        XCTAssertEqual(landed, 0.25, accuracy: 1 / 48000)
+        let after = decodeAll(seeker)
+        XCTAssertEqual(Double(after.count / 2), 12000, accuracy: 2)
+        XCTAssertEqual(rms(after, range: 200..<2000, channel: 0), rms(downReference, range: 12200..<14000, channel: 0), accuracy: 0.01)
+    }
+
     // MARK: - When it may be called
 
     func testOutputFormatIsFixedOnceAudioHasBeenReadOrSought() throws {
