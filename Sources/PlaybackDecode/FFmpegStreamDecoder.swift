@@ -121,6 +121,9 @@ public final class FFmpegStreamDecoder {
     private let box: ReaderBox
     private var format: StreamAudioFormat?
     private var reason: EndReason = .running
+    /// What a seek reports once ``reason`` is `.failure`: the decoder is terminal, so it refuses
+    /// without touching the demuxer (a forward seek could otherwise "succeed" over a broken one).
+    private var failure: StreamDecoderError?
     private var framesRead: Int64 = 0
     private var chunk: [Float] = []
     /// What ``nextChunk()`` and ``read(into:maxFrames:)`` hand out: the source's rate and channels
@@ -244,6 +247,7 @@ public final class FFmpegStreamDecoder {
     public func seek(toSeconds seconds: TimeInterval) throws -> TimeInterval {
         #if canImport(CStreamDecode)
             guard let handle else { throw StreamDecoderError.invalidState("not open") }
+            if reason == .failure, let failure { throw failure }
             // The seek is the answer to an interruption, so both sides of it are cleared before
             // anything reads: leaving either latched would make one interrupted read permanent.
             reader.clearInterrupt()
@@ -267,9 +271,11 @@ public final class FFmpegStreamDecoder {
                 throw StreamDecoderError.interrupted
             case Int32(STREAM_DECODE_ERR_UNSEEKABLE.rawValue):
                 reason = .failure
+                failure = .unseekable
                 throw StreamDecoderError.unseekable
             default:
                 reason = .failure
+                failure = .failed(status: status)
                 throw StreamDecoderError.failed(status: status)
             }
         #else
@@ -377,7 +383,9 @@ public final class FFmpegStreamDecoder {
                 case Int32(STREAM_DECODE_EOF.rawValue): reason = .eof
                 case Int32(STREAM_DECODE_ERR_CANCELLED.rawValue): reason = .cancelled
                 case Int32(STREAM_DECODE_ERR_INTERRUPTED.rawValue): reason = .interrupted
-                default: reason = .failure
+                default:
+                    reason = .failure
+                    failure = .failed(status: status)
                 }
                 return 0
             }

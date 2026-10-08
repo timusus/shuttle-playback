@@ -38,9 +38,9 @@ private final class ForwardOnlyByteReader: StreamByteReader {
 
 /// Issue #45: a seek the source cannot serve is reported as such, not as a corrupt stream.
 final class ForwardOnlySourceTests: XCTestCase {
-    private func reader() throws -> ForwardOnlyByteReader {
+    private func reader(_ fixture: String = "tone.mp3") throws -> ForwardOnlyByteReader {
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/tone.mp3")
+            .appendingPathComponent("Fixtures/\(fixture)")
         return ForwardOnlyByteReader(try Data(contentsOf: url))
     }
 
@@ -82,5 +82,47 @@ final class ForwardOnlySourceTests: XCTestCase {
         XCTAssertThrowsError(try decoder.seek(toSeconds: 0))
         XCTAssertEqual(decoder.endReason, .failure)
         XCTAssertNil(decoder.nextChunk())
+    }
+
+    /// Terminal means terminal: a later forward seek must not succeed over the broken demuxer.
+    func testSeekAfterTheRefusalIsRefusedWithoutReachingTheReader() throws {
+        let source = try reader()
+        let decoder = FFmpegStreamDecoder(reader: source)
+        _ = try decoder.open()
+        readPast100KB(decoder)
+        XCTAssertThrowsError(try decoder.seek(toSeconds: 0))
+        let refused = source.refusedSeeks
+        let position = source.position
+        XCTAssertThrowsError(try decoder.seek(toSeconds: 1)) { error in
+            XCTAssertEqual(error as? StreamDecoderError, .unseekable)
+        }
+        XCTAssertEqual(source.refusedSeeks, refused)
+        XCTAssertEqual(source.position, position)
+        XCTAssertEqual(decoder.endReason, .failure)
+    }
+
+    /// A refusal is per decoder and per seek: a fresh decoder, and a later seek that the source
+    /// can serve, are not reported as unseekable.
+    func testARefusalDoesNotLeakIntoAFreshDecoder() throws {
+        let first = FFmpegStreamDecoder(reader: try reader())
+        _ = try first.open()
+        readPast100KB(first)
+        XCTAssertThrowsError(try first.seek(toSeconds: 0))
+
+        let second = FFmpegStreamDecoder(reader: try reader())
+        _ = try second.open()
+        let landed = try second.seek(toSeconds: 0.5)
+        XCTAssertEqual(landed, 0.5, accuracy: 0.05)
+        XCTAssertEqual(second.endReason, .running)
+        XCTAssertGreaterThan(drain(second), 0)
+    }
+
+    func testForwardSeekOnTheForwardOnlyReaderSucceeds() throws {
+        let source = try reader()
+        let decoder = FFmpegStreamDecoder(reader: source)
+        _ = try decoder.open()
+        let landed = try decoder.seek(toSeconds: 1)
+        XCTAssertEqual(landed, 1, accuracy: 0.05)
+        XCTAssertNotNil(decoder.nextChunk())
     }
 }

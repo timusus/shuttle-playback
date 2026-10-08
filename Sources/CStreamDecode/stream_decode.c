@@ -2235,8 +2235,9 @@ int stream_decoder_seek(StreamDecoder *decoder, double seconds, double *landed_s
     decoder->output_fixed = 1;
     decoder->unseekable = 0;
     int status = seek_to(decoder, seconds, landed_seconds);
-    if (status != STREAM_DECODE_OK && status != STREAM_DECODE_EOF && decoder->unseekable
-        && status != STREAM_DECODE_ERR_CANCELLED && status != STREAM_DECODE_ERR_INTERRUPTED) {
+    /* Only a seek that ended in a seek or I/O failure: the C code recovers from some refused
+     * reader seeks (fallbacks), and cancel/interrupt keep their own verdicts. */
+    if (decoder->unseekable && (status == STREAM_DECODE_ERR_SEEK || status == STREAM_DECODE_ERR_IO)) {
         status = STREAM_DECODE_ERR_UNSEEKABLE;
     }
     if (status == STREAM_DECODE_OK || status == STREAM_DECODE_EOF) {
