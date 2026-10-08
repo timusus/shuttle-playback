@@ -3,7 +3,7 @@ import XCTest
 
 @testable import PlaybackDecode
 
-/// A fixed output format (`setOutputFormat`) and the buffer-filling `read(into:maxFrames:)` (#20).
+/// A fixed output format (`setOutputFormat`) and the buffer-filling `read(into:maxFrames:)`.
 ///
 /// What a player running one graph at one format across tracks relies on: the audio comes out at
 /// the asked rate with its length and pitch intact, remixed to the asked channel count, a seek still
@@ -205,7 +205,7 @@ final class OutputFormatTests: XCTestCase {
         }
     }
 
-    /// The MP4 edit list's end clip (#13) holds at a non-native output rate: `aac_edit_list.m4a`
+    /// The MP4 edit list's end clip holds at a non-native output rate: `aac_edit_list.m4a`
     /// (from the conformance fixtures) at 48 kHz has the clipped duration × 48000 frames, to a
     /// frame, and a seek past its end lands on that clipped end with nothing left to read.
     func testEditListEndClipHoldsAtANonNativeRate() throws {
@@ -274,7 +274,7 @@ final class OutputFormatTests: XCTestCase {
         }
     }
 
-    // MARK: - 5.1 downmix (#47)
+    // MARK: - 5.1 downmix
 
     /// RMS of one channel of stereo `pcm` over `range` (frames).
     private func rms(_ pcm: [Float], range: Range<Int>, channel: Int) -> Double {
@@ -330,7 +330,7 @@ final class OutputFormatTests: XCTestCase {
         }
     }
 
-    // MARK: - 192 kHz / 24-bit (#47)
+    // MARK: - 192 kHz / 24-bit
 
     /// `flac_192k_24bit.flac`, 0.5 s: decoded at its own rate, at 48 kHz, and sought. FLAC is lossless
     /// and the seek finds a frame by its headers, so the source-rate seek is bit-exact.

@@ -105,7 +105,7 @@ final class LeadingBytesTests: XCTestCase {
     }
 
     /// Under the default 64 KiB budget a 100 kB prefix is scanned past for the first run of chained
-    /// frames (#24).
+    /// frames.
     func testA100kBGarbagePrefixUnderTheDefaultProbeBudget() throws {
         try check(prefix: garbage(100_000), label: "100 kB garbage, default probe",
                   maxBytesBeforeAudio: 100_000 + 128 * 1024)

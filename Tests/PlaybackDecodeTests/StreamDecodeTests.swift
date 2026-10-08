@@ -181,7 +181,7 @@ final class StreamDecodeTests: XCTestCase {
         }
     }
 
-    // MARK: - Chained Ogg (#43)
+    // MARK: - Chained Ogg
 
     /// Two Ogg streams concatenated byte for byte, 3 s each (`make-fixtures.sh`, last section): a
     /// chain boundary brings new headers and, here, a new rate or channel count. The output stays at
@@ -243,7 +243,7 @@ final class StreamDecodeTests: XCTestCase {
         }
     }
 
-    /// The Opus chain's boundary (#49): no packet dropped or repeated, no pre-skip left in or cut
+    /// The Opus chain's boundary: no packet dropped or repeated, no pre-skip left in or cut
     /// twice. Each link is 3 s of 48 kHz input; libopus writes its pre-skip (312 samples) in the
     /// header and the Ogg end granule says where the audio ends, so FFmpeg trims the pre-skip off
     /// the start and the padding off the end and each link decodes to exactly 144,000 frames.
@@ -661,7 +661,7 @@ final class StreamDecodeTests: XCTestCase {
     /// **A VBR MP3 seek is exact as far as a seek's byte budget reaches, and bounded beyond it.**
     ///
     /// A Xing TOC places a time to 1/256 of the file and mp3dec labels the frame it finds with the
-    /// time asked for (issue #3). Near a frame of known time the decoder counts frames instead, so
+    /// time asked for. Near a frame of known time the decoder counts frames instead, so
     /// the landing is the requested sample; far from one, the count would walk the file, so the
     /// TOC's landing stands and the seek still costs a window.
     func testXingVBRMP3SeeksExactlyNearAndCheaplyFar() throws {
@@ -929,7 +929,7 @@ final class StreamDecodeTests: XCTestCase {
         let format = try decoder.open()
         XCTAssertEqual(format.sampleRate, 44100)
         /* The Xing duration survives a length-less source: stock n7.1 mp3dec discarded the tag
-         * when `avio_size()` could not answer, which scripts/ffmpeg-patches/0001 fixes (issue #1). */
+         * when `avio_size()` could not answer, which scripts/ffmpeg-patches/0001 fixes. */
         XCTAssertEqual(try XCTUnwrap(format.duration), 20, accuracy: 0.1, "the Xing frame count gives the duration")
         let pcm = decodeAll(decoder)
         XCTAssertEqual(Double(pcm.count / format.channelCount), 44100 * 20, accuracy: 4096)

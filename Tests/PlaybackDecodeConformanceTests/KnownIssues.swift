@@ -10,9 +10,9 @@
 /// where the clean decode ends). The one landing that cannot be exact is
 /// outside these fixtures: a seek in a VBR MP3 further from a frame of known time than one seek's
 /// byte budget (`kSeekBudgetBytes`, a few seconds of audio) is placed by its Xing TOC or bitrate,
-/// and nothing in an MP3 frame says what time it is (issue #3). Other exceptions pinned in the goldens
+/// and nothing in an MP3 frame says what time it is. Other exceptions pinned in the goldens
 /// (the decoder's time zero is not where the first frame sits, so the landing is wrong, the PCM right):
-/// sample_empty_track.mp4 and sample_partially_fragmented.mp4 (#64), sample_fragmented.mp4 (#65).
+/// sample_empty_track.mp4 and sample_partially_fragmented.mp4, sample_fragmented.mp4.
 enum KnownIssues {
     struct Rule {
         var issue: String
@@ -33,7 +33,7 @@ enum KnownIssues {
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/36 (wav_s24 reads twice with unknown length)",
              fixture: "wav_s24.wav", kind: .bytes, switches: [.unknownLength, [.partialReads, .unknownLength]],
              messages: ["65546 bytes read before the first audio, golden allows 33792"]),
-        // media3 Ogg and WAV port (#33). The WAV rules below are the #36 double read again: with no
+        // media3 Ogg and WAV port. The WAV rules below are the same double read: with no
         // known length the wav demuxer buffers a second time before the first audio.
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/36 (wav_s24 reads twice with unknown length)",
              fixture: "sample.wav", kind: .bytes, switches: [.unknownLength, [.partialReads, .unknownLength]],

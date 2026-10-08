@@ -3,7 +3,7 @@ import XCTest
 
 @testable import PlaybackDecode
 
-/// A byte-estimate seek that falls past the start of the last frame (issue #28): the demuxer finds
+/// A byte-estimate seek that falls past the start of the last frame: the demuxer finds
 /// no frame to sync to, the stream ends with nothing decoded, and audio remains before the declared
 /// end. No fixture reaches it with the real 64 KiB budget, since each is read whole by the open or
 /// seeks by an index, so the stream here is long, and the budget is shrunk below one frame to

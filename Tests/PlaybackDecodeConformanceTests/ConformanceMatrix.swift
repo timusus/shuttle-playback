@@ -456,7 +456,7 @@ enum ConformanceMatrix {
             XCTAssertEqual(golden.durationAtEofS, Double(golden.frames) / Double(golden.sampleRate),
                            accuracy: 1e-9, "\(name): duration at EOF is frames / rate")
         }
-        // media3's final SeekMap for the headerless CBR fixture with trailing garbage (#53): the
+        // media3's final SeekMap for the headerless CBR fixture with trailing garbage: the
         // estimate the open reports (12.2 s) is corrected to this once the decode reaches EOF.
         if name == "bear-cbr-no-seek-table-trailing-garbage.mp3" {
             XCTAssertEqual(got.durationAtEofS, 2.821187, accuracy: 0.011, "\(name): media3's duration")

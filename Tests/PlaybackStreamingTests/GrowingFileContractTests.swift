@@ -127,7 +127,7 @@ final class GrowingFileContractTests: GrowingFileContractCase {
     /// media3 `dataSpecWithPositionAtEnd_readsZeroBytes`, before the length is known: the origin
     /// answers `416` with `Content-Range: bytes */N`, or clamps the range to its last byte, and
     /// either is a zero-length open. The read is the end at once, with no retry, and the length
-    /// is learned (#39).
+    /// is learned.
     func testAnOpenAtExactlyTheEndReadsZeroBytesBeforeTheLengthIsKnown() throws {
         let body = makeBody()
         for strict in [false, true] {

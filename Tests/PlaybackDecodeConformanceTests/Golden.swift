@@ -32,7 +32,7 @@ struct Golden: Codable, Equatable {
     var frames: Int
     var durationS: Double
     /// The real length once the clean decode reaches EOF (`frames / sampleRate`), which is what a
-    /// player reads after `endReason == .eof` when `durationS` was only an estimate (#53).
+    /// player reads after `endReason == .eof` when `durationS` was only an estimate.
     var durationAtEofS: Double
     var pcmSha256PerSecondInt16: [String]
     var seeks: [Seek]

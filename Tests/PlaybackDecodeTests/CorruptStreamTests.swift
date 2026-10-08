@@ -45,7 +45,7 @@ private final class MemoryByteReader: StreamByteReader {
     func clearInterrupt() {}
 }
 
-/// One bad frame costs a glitch, not the rest of the recording (#17).
+/// One bad frame costs a glitch, not the rest of the recording.
 final class CorruptStreamTests: XCTestCase {
 
     private func decode(_ data: Data) throws -> (frames: Int, reason: FFmpegStreamDecoder.EndReason) {

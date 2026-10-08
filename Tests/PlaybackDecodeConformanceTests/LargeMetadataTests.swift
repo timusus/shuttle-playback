@@ -140,7 +140,7 @@ final class LargeMetadataTests: XCTestCase {
     /// decode restarts the codec), so the `ioErrorOncePerPosition` combinations compare the frame
     /// count only and skip both the PCM comparison and the seek, which `FaultyByteReader` would
     /// interrupt too. With `seekFailsWithUnknownLength` the seek of the unknown-length combinations is
-    /// pinned as an expected failure (#55): fixing the bug fails the test, so remove the pin then.
+    /// pinned as an expected failure: fixing the bug fails the test, so remove the pin then.
     private func assertOpensDecodesAndSeeks(large: URL, reference: DecodeRun, name: String, switches: FaultSwitches,
                                             seekFailsWithUnknownLength: Bool) throws {
         let label = "\(name) \(switches)"
@@ -153,7 +153,7 @@ final class LargeMetadataTests: XCTestCase {
         }
         if !switches.contains(.ioErrorOncePerPosition) { XCTAssertTrue(run.pcm == reference.pcm, "\(label): PCM differs") }
         guard !switches.contains(.ioErrorOncePerPosition) else { return }
-        // A seek of the 2 MB-PICTURE FLAC with no length fails (#55); the open and decode above do not.
+        // A seek of the 2 MB-PICTURE FLAC with no length fails; the open and decode above do not.
         if seekFailsWithUnknownLength, switches.contains(.unknownLength) {
             XCTExpectFailure("\(label): known decoder bug, https://github.com/timusus/shuttle-playback/issues/55") {
                 seekToTheMiddle(large: large, reference: reference, label: label, switches: switches)

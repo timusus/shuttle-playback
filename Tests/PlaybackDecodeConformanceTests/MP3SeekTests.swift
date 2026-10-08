@@ -111,7 +111,7 @@ final class MP3SeekTests: XCTestCase {
     func testMP3SeeksDecodeTheCleanPCMFromTheTargetSample() throws {
         // A VBR stream with no Xing/VBRI tag lands by bitrate estimate and cannot match. Accepted:
         // a tagless VBR MP3 far from a known-time frame seeks by estimate, as in media3; the
-        // golden pins its landings. play-trimmed.mp3 does not open (issue #51).
+        // golden pins its landings. play-trimmed.mp3 does not open.
         let skipped: Set = ["bear-vbr-no-seek-table.mp3", "play-trimmed.mp3"]
         for url in GoldenStore.fixtureURLs() where url.pathExtension == "mp3" && !skipped.contains(url.lastPathComponent) {
             let (format, clean) = try decodeAll(url)
@@ -141,7 +141,7 @@ final class MP3SeekTests: XCTestCase {
     /// from a reservoir it never read, which is a burst of noise where the target should be.
     ///
     /// Without a tag nothing in the file says what time a frame is, so a seek this far lands by the
-    /// first frame's bitrate and is labelled with the time asked for (issue #3), and this compares
+    /// first frame's bitrate and is labelled with the time asked for, and this compares
     /// where the audio is, not when: what follows the seek has to be a stretch of the clean decode,
     /// to the bit. The requested times are fractions of the duration the demuxer estimates, the
     /// range its estimate places inside the file, and are past the reach of a decode from the start.
@@ -184,7 +184,7 @@ final class MP3SeekTests: XCTestCase {
     }
 
     /// **A far seek into a VBR MP3 with no tag, onto frames that share the first frame's bitrate by
-    /// chance, is not placed as if the stream were constant-bitrate (issue #16).**
+    /// chance, is not placed as if the stream were constant-bitrate.**
     ///
     /// With no tag frame, a stream was taken for constant-bitrate on its first frame's word alone, and
     /// a far seek read where a constant-bitrate stream would have the frame it wanted and accepted any

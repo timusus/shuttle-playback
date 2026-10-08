@@ -190,7 +190,7 @@ final class FLACSeekTests: XCTestCase {
     /// Every frame header says which frame it is, so the seek reads headers at interpolated (or,
     /// where the bitrate jumps, bisected) bytes until it has a frame at most 32 KiB before the
     /// target, then decodes from there and drops up to the target. The file is as hard as a FLAC
-    /// gets (its bitrate jumps 700-fold); before issue #38 its far seeks landed by byte ratio,
+    /// gets (its bitrate jumps 700-fold); before the fix its far seeks landed by byte ratio,
     /// seconds from their target, and said they had landed on it.
     func testAFLACWithNoSeekTableSeeksExactlyFarAndNearWithinItsBudget() throws {
         // Far into each kind of stretch, both ways, then near the last landing both ways.
@@ -203,7 +203,7 @@ final class FLACSeekTests: XCTestCase {
     /// length but hold no frame, so a seek near the end interpolated into them and read a largest
     /// frame's worth with no header there. Such a probe bounds the search from above, as a byte
     /// with nothing after it does; before, it ended the search, the byte estimate went into the
-    /// tag, and the retry for an estimate past the last frame (issue #28) stepped back once, still
+    /// tag, and the retry for an estimate past the last frame stepped back once, still
     /// inside the tag, and reported the end.
     func testAFLACFollowedByATagSeeksToItsEndExactly() throws {
         try assertSeeksExactly(to: [59.9, 59.99, 59.5, 30.5], trailing: 64 * 1024)
@@ -239,14 +239,14 @@ final class FLACSeekTests: XCTestCase {
     /// interpolating into the tag again: about eight probes from the end on this file, so it is
     /// allowed twice the usual probing.
     ///
-    /// A seek inside the last frame (59.99 s) is included (issue #52): FFmpeg's FLAC parser drops a
+    /// A seek inside the last frame (59.99 s) is included: FFmpeg's FLAC parser drops a
     /// lone frame header once 160 KiB follow with no other, so the seek lands two frames earlier
     /// and decodes on to the target.
     func testAFLACFollowedByAVeryLargeTagLandsWhereItSays() throws {
         try assertSeeksExactly(to: [59.9, 59.99, 55.123, 45.0, 30.5], trailing: 256 * 1024, probing: 256 * 1024)
     }
 
-    /// **A search that cannot finish lands on the frame it has, and says so (issue #42).**
+    /// **A search that cannot finish lands on the frame it has, and says so.**
     ///
     /// One read fails a megabyte in, where the first probe for 45 s reads, so the probe gives up.
     /// The only frame the seek knows before its target is then seconds back, further than a seek
@@ -267,7 +267,7 @@ final class FLACSeekTests: XCTestCase {
         XCTAssertEqual(Array(got.prefix(window * 2)), want, "PCM differs from the stream's at the landing")
     }
 
-    /// **A FLAC whose STREAMINFO has no sample count seeks exactly (issue #54).**
+    /// **A FLAC whose STREAMINFO has no sample count seeks exactly.**
     ///
     /// What FFmpeg writes to a pipe, where it cannot go back to fill the count in. Such a file has
     /// no duration either, so `can_estimate_bytes` is false and the bounded probe has nothing to
@@ -279,7 +279,7 @@ final class FLACSeekTests: XCTestCase {
         try assertSeeksExactly(to: [59.9, 59.99, 55.123, 30.5], trailing: 64 * 1024, unknownTotal: true, bounded: false)
     }
 
-    /// **A read that fails during a seek never makes it land by byte estimate (issue #54).**
+    /// **A read that fails during a seek never makes it land by byte estimate.**
     ///
     /// The first read after the n-th reader seek fails, for each n a seek makes (the search's
     /// probes, then the anchored placement). Whichever read it is, the seek reports where it
