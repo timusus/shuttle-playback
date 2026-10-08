@@ -2278,6 +2278,54 @@ static int flac_frame_before(StreamDecoder *d, int64_t target, int64_t *pos, int
     return STREAM_DECODE_OK;
 }
 
+/*
+ * The fallback anchor for a native FLAC seek whose anchored attempt failed: one probe at the byte
+ * estimate (the target's share of the stream), aimed a maximum block early so the frame it finds
+ * starts at or before the target. It reads at most `2 * max_frame_bytes + 64` and the frame's
+ * header gives its time, so the work is bounded where the demuxer's bisection is not (about 15 to
+ * 25 far probes). media3's FlacBinarySearchSeeker bounds its work the same way. `*pos` is -1 when
+ * the probe finds no frame at or before the target, and the caller bisects as a last resort.
+ */
+static int flac_estimate_anchor(StreamDecoder *d, double ratio, int64_t target, int64_t *pos, int64_t *dts,
+                                int *short_of) {
+    *pos = -1;
+    *short_of = 0;
+    FLACInfo si;
+    if (!flac_info(d, &si) || !can_estimate_bytes(d)) return STREAM_DECODE_OK;
+    AVStream *st = d->fmt->streams[d->audio_idx];
+    AVRational per_sample = { 1, si.sample_rate };
+    int64_t total = si.total_samples > 0 ? si.total_samples : llround(d->media_duration * si.sample_rate);
+    int64_t want = av_rescale_q(target - d->start_time, d->time_base, per_sample);
+    if (want < 0) want = 0;
+    if (want > total) want = total;
+    if (total - want < 3 * (int64_t)si.max_blocksize) {   /* issue #52, as in flac_frame_before */
+        want -= 2 * (int64_t)si.max_blocksize;
+        if (want < 0) want = 0;
+    }
+    int64_t spent = 0;
+    int64_t lo_pos = flac_audio_start(d, &spent);
+    if (lo_pos <= 0) {
+        if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+        if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+        return STREAM_DECODE_OK;
+    }
+    double bytes_per_sample = (double)d->media_bytes / (double)(total > 0 ? total : 1);
+    int64_t at = (int64_t)(ratio * (double)d->media_bytes) - (int64_t)(si.max_blocksize * bytes_per_sample);
+    if (at < lo_pos) at = lo_pos;
+    if (at >= d->media_bytes) return STREAM_DECODE_OK;
+    int result;
+    int64_t found_pos = -1, found = 0;
+    int rc = flac_probe(d, &si, at, d->media_bytes, -1, 0, want, &result, &found_pos, &found, &spent);
+    if (rc != STREAM_DECODE_OK) return rc;
+    if (result != FLAC_PROBE_FOUND || found > want) return STREAM_DECODE_OK;
+    *short_of = (double)(want - found) * bytes_per_sample > (double)kSeekBudgetBytes;
+    *pos = found_pos;
+    *dts = d->start_time + av_rescale_q(found, per_sample, d->time_base);
+    int64_t end_dts = d->start_time + av_rescale_q(total, per_sample, d->time_base);
+    if (end_dts > *dts) av_add_index_entry(st, d->media_bytes, end_dts, 0, 0, AVINDEX_KEYFRAME);
+    return STREAM_DECODE_OK;
+}
+
 /* `avformat_seek_file` with the seek byte budget armed; `*walked` says it was spent. */
 static int budgeted_seek(StreamDecoder *d, int64_t min_ts, int64_t ts, int64_t max_ts, int flags, int *walked) {
     d->seek_bytes = 0;
@@ -2705,13 +2753,40 @@ static int demux_seek(StreamDecoder *decoder, double seconds, int64_t target, do
         if (flac_info(decoder, &flac_si) && can_estimate_bytes(decoder)) {
             /* Native FLAC never takes the byte estimate: it would report the target over audio
              * from wherever the byte falls (issue #54). The anchored seek failed (a read error) or
-             * there was no anchor to place, so the demuxer's own bisection, which reads frame
-             * headers for their times, places it at whatever cost, as an expensive seek beats one
-             * that reports the wrong place. */
+             * there was no anchor to place, so one bounded probe at the byte estimate finds a
+             * frame whose header gives its time (`flac_estimate_anchor`) and the seek anchors on
+             * it. Only when the probe finds no frame does the demuxer's own bisection, which
+             * reads frame headers for their times, place it at whatever cost, as an expensive
+             * seek beats one that reports the wrong place. */
             avio_clear_latched_error(decoder);
             decoder->source_eof = 0;
             decoder->anchored = 0;
             decoder->flac_short_at = AV_NOPTS_VALUE;
+            double flac_ratio = seconds / decoder->media_duration;
+            if (flac_ratio < 0) flac_ratio = 0;
+            if (flac_ratio > 1) flac_ratio = 1;
+            int64_t est_pos = -1, est_dts = AV_NOPTS_VALUE;
+            int est_short = 0;
+            int est = flac_estimate_anchor(decoder, flac_ratio, target, &est_pos, &est_dts, &est_short);
+            if (est != STREAM_DECODE_OK) return est;
+            if (est_pos >= 0) {
+                av_add_index_entry(decoder->fmt->streams[decoder->audio_idx], est_pos, est_dts, 0, 0,
+                                   AVINDEX_KEYFRAME);
+                decoder->fmt->flags &= ~AVFMT_FLAG_FAST_SEEK;
+                decoder->anchored = 1;
+                int est_walked = 0;
+                rc = budgeted_seek(decoder, est_dts, est_dts, est_dts, AVSEEK_FLAG_ANY, &est_walked);
+                decoder->fmt->flags = fmt_flags;
+                if (rc >= 0 && !est_walked) {
+                    if (est_short) decoder->flac_short_at = est_dts;
+                    return kSeekPlaced;
+                }
+                if (decoder->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+                if (decoder->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+                avio_clear_latched_error(decoder);
+                decoder->source_eof = 0;
+                decoder->anchored = 0;
+            }
             rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, INT64_MIN, target, target,
                                     AVSEEK_FLAG_BACKWARD);
             if (rc < 0) {

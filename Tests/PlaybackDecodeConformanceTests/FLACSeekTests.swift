@@ -72,7 +72,7 @@ final class FLACSeekTests: XCTestCase {
     /// the last samples of every second noise frame spell a valid frame header naming an earlier
     /// frame.
     /// Returns the file, its PCM interleaved, and its largest frame.
-    private func writeFLAC(variable: Bool, trailing: Int = 0, lookalikes: Bool = false, unknownTotal: Bool = false) throws -> (URL, [Int16], Int) {
+    private func writeFLAC(variable: Bool, trailing: Int = 0, lookalikes: Bool = false, unknownTotal: Bool = false, steady: Bool = false) throws -> (URL, [Int16], Int) {
         let total = 60 * Self.rate
         var frames = Data()
         var pcm: [Int16] = []
@@ -83,7 +83,7 @@ final class FLACSeekTests: XCTestCase {
         while first < total {
             let blockSize = min(variable && index % 2 == 1 ? 1152 : 4096, total - first)
             let seconds = first / Self.rate
-            let noise = (seconds >= 20 && seconds < 40) || seconds >= 50
+            let noise = steady || (seconds >= 20 && seconds < 40) || seconds >= 50
             var frame: [UInt8] = [0xFF, variable ? 0xF9 : 0xF8]
             let sizeCode: UInt8 = blockSize == 4096 ? 12 : blockSize == 1152 ? 3 : 7
             frame.append(sizeCode << 4 | 9)          // 44.1 kHz
@@ -270,9 +270,10 @@ final class FLACSeekTests: XCTestCase {
     /// **A FLAC whose STREAMINFO has no sample count seeks exactly (issue #54).**
     ///
     /// What FFmpeg writes to a pipe, where it cannot go back to fill the count in. Such a file has
-    /// no duration either, so no bytes can be estimated from: the
-    /// demuxer's own bisection is the only seek (media3 gives such a file no seeking at all), and
-    /// its cost is not bounded; the landing and the PCM are.
+    /// no duration either, so `can_estimate_bytes` is false and the bounded probe has nothing to
+    /// aim from: the demuxer's own bisection is the only seek (media3 gives such a file no seeking
+    /// at all). Its cost is not bounded, so neither bytes nor reader seeks are asserted; the
+    /// landing and the PCM are.
     func testAFLACWithNoSampleCountSeeksExactly() throws {
         try assertSeeksExactly(to: [45.0, 30.5, 55.123, 0.25, 59.9, 59.99, 21.0, 12.345], unknownTotal: true, bounded: false)
         try assertSeeksExactly(to: [59.9, 59.99, 55.123, 30.5], trailing: 64 * 1024, unknownTotal: true, bounded: false)
@@ -284,20 +285,37 @@ final class FLACSeekTests: XCTestCase {
     /// probes, then the anchored placement). Whichever read it is, the seek reports where it
     /// landed and the PCM there is the stream's: never the target over audio from elsewhere.
     func testAReadFailingDuringASeekStillReportsWhereItLanded() throws {
-        let (url, pcm, _) = try writeFLAC(variable: false)
-        for n in 0...9 {
-            let reader = try CountingReader(url)
-            let decoder = FFmpegStreamDecoder(reader: reader)
-            _ = try decoder.open()
-            reader.arm(failingReadAfterSeeks: n)
-            guard let landed = try? decoder.seek(toSeconds: 45.0) else { continue }
-            var got: [Float] = []
-            while got.count < 4096 * 2, let chunk = decoder.nextChunk() { got += chunk }
-            let start = Int((landed * Double(Self.rate)).rounded()) * 2
-            XCTAssertLessThanOrEqual(landed, 45.0 + 0.5 / Double(Self.rate), "n=\(n): landed \(landed)")
-            guard start + 4096 * 2 <= pcm.count else { continue }
-            let want = pcm[start..<start + 4096 * 2].map { Float($0) / 32768 }
-            XCTAssertEqual(Array(got.prefix(4096 * 2)), want, "n=\(n): PCM differs from the stream's at \(landed)")
+        // The swinging file's byte estimate is tens of seconds wrong, so its fallback probe finds
+        // no frame at or before the target and the demuxer's bisection (unbounded) is the last
+        // resort: only the landing is held there. On a steady-bitrate file the estimate is
+        // right, the fallback is the one probe, and the seek is exact and bounded.
+        for steady in [false, true] {
+            let (url, pcm, maxFrame) = try writeFLAC(variable: false, steady: steady)
+            // A search of up to five probes, the seek budget, the parser's ten frames, one refill.
+            let budget = Int64(5 * (2 * maxFrame + 64) + 64 * 1024 + 11 * maxFrame + 32 * 1024)
+            var exact = 0
+            for n in 0...9 {
+                let reader = try CountingReader(url)
+                let decoder = FFmpegStreamDecoder(reader: reader)
+                _ = try decoder.open()
+                reader.arm(failingReadAfterSeeks: n)
+                let bytesBefore = reader.bytesRead
+                guard let landed = try? decoder.seek(toSeconds: 45.0) else { continue }
+                var got: [Float] = []
+                while got.count < 4096 * 2, let chunk = decoder.nextChunk() { got += chunk }
+                let bytes = reader.bytesRead - bytesBefore
+                let label = "\(steady ? "steady" : "swinging") n=\(n)"
+                let start = Int((landed * Double(Self.rate)).rounded()) * 2
+                XCTAssertLessThanOrEqual(landed, 45.0 + 0.5 / Double(Self.rate), "\(label): landed \(landed)")
+                if steady && abs(landed - 45.0) <= 0.5 / Double(Self.rate) {
+                    exact += 1
+                    XCTAssertLessThanOrEqual(bytes, budget, "\(label): read \(bytes) bytes")
+                }
+                guard start + 4096 * 2 <= pcm.count else { continue }
+                let want = pcm[start..<start + 4096 * 2].map { Float($0) / 32768 }
+                XCTAssertEqual(Array(got.prefix(4096 * 2)), want, "\(label): PCM differs from the stream's at \(landed)")
+            }
+            if steady { XCTAssertGreaterThanOrEqual(exact, 1, "no failing read ended in an exact bounded landing") }
         }
     }
 
@@ -339,9 +357,10 @@ final class FLACSeekTests: XCTestCase {
                     XCTFail("\(label): PCM differs from the stream's at frame \(miss / 2) after the landing",
                             file: file, line: line)
                 }
-                XCTAssertLessThanOrEqual(bounded ? bytes : 0, budget, "\(label): read \(bytes) bytes before its first audio",
+                guard bounded else { continue }
+                XCTAssertLessThanOrEqual(bytes, budget, "\(label): read \(bytes) bytes before its first audio",
                                          file: file, line: line)
-                XCTAssertLessThanOrEqual(bounded ? reader.seeks - seeksBefore : 0, 16,
+                XCTAssertLessThanOrEqual(reader.seeks - seeksBefore, 16,
                                          "\(label): positioned the reader \(reader.seeks - seeksBefore) times",
                                          file: file, line: line)
             }
