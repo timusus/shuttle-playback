@@ -664,18 +664,16 @@ static int mp4_aac_prime_skip(const StreamDecoder *d, const AVCodecParameters *p
  * the decoder's count, and the demuxer's start_time already includes it, so such a packet is 0.
  * In time base units.
  */
+static int open_codec(const StreamDecoder *d, const AVCodec *codec, int flags2, AVCodecContext **out);
+
 static int64_t aac_decoder_trim(const StreamDecoder *d, const AVCodecParameters *par) {
     if (av_packet_get_side_data(d->held, AV_PKT_DATA_SKIP_SAMPLES, NULL)) return 0;
     const AVCodec *codec = avcodec_find_decoder(par->codec_id);
-    AVCodecContext *dec = codec ? avcodec_alloc_context3(codec) : NULL;
+    AVCodecContext *dec = NULL;
     AVFrame *frame = av_frame_alloc();
     int64_t trim = 0;
-    if (dec && frame && avcodec_parameters_to_context(dec, par) >= 0) {
-        dec->thread_count = 1;
-        dec->pkt_timebase = d->time_base;
-        dec->flags2 |= AV_CODEC_FLAG2_SKIP_MANUAL;
-        if (avcodec_open2(dec, codec, NULL) >= 0 && avcodec_send_packet(dec, d->held) >= 0
-            && avcodec_receive_frame(dec, frame) >= 0) {
+    if (codec && frame && open_codec(d, codec, AV_CODEC_FLAG2_SKIP_MANUAL, &dec) == STREAM_DECODE_OK) {
+        if (avcodec_send_packet(dec, d->held) >= 0 && avcodec_receive_frame(dec, frame) >= 0) {
             const AVFrameSideData *sd = av_frame_get_side_data(frame, AV_FRAME_DATA_SKIP_SAMPLES);
             if (sd && sd->size >= 4) {
                 uint32_t skip = (uint32_t)sd->data[0] | (uint32_t)sd->data[1] << 8
@@ -935,6 +933,9 @@ static int  skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *opt
 static void avio_clear_latched_error(StreamDecoder *d);
 static int  reopen_past_mp3_junk(StreamDecoder *d, const StreamDecodeOptions *options, int failed);
 static int  reopen_single_frame_mp3(StreamDecoder *d, const StreamDecodeOptions *options, int failed);
+static int  read_audio_packet(StreamDecoder *d);
+static int  read_failure_status(StreamDecoder *d);
+static int  hold_first_audio_packet(StreamDecoder *d);
 
 StreamDecoder *stream_decoder_open(const StreamDecodeCallbacks *callbacks,
                                    void *opaque,
@@ -994,17 +995,8 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     const AVCodec *codec = avcodec_find_decoder(par->codec_id);
     if (!codec) { local_status = STREAM_DECODE_ERR_DECODER; goto fail; }
 
-    d->dec = avcodec_alloc_context3(codec);
-    if (!d->dec) goto fail;
-    if (avcodec_parameters_to_context(d->dec, par) < 0) { local_status = STREAM_DECODE_ERR_DECODER; goto fail; }
-    /* One thread: FFmpeg's audio decoders have no frame threading to gain from, and the
-     * pull loop is single-threaded by contract. */
-    d->dec->thread_count = 1;
-    /* Without it the codec cannot move a frame's timestamp past the encoder delay it trims
-     * (decode.c discard_samples), and the first frame after the start is labelled as though the
-     * trimmed samples were still in it. */
-    d->dec->pkt_timebase = stream->time_base;
-    if (avcodec_open2(d->dec, codec, NULL) < 0) { local_status = STREAM_DECODE_ERR_DECODER; goto fail; }
+    local_status = open_codec(d, codec, 0, &d->dec);
+    if (local_status != STREAM_DECODE_OK) goto fail;
 
     d->sample_rate = d->dec->sample_rate > 0 ? d->dec->sample_rate : par->sample_rate;
     d->channels = d->dec->ch_layout.nb_channels > 0 ? d->dec->ch_layout.nb_channels
@@ -1031,25 +1023,15 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
         /* Does the file's edit list already skip its priming? It shows as skip-samples side data
          * on the first packet, which is kept for the decoder. If not, the audio starts after the
          * priming, so that is where time zero is. */
-        int rc;
-        while ((rc = av_read_frame(d->fmt, d->held)) >= 0 && d->held->stream_index != d->audio_idx) {
-            av_packet_unref(d->held);
-        }
-        if (rc < 0) {
-            if (d->cancelled) { local_status = STREAM_DECODE_ERR_CANCELLED; goto fail; }
-            if (d->interrupted) { local_status = STREAM_DECODE_ERR_INTERRUPTED; goto fail; }
-            avio_clear_latched_error(d);
+        local_status = hold_first_audio_packet(d);
+        if (local_status != STREAM_DECODE_OK) goto fail;
+        if (!d->has_held || av_packet_get_side_data(d->held, AV_PKT_DATA_SKIP_SAMPLES, NULL) ||
+            d->held->pts != d->start_time) {
             d->prime_skip = 0;
         } else {
-            hold_first_packet(d);
-            if (av_packet_get_side_data(d->held, AV_PKT_DATA_SKIP_SAMPLES, NULL) ||
-                d->held->pts != d->start_time) {
-                d->prime_skip = 0;
-            } else {
-                d->prime_start = d->held->pts;
-                d->start_time +=av_rescale_q(d->prime_skip, (AVRational){ 1, d->sample_rate },
-                                              d->time_base);
-            }
+            d->prime_start = d->held->pts;
+            d->start_time +=av_rescale_q(d->prime_skip, (AVRational){ 1, d->sample_rate },
+                                          d->time_base);
         }
     }
     if (d->prime_skip == 0 && (par->codec_id == AV_CODEC_ID_AAC || par->codec_id == AV_CODEC_ID_AAC_LATM)) {
@@ -1057,19 +1039,8 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
          * own (`aac_decoder_trim`), as media3's Mp4Extractor puts it at the first sample the edit
          * list and the gapless trim leave: a seek to 0 lands on the clean decode's first frame. A
          * decode from the start still begins at the first packet (`seek_to`). */
-        if (!d->has_held) {
-            int rc;
-            while ((rc = av_read_frame(d->fmt, d->held)) >= 0 && d->held->stream_index != d->audio_idx) {
-                av_packet_unref(d->held);
-            }
-            if (rc < 0) {
-                if (d->cancelled) { local_status = STREAM_DECODE_ERR_CANCELLED; goto fail; }
-                if (d->interrupted) { local_status = STREAM_DECODE_ERR_INTERRUPTED; goto fail; }
-                avio_clear_latched_error(d);
-            } else {
-                hold_first_packet(d);
-            }
-        }
+        local_status = hold_first_audio_packet(d);
+        if (local_status != STREAM_DECODE_OK) goto fail;
         if (d->has_held) {
             d->decoder_trim = aac_decoder_trim(d, par);
             d->start_time += d->decoder_trim;
@@ -1487,18 +1458,9 @@ static int skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *opti
     if (!d->pkt || !d->held) return STREAM_DECODE_ERR_ALLOC;
     if (!d->fmt->iformat || strcmp(d->fmt->iformat->name, "mp3") != 0) return STREAM_DECODE_OK;
 
-    int rc;
-    while ((rc = av_read_frame(d->fmt, d->held)) >= 0 && d->held->stream_index != d->audio_idx) {
-        av_packet_unref(d->held);
-    }
-    if (rc < 0) {
-        /* No packet at all is the decode's to report, not the open's; an interrupted or cancelled
-         * read is the open's. */
-        if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-        if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
-        avio_clear_latched_error(d);
-        return STREAM_DECODE_OK;
-    }
+    /* No packet at all is the decode's to report, not the open's; an interrupted or cancelled read
+     * is the open's. */
+    if (read_audio_packet(d) < 0) return read_failure_status(d);
     int64_t end = d->held->pos + d->held->size;
     if (d->held->pos < 0 || d->held->size <= kMP3MaxFrameBytes || end <= kMP3JunkScanBytes) {
         hold_first_packet(d);
@@ -1511,7 +1473,7 @@ static int skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *opti
     av_packet_unref(d->held);
     close_format(d);
     d->base_offset += junk;
-    rc = reopen_seek(d, d->base_offset);
+    int rc = reopen_seek(d, d->base_offset);
     if (rc == STREAM_DECODE_ERR_IO) {
         /* The reader cannot serve the frame's offset. Open where the demuxer first did and keep
          * the junk: that decodes, as it did before this reopen existed, and only the byte
@@ -1527,18 +1489,7 @@ static int skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *opti
     if (rc != STREAM_DECODE_OK) return rc;
     /* The first frame again, for the same reason as above: every seek counts frames from it. The
      * decoder would read it next anyway, so this costs nothing. */
-    int read;
-    while ((read = av_read_frame(d->fmt, d->held)) >= 0 && d->held->stream_index != d->audio_idx) {
-        av_packet_unref(d->held);
-    }
-    if (read >= 0) {
-        hold_first_packet(d);
-    } else {
-        if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-        if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
-        avio_clear_latched_error(d);
-    }
-    return STREAM_DECODE_OK;
+    return hold_first_audio_packet(d);
 }
 
 /* ── MP3 frame counting ──────────────────────────────────────────────────── */
@@ -1662,6 +1613,36 @@ static void hold_first_packet(StreamDecoder *d) {
         d->mp3_tag = mp3_find_tag(d);
         d->mp3_untagged_cbr = d->mp3_tag == MP3_TAG_NONE && mp3_prologue_is_cbr(d);
     }
+}
+
+/* Read the audio stream's next packet into `held`, dropping any other stream's on the way. Returns
+ * `av_read_frame`'s result. */
+static int read_audio_packet(StreamDecoder *d) {
+    int rc;
+    while ((rc = av_read_frame(d->fmt, d->held)) >= 0 && d->held->stream_index != d->audio_idx) {
+        av_packet_unref(d->held);
+    }
+    return rc;
+}
+
+/* After a read that failed or came up short: a cancel or an interruption is returned as itself, and
+ * anything else is cleared from the AVIO context (`avio_clear_latched_error`) so the next read asks
+ * the source again, and the caller carries on (STREAM_DECODE_OK). */
+static int read_failure_status(StreamDecoder *d) {
+    if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+    if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+    avio_clear_latched_error(d);
+    return STREAM_DECODE_OK;
+}
+
+/* Hold the stream's first audio packet (`hold_first_packet`), reading it unless it already is. No
+ * packet at all is the decode's to report, not the open's: STREAM_DECODE_OK with nothing held. A
+ * cancelled or interrupted read is the open's. */
+static int hold_first_audio_packet(StreamDecoder *d) {
+    if (d->has_held) return STREAM_DECODE_OK;
+    if (read_audio_packet(d) < 0) return read_failure_status(d);
+    hold_first_packet(d);
+    return STREAM_DECODE_OK;
 }
 
 /* The header fields that make two frames the same stream: version, layer, bitrate, sample rate
@@ -1857,12 +1838,7 @@ static int mp3_cbr_frame(StreamDecoder *d, int64_t ts, int64_t *pos, int64_t *dt
     if (lo < second) lo = second;
 
     int got = avio_seek(d->fmt->pb, lo, SEEK_SET) < 0 ? -1 : avio_read(d->fmt->pb, buf, need);
-    if (got < need) {
-        if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-        if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
-        avio_clear_latched_error(d);
-        return STREAM_DECODE_OK;
-    }
+    if (got < need) return read_failure_status(d);
     for (int off = 0; off <= 2 * kSlack; off++) {
         uint32_t here = read_be(buf + off, 4);
         MP3Frame g;
@@ -2213,10 +2189,7 @@ done:
     }
     d->avio->direct = 0;
     av_free(buf);
-    if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-    if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
-    avio_clear_latched_error(d);
-    return STREAM_DECODE_OK;
+    return read_failure_status(d);
 }
 
 /* Up to `n` bytes at `pos` (AVIO offset): from the prologue when it holds them, else with one
@@ -2684,9 +2657,16 @@ static int codec_outlives_flush(const StreamDecoder *d) {
     return d->dec->codec_id == AV_CODEC_ID_AAC;
 }
 
-static int reopen_codec(StreamDecoder *d) {
-    AVStream *stream = d->fmt->streams[d->audio_idx];
-    const AVCodec *codec = d->dec->codec;
+/*
+ * A codec for the audio stream, opened as every one here is: one thread, since FFmpeg's audio
+ * decoders have no frame threading to gain from and the pull loop is single-threaded by contract;
+ * and the stream's time base as the packets', without which the codec cannot move a frame's
+ * timestamp past the encoder delay it trims (decode.c discard_samples), and the first frame after
+ * the start is labelled as though the trimmed samples were still in it. `flags2` is added to the
+ * context's. Returns STREAM_DECODE_OK with `*out` set, or STREAM_DECODE_ERR_ALLOC or _DECODER.
+ */
+static int open_codec(const StreamDecoder *d, const AVCodec *codec, int flags2, AVCodecContext **out) {
+    const AVStream *stream = d->fmt->streams[d->audio_idx];
     AVCodecContext *dec = avcodec_alloc_context3(codec);
     if (!dec) return STREAM_DECODE_ERR_ALLOC;
     if (avcodec_parameters_to_context(dec, stream->codecpar) < 0) {
@@ -2695,10 +2675,19 @@ static int reopen_codec(StreamDecoder *d) {
     }
     dec->thread_count = 1;
     dec->pkt_timebase = stream->time_base;
+    dec->flags2 |= flags2;
     if (avcodec_open2(dec, codec, NULL) < 0) {
         avcodec_free_context(&dec);
         return STREAM_DECODE_ERR_DECODER;
     }
+    *out = dec;
+    return STREAM_DECODE_OK;
+}
+
+static int reopen_codec(StreamDecoder *d) {
+    AVCodecContext *dec = NULL;
+    int rc = open_codec(d, d->dec->codec, 0, &dec);
+    if (rc != STREAM_DECODE_OK) return rc;
     avcodec_free_context(&d->dec);
     d->dec = dec;
     return STREAM_DECODE_OK;
@@ -2717,10 +2706,7 @@ static int land_exactly(StreamDecoder *d, int64_t target) {
     if (swr_rc != STREAM_DECODE_OK) return swr_rc;
     d->landing_exact = 1;
     if (d->mp3_header_ok && !index_seek) {
-        int rc;
-        while ((rc = av_read_frame(d->fmt, d->held)) >= 0 && d->held->stream_index != d->audio_idx) {
-            av_packet_unref(d->held);
-        }
+        int rc = read_audio_packet(d);
         /* Otherwise the pump reads again and meets the same end, error or interruption. */
         if (rc >= 0) d->has_held = 1;
         int64_t dts = rc >= 0 ? mp3_exact_dts(d, d->held) : AV_NOPTS_VALUE;
