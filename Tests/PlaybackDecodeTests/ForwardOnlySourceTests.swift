@@ -12,10 +12,13 @@ private final class ForwardOnlyByteReader: StreamByteReader {
     private(set) var refusedTargets: [Int64] = []
 
     private let knowsLength: Bool
+    /// Refuses every seek, forward ones too (a pure stream).
+    private let refusesAllSeeks: Bool
 
-    init(_ data: Data, knowsLength: Bool = false) {
+    init(_ data: Data, knowsLength: Bool = false, refusesAllSeeks: Bool = false) {
         self.data = data
         self.knowsLength = knowsLength
+        self.refusesAllSeeks = refusesAllSeeks
     }
 
     var totalLength: Int64? { knowsLength ? Int64(data.count) : nil }
@@ -30,7 +33,7 @@ private final class ForwardOnlyByteReader: StreamByteReader {
     }
 
     func seek(to newOffset: Int64) throws {
-        guard newOffset >= offset else {
+        guard newOffset >= offset, !refusesAllSeeks else {
             refusedSeeks += 1
             refusedTargets.append(newOffset)
             throw StreamByteReaderError.unseekable
@@ -78,13 +81,38 @@ final class ForwardOnlySourceTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("PlaybackDecodeConformanceTests/Fixtures/cbr_no_table.mp3")
         let source = ForwardOnlyByteReader(try Data(contentsOf: url), knowsLength: true)
-        let decoder = FFmpegStreamDecoder(reader: source)
-        _ = try decoder.open()
-        XCTAssertGreaterThan(drain(decoder), 0)
-        XCTAssertEqual(decoder.endReason, .eof)
-        // The one refusal is the ID3 probe putting its 10 header bytes back (rewind to 0); it is
-        // tolerated. Nothing seeks to the tail.
-        XCTAssertTrue(source.refusedTargets.allSatisfy { $0 == 0 }, "refused: \(source.refusedTargets)")
+        let forward = try decodeAll(FFmpegStreamDecoder(reader: source))
+        // The one refusal is the ID3 probe putting its 10 header bytes back (rewind to 0); the
+        // stash serves them, so it is harmless. Nothing seeks to the tail.
+        XCTAssertEqual(source.refusedTargets, [0])
+        let seekable = try decodeAll(FFmpegStreamDecoder(reader: FileByteReader(url: url, reportsTotalLength: false)))
+        XCTAssertGreaterThan(forward.count, 0)
+        XCTAssertEqual(forward, seekable)
+    }
+
+    /// A reader that refuses every seek, forward ones too: an ID3v2 tag (one, then two stacked) is
+    /// skipped by reading, and the decode is bit-identical to the seekable one.
+    func testID3TaggedMP3DecodesBitIdenticallyOnAReaderThatRefusesEverySeek() throws {
+        let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("PlaybackDecodeConformanceTests/Fixtures")
+        let tagged = fixtures.appendingPathComponent("bear-id3.mp3")
+        let tone = try Data(contentsOf: fixtureURL("tone.mp3"))
+
+        func tag(size: Int) -> Data {
+            let syncsafe = [size >> 21, size >> 14, size >> 7, size].map { UInt8($0 & 0x7F) }
+            return Data([0x49, 0x44, 0x33, 4, 0, 0] + syncsafe) + Data(repeating: 0, count: size)
+        }
+        let stacked = FileManager.default.temporaryDirectory.appendingPathComponent("stacked-id3-\(UUID().uuidString).mp3")
+        try (tag(size: 3000) + tag(size: 40) + tone).write(to: stacked)
+        defer { try? FileManager.default.removeItem(at: stacked) }
+
+        for url in [tagged, stacked] {
+            let seekable = try decodeAll(FFmpegStreamDecoder(reader: FileByteReader(url: url, reportsTotalLength: false)))
+            let source = ForwardOnlyByteReader(try Data(contentsOf: url), refusesAllSeeks: true)
+            let forward = try decodeAll(FFmpegStreamDecoder(reader: source))
+            XCTAssertGreaterThan(forward.count, 0, url.lastPathComponent)
+            XCTAssertEqual(forward, seekable, url.lastPathComponent)
+        }
     }
 
     func testBackwardSeekFailsAsUnseekableNotAsCorruptStream() throws {
@@ -169,7 +197,10 @@ final class ForwardOnlySourceTests: XCTestCase {
     func testFLACOggAndMP4DecodeBitIdenticallyToTheSeekableDecode() throws {
         for fixture in Self.containers {
             let seekable = try decodeAll(FFmpegStreamDecoder(reader: FileByteReader(url: fixtureURL(fixture), reportsTotalLength: false)))
-            let forward = try decodeAll(FFmpegStreamDecoder(reader: try reader(fixture)))
+            let source = try reader(fixture)
+            let forward = try decodeAll(FFmpegStreamDecoder(reader: source))
+            // The stash path ran: the ID3 probe's one rewind was refused and its bytes replayed.
+            XCTAssertEqual(source.refusedSeeks, 1, fixture)
             XCTAssertGreaterThan(forward.count, 0, fixture)
             XCTAssertEqual(forward, seekable, fixture)
         }
