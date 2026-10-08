@@ -823,6 +823,33 @@ final class StreamDecodeTests: XCTestCase {
         }
     }
 
+    // MARK: - Read failure
+
+    /// A read that failed is not a failed seek: the decoder is still positioned, so a seek once
+    /// the source is back resumes it. 0.4.0 stored the read's failure as terminal (#45's rule for
+    /// a failed seek), so the player's Play after a network outage was refused without a byte read.
+    func testASeekAfterAFailedReadResumesTheSameDecoder() throws {
+        try skipUnlessAvailable()
+        let url = try Fixture.url(Fixture.mp3)
+        let size = try XCTUnwrap(try FileByteReader(url: url).totalLength)
+        let reader = try OutageFileByteReader(url: url, cutoff: size / 2)
+        let decoder = FFmpegStreamDecoder(reader: reader)
+        let format = try decoder.open()
+        let decoded = decodeAll(decoder).count / format.channelCount
+        XCTAssertEqual(decoder.endReason, .failure, "a broken body must not read as the end of the stream")
+        XCTAssertGreaterThan(decoded, 0)
+        XCTAssertLessThan(decoded, Fixture.frameCount)
+
+        reader.heal()
+        let stoppedAt = Double(decoded) / format.sampleRate
+        let landed = try decoder.seek(toSeconds: stoppedAt)
+        XCTAssertEqual(landed, stoppedAt, accuracy: 0.01)
+        XCTAssertEqual(decoder.endReason, .running, "the seek did not clear the failed read")
+        let rest = decodeAll(decoder).count / format.channelCount
+        XCTAssertEqual(decoder.endReason, .eof)
+        XCTAssertEqual(Double(rest), Double(Fixture.frameCount) - stoppedAt * format.sampleRate, accuracy: 1)
+    }
+
     // MARK: - No Content-Length
 
     /// A seek into a chunked body whose connection broke is NOT the end of the stream: libavformat

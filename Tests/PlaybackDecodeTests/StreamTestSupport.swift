@@ -235,6 +235,41 @@ final class TruncatedFileByteReader: StreamByteReader {
     func clearInterrupt() { inner.clearInterrupt() }
 }
 
+/// A file reader whose reads fail with a transport error once they reach `cutoff`, until
+/// ``heal()``: a byte source that spent its retries in an outage, then a network that came back.
+final class OutageFileByteReader: StreamByteReader {
+    private let inner: FileByteReader
+    private let cutoff: Int64
+    private let lock = NSLock()
+    private var healed = false
+
+    init(url: URL, cutoff: Int64) throws {
+        self.inner = try FileByteReader(url: url)
+        self.cutoff = cutoff
+    }
+
+    func heal() { lock.lock(); healed = true; lock.unlock() }
+
+    var totalLength: Int64? { inner.totalLength }
+    var position: Int64 { inner.position }
+
+    func read(into buffer: UnsafeMutableRawPointer, maxLength: Int) throws -> Int {
+        lock.lock(); let isHealed = healed; lock.unlock()
+        guard !isHealed else { return try inner.read(into: buffer, maxLength: maxLength) }
+        let left = cutoff - inner.position
+        guard left > 0 else { throw URLError(.networkConnectionLost) }
+        return try inner.read(into: buffer, maxLength: min(maxLength, Int(left)))
+    }
+
+    func seek(to offset: Int64) throws { try inner.seek(to: offset) }
+
+    func cancel() { inner.cancel() }
+
+    func interrupt() { inner.interrupt() }
+
+    func clearInterrupt() { inner.clearInterrupt() }
+}
+
 /// A reader over an in-memory blob, for the garbage-input case.
 final class DataByteReader: StreamByteReader {
     private let data: Data

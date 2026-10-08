@@ -126,8 +126,10 @@ public final class FFmpegStreamDecoder {
     private let box: ReaderBox
     private var format: StreamAudioFormat?
     private var reason: EndReason = .running
-    /// What a seek reports once ``reason`` is `.failure`: the decoder is terminal, so it refuses
-    /// without touching the demuxer (a forward seek could otherwise "succeed" over a broken one).
+    /// What a seek reports once a seek has failed: the decoder is terminal, so it refuses without
+    /// touching the demuxer (a forward seek could otherwise "succeed" over a broken one). A failed
+    /// read sets no failure here: the demuxer is still positioned, and a seek is how a player
+    /// resumes it once the source is back.
     private var failure: StreamDecoderError?
     private var framesRead: Int64 = 0
     private var chunk: [Float] = []
@@ -388,9 +390,7 @@ public final class FFmpegStreamDecoder {
                 case Int32(STREAM_DECODE_EOF.rawValue): reason = .eof
                 case Int32(STREAM_DECODE_ERR_CANCELLED.rawValue): reason = .cancelled
                 case Int32(STREAM_DECODE_ERR_INTERRUPTED.rawValue): reason = .interrupted
-                default:
-                    reason = .failure
-                    failure = .failed(status: status)
+                default: reason = .failure
                 }
                 return 0
             }
