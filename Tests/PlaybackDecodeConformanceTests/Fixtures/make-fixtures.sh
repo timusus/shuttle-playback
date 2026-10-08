@@ -166,3 +166,31 @@ $FF -i "$TMP/s48.wav" -c:a libopus -b:a 32k -map_metadata -1 opus_stereo.mka
 $FF -i "$TMP/s44.wav" -c:a vorbis -strict -2 -b:a 48k -map_metadata -1 vorbis_stereo.webm
 
 ls -l *.mp3 *.m4a *.aac *.opus *.ogg *.flac *.wav *.aiff *.mka *.webm | awk '{print $5, $9}'
+
+# --- Fixtures of Tests/PlaybackDecodeTests/Fixtures (#43, #47) ----------------------------------
+# These four are written to ../../PlaybackDecodeTests/Fixtures, 1 to 3 s of plain sines (no sweep),
+# and are not covered by the conformance goldens. The Ogg pair is not byte-reproducible (random
+# stream serials).
+OUT=../../PlaybackDecodeTests/Fixtures
+tone() { # rate channels seconds out: 440 Hz left (and mono), 660 Hz right
+    if [ "$2" = 1 ]; then E="0.7*sin(2*PI*440*t)"; else E="0.7*sin(2*PI*440*t)|0.7*sin(2*PI*660*t)"; fi
+    $FF -f lavfi -i "aevalsrc=${E}:s=$1:d=$3" -c:a pcm_s16le "$4"
+}
+# Chained Ogg: two complete streams concatenated byte for byte, 3 s each. Vorbis changes the rate
+# (44.1 -> 48 kHz), Opus the channel count (mono -> stereo; Opus is always 48 kHz).
+tone 44100 2 3 "$TMP/c_v44.wav"; tone 48000 2 3 "$TMP/c_v48.wav"
+tone 48000 1 3 "$TMP/c_om.wav";  tone 48000 2 3 "$TMP/c_os.wav"
+$FF -i "$TMP/c_v44.wav" -c:a vorbis -strict -2 -b:a 48k -map_metadata -1 "$TMP/c_v44.ogg"
+$FF -i "$TMP/c_v48.wav" -c:a vorbis -strict -2 -b:a 48k -map_metadata -1 "$TMP/c_v48.ogg"
+$FF -i "$TMP/c_om.wav" -c:a libopus -b:a 32k -map_metadata -1 "$TMP/c_om.opus"
+$FF -i "$TMP/c_os.wav" -c:a libopus -b:a 32k -map_metadata -1 "$TMP/c_os.opus"
+cat "$TMP/c_v44.ogg" "$TMP/c_v48.ogg" > "$OUT/chained_vorbis_44k_48k.ogg"
+cat "$TMP/c_om.opus" "$TMP/c_os.opus" > "$OUT/chained_opus_mono_stereo.opus"
+
+# 5.1 FLAC, 16-bit 48 kHz, 1 s: one tone per channel in FLAC's order (FL 220, FR 330, FC 440,
+# LFE 550, BL 660, BR 770 Hz, each 0.15). The downmix test reads the levels back per tone.
+$FF -f lavfi -i "aevalsrc=0.15*sin(2*PI*220*t)|0.15*sin(2*PI*330*t)|0.15*sin(2*PI*440*t)|0.15*sin(2*PI*550*t)|0.15*sin(2*PI*660*t)|0.15*sin(2*PI*770*t):s=48000:d=1:c=5.1" \
+    -c:a flac -sample_fmt s16 -map_metadata -1 "$OUT/flac_51_48k.flac"
+# 192 kHz / 24-bit stereo FLAC, 0.5 s (a sine does not compress, so longer would pass 300 KB).
+$FF -f lavfi -i "aevalsrc=0.7*sin(2*PI*440*t)|0.7*sin(2*PI*660*t):s=192000:d=0.5" \
+    -c:a flac -sample_fmt s32 -bits_per_raw_sample 24 -map_metadata -1 "$OUT/flac_192k_24bit.flac"

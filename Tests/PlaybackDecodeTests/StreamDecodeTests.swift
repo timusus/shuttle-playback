@@ -181,6 +181,151 @@ final class StreamDecodeTests: XCTestCase {
         }
     }
 
+    // MARK: - Chained Ogg (#43)
+
+    /// Two Ogg streams concatenated byte for byte, 3 s each (`make-fixtures.sh`, last section): a
+    /// chain boundary brings new headers and, here, a new rate or channel count. The output stays at
+    /// the first stream's format, so the second stream is resampled or remixed to it.
+    private struct Chain {
+        let name: String
+        let rates: (Double, Double)
+        let channels: (Int, Int)
+        /// Where the second stream starts, in seconds of output.
+        let switchSeconds = 3.0
+        /// Encoder priming and padding at the boundary and the end, in output frames. The ffmpeg
+        /// Vorbis encoder pads each stream by up to ~1,000 frames; Opus is trimmed by its pre-skip.
+        let slack: Double
+        /// The second stream's RMS over the first's at the open format: stereo downmixed to mono is
+        /// 0.5 x (L + R), 1/sqrt(2) of the mono tone.
+        let secondLevel: Double
+    }
+
+    private let chains = [
+        Chain(name: "chained_vorbis_44k_48k.ogg", rates: (44100, 48000), channels: (2, 2), slack: 2048, secondLevel: 1),
+        Chain(name: "chained_opus_mono_stereo.opus", rates: (48000, 48000), channels: (1, 2), slack: 2048,
+              secondLevel: 0.5 * 2.0.squareRoot()),
+    ]
+
+    func testChainedOggDecodesBothStreamsAtTheOpenFormat() throws {
+        try skipUnlessAvailable()
+        for chain in chains {
+            let name = chain.name
+            let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: try Fixture.url(name)))
+            let format = try decoder.open()
+            XCTAssertEqual(format.sampleRate, chain.rates.0, name)
+            XCTAssertEqual(format.channelCount, chain.channels.0, name)
+            let pcm = decodeAll(decoder)
+            XCTAssertEqual(decoder.endReason, .eof, name)
+            XCTAssertEqual(pcm.count % format.channelCount, 0, "\(name): whole frames only")
+
+            let frames = pcm.count / format.channelCount
+            XCTAssertEqual(Double(frames), 6 * format.sampleRate, accuracy: chain.slack, "\(name): both streams, 3 s each")
+            XCTAssertEqual(decoder.mediaFramesRead, Int64(frames), name)
+
+            /* Both halves carry sound at the open rate: the second is not silent, dropped, or played
+             * at the wrong speed (the Vorbis pair's left channel is 440 Hz throughout). */
+            let rate = format.sampleRate
+            let channels = format.channelCount
+            let first = Int(0.5 * rate)..<Int(2.5 * rate)
+            let second = Int(3.5 * rate)..<Int(5.5 * rate)
+            let expected = rms(pcm, channels: channels, range: first)
+            XCTAssertGreaterThan(expected, 0.1, "\(name): first half is audible")
+            XCTAssertEqual(rms(pcm, channels: channels, range: second), expected * chain.secondLevel,
+                           accuracy: 0.05 * expected, "\(name): second half's level")
+            if chain.channels.0 == 2 {
+                /* The right channel's crossings are counted looser: at 48 kbps the Vorbis encoder
+                 * leaves a few extra ones on the 660 Hz tone. */
+                for range in [first, second] {
+                    XCTAssertEqual(pitch(pcm, channels: 2, channel: 0, range: range, rate: rate), 440, accuracy: 2, name)
+                    XCTAssertEqual(pitch(pcm, channels: 2, channel: 1, range: range, rate: rate), 660, accuracy: 8, name)
+                }
+            }
+        }
+    }
+
+    /// A fixed output format at a rate and channel count neither stream has still gets both streams
+    /// at that format, at the length they have.
+    func testChainedOggUnderASetOutputFormat() throws {
+        try skipUnlessAvailable()
+        for chain in chains {
+            let name = chain.name
+            let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: try Fixture.url(name)))
+            _ = try decoder.open()
+            try decoder.setOutputFormat(sampleRate: 32000, channelCount: 2)
+            let pcm = decodeAll(decoder)
+            XCTAssertEqual(decoder.endReason, .eof, name)
+            XCTAssertEqual(pcm.count % 2, 0, name)
+            XCTAssertEqual(Double(pcm.count / 2), 6 * 32000, accuracy: chain.slack * 32000 / 44100, "\(name): output length")
+
+            /* The second stream is stereo, 440 Hz left / 660 Hz right, whatever the first was. */
+            let check = {
+                XCTAssertEqual(self.pitch(pcm, channels: 2, channel: 0, range: 112_000..<176_000, rate: 32000), 440,
+                               accuracy: 2, "\(name): the second stream's left pitch")
+                XCTAssertEqual(self.pitch(pcm, channels: 2, channel: 1, range: 112_000..<176_000, rate: 32000), 660,
+                               accuracy: 8, "\(name): the second stream's right pitch")
+            }
+            if chain.channels.0 == 1 {
+                // #49: the stereo stream after the mono one comes out as its mono downmix on both channels.
+                XCTExpectFailure("#49: a stereo stream after a mono one decodes as dual mono", failingBlock: check)
+            } else {
+                check()
+            }
+        }
+    }
+
+    /// A seek into either half lands where it says: the audio after it is the clean decode's at the
+    /// reported time, once the resampler, started cold at the landing, has warmed up.
+    func testSeekIntoEitherHalfOfAChainedOggLandsWhereItSays() throws {
+        try skipUnlessAvailable()
+        for chain in chains {
+            let name = chain.name
+            let url = try Fixture.url(name)
+            let clean = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
+            let format = try clean.open()
+            let reference = decodeAll(clean)
+            let channels = format.channelCount
+            let rate = format.sampleRate
+
+            func check(_ target: Double) throws {
+                let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
+                _ = try decoder.open()
+                let landed = try decoder.seek(toSeconds: target)
+                XCTAssertEqual(landed, target, accuracy: 1 / rate, "\(name): seek to \(target)s")
+                let after = decodeAll(decoder)
+                /* Reading on from the landing reaches the end of the second stream, not the first's. */
+                XCTAssertEqual(Double(after.count / channels), (6 - landed) * rate, accuracy: chain.slack,
+                               "\(name): seek to \(target)s: frames after it")
+                guard after.count >= 8192 * channels else { return }
+                let warmup = Int(0.003 * rate)
+                let landedFrame = Int((landed * rate).rounded())
+                let span = 4096
+                var best = (lag: 0, error: Double.infinity)
+                for lag in -90...90 {
+                    let start = (landedFrame + warmup + lag) * channels
+                    guard start >= 0, start + span * channels <= reference.count else { continue }
+                    var sum = 0.0
+                    for i in 0..<(span * channels) {
+                        let d = Double(after[warmup * channels + i]) - Double(reference[start + i])
+                        sum += d * d
+                    }
+                    let error = (sum / Double(span * channels)).squareRoot()
+                    if error < best.error { best = (lag, error) }
+                }
+                XCTAssertLessThanOrEqual(abs(best.lag), 1, "\(name): seek to \(target)s: audio is \(best.lag) frames off")
+                XCTAssertLessThan(best.error, 0.05, "\(name): seek to \(target)s: RMS error \(best.error)")
+            }
+
+            for target in [0.5, 1.5] { try check(target) }
+            /* #48: a seek in the first stream's later part or the second stream never gets past the
+             * first stream's end. */
+            for target in [2.5, 3.4, 4.5, 5.5] {
+                XCTExpectFailure("#48: a seek in a chained Ogg never reaches the second stream") {
+                    do { try check(target) } catch { XCTFail("\(error)") }
+                }
+            }
+        }
+    }
+
     // MARK: - Parity against AVAssetReader
 
     func testDecodeMatchesAVAssetReader() throws {
