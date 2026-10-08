@@ -242,6 +242,8 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         defer { condition.unlock() }
         while true {
             let step = machine.read(maxLength: maxLength, now: clock.now)
+            // A read step's effects never defer work today. If one did, performUnlocked would drop
+            // the lock between this decision and condition.wait(), and a .park could miss its wake.
             performUnlocked(runLocked(step.effects))
             switch step.action {
             case .serve(let fileOffset, let count, let landed):
