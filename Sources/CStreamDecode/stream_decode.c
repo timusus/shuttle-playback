@@ -229,15 +229,58 @@ static int avio_read_packet(void *opaque, uint8_t *buf, int buf_size) {
     }
 }
 
+static int mp3_parse_header(const uint8_t *p, int *spf, int *bitrate, int *sample_rate,
+                            int *side_info_bytes);
+
+/*
+ * Where the audio ends (AVIO offset) when the Xing/Info frame at the head of the prologue declares
+ * a stream much shorter than the file, 0 when it does not (issue #50). mp3dec reads that as a
+ * concatenated file, drops the tag's frame count and with it the gapless end trim and the duration
+ * (mp3_parse_info_tag: "invalid concatenated file detected - using bitrate for duration", which
+ * is when the file exceeds the declared bytes by more than 1/16). media3 trusts the tag
+ * (XingSeeker.create only logs a size mismatch), so libavformat is shown a file that ends where
+ * the tag says the audio does, and the trailing bytes stay unread junk after the last frame.
+ */
+static int64_t mp3_declared_end(const StreamDecoder *d, int64_t size) {
+    int spf, br, sr, side;
+    int64_t limit = d->prologue_len - 4 < 2048 ? d->prologue_len - 4 : 2048;
+    for (int64_t p = 0; p <= limit; p++) {
+        if (!mp3_parse_header(d->prologue + p, &spf, &br, &sr, &side)) continue;
+        int64_t x = p + 4 + side;
+        if (x + 16 > d->prologue_len || (memcmp(d->prologue + x, "Info", 4) && memcmp(d->prologue + x, "Xing", 4))) {
+            return 0;   /* the first frame is the one a tag would be in */
+        }
+        uint32_t flags = ((uint32_t)d->prologue[x + 4] << 24) | ((uint32_t)d->prologue[x + 5] << 16)
+                       | ((uint32_t)d->prologue[x + 6] << 8) | d->prologue[x + 7];
+        int64_t bytes = (int64_t)(((uint32_t)d->prologue[x + 12] << 24) | ((uint32_t)d->prologue[x + 13] << 16)
+                                | ((uint32_t)d->prologue[x + 14] << 8) | d->prologue[x + 15]);
+        if ((flags & 3) != 3 || bytes <= 0) return 0;
+        int64_t excess = size - p - bytes;
+        return excess > bytes >> 4 ? p + bytes : 0;
+    }
+    return 0;
+}
+
+/* The size libavformat is told (AVIO offsets): the source's less the ID3v2 tag stepped over, ended
+ * where an Info/Xing frame says the audio does (see `mp3_declared_end`), and with a one-frame file's
+ * `phantom_len` appended. Negative when the source has no length. */
+static int64_t avio_size_seen(const StreamDecoder *d) {
+    int64_t size = d->cb.size(d->opaque);
+    if (size < 0) return size;
+    size -= d->base_offset;
+    int64_t end = mp3_declared_end(d, size);
+    return (end > 0 ? end : size) + d->phantom_len;
+}
+
 static int64_t avio_seek_packet(void *opaque, int64_t offset, int whence) {
     StreamDecoder *d = (StreamDecoder *)opaque;
     if (d->cancelled || d->interrupted) return AVERROR_EXIT;
 
     if (whence == AVSEEK_SIZE) {
-        int64_t size = d->cb.size(d->opaque);
+        int64_t size = avio_size_seen(d);
         /* ENOSYS is the documented "I do not know", and it is the ONLY honest answer for a source
          * with no length: a made-up size sends the mov demuxer seeking past the end. */
-        return size >= 0 ? size - d->base_offset + d->phantom_len : AVERROR(ENOSYS);
+        return size >= 0 ? size : AVERROR(ENOSYS);
     }
 
     int64_t target;
@@ -245,9 +288,9 @@ static int64_t avio_seek_packet(void *opaque, int64_t offset, int whence) {
         case SEEK_SET: target = offset; break;
         case SEEK_CUR: target = -1; break;   /* resolved below */
         case SEEK_END: {
-            int64_t size = d->cb.size(d->opaque);
+            int64_t size = avio_size_seen(d);
             if (size < 0) return AVERROR(ENOSYS);
-            target = (size - d->base_offset + d->phantom_len) + offset;
+            target = size + offset;
             break;
         }
         default: return AVERROR(EINVAL);
@@ -952,8 +995,8 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     }
     /* Kept for the byte-estimate seek: what the media occupies in bytes and how long it lasts. */
     {
-        int64_t total = d->cb.size(d->opaque);
-        d->media_bytes = total > d->base_offset ? total - d->base_offset : 0;
+        int64_t seen = avio_size_seen(d) - d->phantom_len;
+        d->media_bytes = seen > 0 ? seen : 0;
         d->media_duration = info->duration_sec;
     }
     snprintf(info->codec_name, sizeof(info->codec_name), "%s", avcodec_get_name(par->codec_id));
