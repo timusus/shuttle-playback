@@ -62,6 +62,11 @@ public enum StreamDecoderError: Error, Equatable, CustomStringConvertible {
     /// **Not terminal**: the decoder is still open, and the seek that follows clears it. When
     /// `open()` throws it, nothing was opened: the caller opens again, with a fresh decoder.
     case interrupted
+    /// ``FFmpegStreamDecoder/seek(toSeconds:)`` needed a position the reader refused with
+    /// ``StreamByteReaderError/unseekable`` (a forward-only source), so the stream is not
+    /// corrupt. Terminal for this decoder (its read position is unknown); open a new one over a
+    /// seekable source.
+    case unseekable
 
     public var description: String {
         switch self {
@@ -70,6 +75,7 @@ public enum StreamDecoderError: Error, Equatable, CustomStringConvertible {
         case let .failed(status): return "streaming decode failed, status \(status)"
         case .cancelled: return "streaming decode cancelled"
         case .interrupted: return "streaming decode interrupted for a seek"
+        case .unseekable: return "streaming decode: the source cannot seek"
         }
     }
 }
@@ -259,6 +265,9 @@ public final class FFmpegStreamDecoder {
             case Int32(STREAM_DECODE_ERR_INTERRUPTED.rawValue):
                 reason = .interrupted
                 throw StreamDecoderError.interrupted
+            case Int32(STREAM_DECODE_ERR_UNSEEKABLE.rawValue):
+                reason = .failure
+                throw StreamDecoderError.unseekable
             default:
                 reason = .failure
                 throw StreamDecoderError.failed(status: status)
@@ -450,6 +459,8 @@ private final class ReaderBox {
             return Int32(STREAM_READ_CANCELLED)
         } catch StreamByteReaderError.interrupted {
             return Int32(STREAM_READ_INTERRUPTED)
+        } catch StreamByteReaderError.unseekable {
+            return Int32(STREAM_READ_UNSEEKABLE)
         } catch {
             return Int32(STREAM_READ_ERROR)
         }

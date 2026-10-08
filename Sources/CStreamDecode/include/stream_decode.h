@@ -36,7 +36,10 @@ typedef enum {
     STREAM_DECODE_ERR_ARGS = 10,
     /* The caller asked for the current read to come back so it could seek. Unlike a cancel this is
      * not terminal: the decoder stays open and the next `stream_decoder_seek` clears it. */
-    STREAM_DECODE_ERR_INTERRUPTED = 11
+    STREAM_DECODE_ERR_INTERRUPTED = 11,
+    /* A seek needed a position the reader refused with `STREAM_READ_UNSEEKABLE` (a forward-only
+     * source). Not a broken stream; only returned by `stream_decoder_seek`. */
+    STREAM_DECODE_ERR_UNSEEKABLE = 12
 } StreamDecodeStatus;
 
 /**
@@ -54,6 +57,8 @@ typedef enum {
 /* The reader was interrupted so the caller could seek. Recoverable; see
  * `stream_decoder_interrupt`. */
 #define STREAM_READ_INTERRUPTED (-4)
+/* From `seek` only: the source cannot serve that offset (forward-only). */
+#define STREAM_READ_UNSEEKABLE  (-5)
 
 typedef struct {
     /** Copy up to `n` bytes at the current position into `buf`; advance by the count. */

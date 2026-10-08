@@ -74,6 +74,9 @@ struct StreamDecoder {
     /* Same shape as `cancelled`, opposite meaning: a read the caller wants back so it can seek,
      * after which the decoder carries on. Cleared by `stream_decoder_seek`. */
     volatile int interrupted;
+    /* The reader refused a seek as `STREAM_READ_UNSEEKABLE` since the last `stream_decoder_seek`
+     * began; lets that seek report "cannot seek" instead of a generic failure. */
+    int          unseekable;
     int64_t      bytes_read;
     /* The reader itself said end of stream (`STREAM_READ_EOF`) since the last reader seek.
      * libavformat reports a broken read as end of file too, and only this tells them apart. */
@@ -245,6 +248,7 @@ static int64_t avio_seek_packet(void *opaque, int64_t offset, int whence) {
     switch (rc) {
         case STREAM_READ_CANCELLED:   d->cancelled = 1; return AVERROR_EXIT;
         case STREAM_READ_INTERRUPTED: d->interrupted = 1; return AVERROR_EXIT;
+        case STREAM_READ_UNSEEKABLE:  d->unseekable = 1; return AVERROR(ESPIPE);
         default:                      return AVERROR(EIO);
     }
 }
@@ -2229,7 +2233,12 @@ static int mp3_anchor_in_reach(const StreamDecoder *d, int64_t gap) {
 int stream_decoder_seek(StreamDecoder *decoder, double seconds, double *landed_seconds) {
     if (!decoder || !landed_seconds) return STREAM_DECODE_ERR_ARGS;
     decoder->output_fixed = 1;
+    decoder->unseekable = 0;
     int status = seek_to(decoder, seconds, landed_seconds);
+    if (status != STREAM_DECODE_OK && status != STREAM_DECODE_EOF && decoder->unseekable
+        && status != STREAM_DECODE_ERR_CANCELLED && status != STREAM_DECODE_ERR_INTERRUPTED) {
+        status = STREAM_DECODE_ERR_UNSEEKABLE;
+    }
     if (status == STREAM_DECODE_OK || status == STREAM_DECODE_EOF) {
         decoder->position_frames = llround(*landed_seconds * decoder->out_rate);
     }

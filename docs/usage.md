@@ -113,6 +113,12 @@ bitrate, and the estimate is what comes back. If the stream ended at the target,
 normally and `endReason` is `.eof`. At a fixed output rate the first frame after a seek is within one
 output frame, not bit-identical to the uninterrupted decode.
 
+A forward-only source (a reader whose `seek(to:)` throws `StreamByteReaderError.unseekable`, such as
+an unknown-length chunked transcode) opens and decodes sequentially. A seek that needs a position it
+refuses throws `StreamDecoderError.unseekable`, distinct from `.failed(status:)` (a corrupt stream).
+The decoder has failed after it: `endReason` is `.failure` and reads return nothing, so open a new
+decoder over a seekable source. A seek that libavformat can serve from bytes it still holds succeeds.
+
 With a growing-file source, a seek past the frontier restarts the download at the target into a new
 file (a short hop ahead waits instead). Call `source.willSeek(generation:)` first only if you want the
 transaction paired with your seek in `snapshot` and events.
