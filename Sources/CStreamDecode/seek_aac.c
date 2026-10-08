@@ -3,8 +3,8 @@
  *
  * The demuxer places an AAC seek by its index (mov) or by bytes (ADTS); what is AAC's own is the
  * pre-roll an SBR stream needs, the codec that does not survive a flush, and time zero: after the
- * encoder priming a fragmented MP4 does not declare (issue #25) and after the frame the decoder
- * drops on its own (issue #63), as media3's Mp4Extractor puts it at the first sample left.
+ * encoder priming a fragmented MP4 does not declare and after the frame the decoder
+ * drops on its own, as media3's Mp4Extractor puts it at the first sample left.
  */
 #include <stdio.h>
 #include <string.h>
@@ -46,7 +46,7 @@ static int box_next(const uint8_t *buf, size_t end, size_t *pos, uint32_t *type,
 
 /*
  * Is this a fragmented MP4 (a `mvex` in the `moov`) whose audio `trak` has no edit list? Only then
- * is the missing priming skip the file's silence about it (issue #25): in a progressive file an
+ * is the missing priming skip the file's silence about it: in a progressive file an
  * edit list with media_time 0 is the encoder saying "no priming", and FFmpeg's public API cannot
  * tell that from no edit list at all. The answer comes from walking the box tree: moov, then each
  * trak's mdia/hdlr for the first 'soun' and its edts/elst. The bytes are the ones the demuxer has
@@ -104,8 +104,7 @@ static int mp4_fragmented_audio_without_elst(const StreamDecoder *d) {
 }
 
 /*
- * Encoder priming to drop from an MP4 AAC stream, for the packets whose edit list does not (issue
- * #25). The mov demuxer turns an edit list into skip-samples side data on the first packet; a
+ * Encoder priming to drop from an MP4 AAC stream, for the packets whose edit list does not. The mov demuxer turns an edit list into skip-samples side data on the first packet; a
  * fragmented file has none, and FFmpeg then plays the encoder's priming as audio, a beat of
  * silence or a smeared start. The count is, in order: the file's iTunSMPB atom, the codec's
  * reported initial padding, else the 1024 samples that are the least any AAC-LC encoder's first
@@ -131,7 +130,7 @@ static int mp4_aac_prime_skip(const StreamDecoder *d, const AVCodecParameters *p
 }
 
 /*
- * Samples the AAC decoder drops from the start of the first packet on its own (issue #63). It
+ * Samples the AAC decoder drops from the start of the first packet on its own. It
  * recognises a libfaac stream by the encoder string in the first frame's fill element and drops
  * that frame, 1024 samples, with no skip-samples side data to say so, so the first audio comes out
  * a frame after the first packet's timestamp. A throwaway decoder with AV_CODEC_FLAG2_SKIP_MANUAL
@@ -215,7 +214,7 @@ double sd_aac_audio_duration(const StreamDecoder *d, double duration_sec) {
         if (duration_sec < 0) duration_sec = 0;
     }
     if (d->aac.decoder_trim > 0 && duration_sec > 0) {
-        duration_sec -= (double)d->aac.decoder_trim * av_q2d(d->time_base);   /* the decoder's own trim is not audio either (issue #66) */
+        duration_sec -= (double)d->aac.decoder_trim * av_q2d(d->time_base);   /* the decoder's own trim is not audio either */
         if (duration_sec < 0) duration_sec = 0;
     }
     return duration_sec;

@@ -16,7 +16,7 @@
  * the page and labels the page's FIRST packet with that later time, and every packet after it
  * follows. On most pages the Vorbis and Opus parsers relabel from the page's granule and hide it; on
  * the last page (EOS set) they do not, and a seek to the end landed 25600 samples early while
- * labelled as the target (issue #6). Seeking to the earliest entry at that position labels the page
+ * labelled as the target. Seeking to the earliest entry at that position labels the page
  * truly.
  *
  * An Ogg seek also starts one page further back. The parsers trim the encoder padding off the last

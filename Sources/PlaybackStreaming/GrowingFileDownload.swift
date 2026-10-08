@@ -900,7 +900,7 @@ extension GrowingFileDownload {
         ///
         /// A gap ahead of the frontier is waited for only while the download closes it sooner than a
         /// new request would answer (`gap / rate < responseLatency`); otherwise the download restarts
-        /// at the position (issue #68). media3's `seekToUs` never waits on a seek its buffer cannot
+        /// at the position. media3's `seekToUs` never waits on a seek its buffer cannot
         /// serve: it cancels the loader and loads from the target.
         ///
         /// - Parameters:

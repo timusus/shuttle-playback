@@ -141,7 +141,7 @@ public final class FFmpegStreamDecoder {
     private let probeBudget: StreamProbeBudget
     private let forcesProbe: Bool
     /// True when ``open()`` skipped FFmpeg's stream-info probe because the header already described
-    /// a FLAC, ALAC or PCM WAV/AIFF stream (#21). A caller whose open turns out wrong can retry with
+    /// a FLAC, ALAC or PCM WAV/AIFF stream. A caller whose open turns out wrong can retry with
     /// `forcesProbe: true`.
     public private(set) var skippedProbe = false
     #if canImport(CStreamDecode)

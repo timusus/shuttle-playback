@@ -39,7 +39,7 @@ typedef struct {
     /* With no anchor: where the demuxer is asked to go, at or before the target. */
     int64_t seek_ts;
     /* AV_NOPTS_VALUE, or where the seek lands instead of the target: a FLAC frame further before the
-     * target than a seek may decode, which the decode runs on from (issue #42). */
+     * target than a seek may decode, which the decode runs on from. */
     int64_t land_at;
 } SeekPlan;
 
@@ -107,12 +107,12 @@ typedef struct {
 
 /* AAC (seek_aac.c). */
 typedef struct {
-    int     prime_skip;   /* MP4 AAC: encoder priming to drop when the file's own edit list does not (issue #25), else 0 */
+    int     prime_skip;   /* MP4 AAC: encoder priming to drop when the file's own edit list does not, else 0 */
     int64_t prime_start;  /* the timestamp of the packet that carries it */
     /* The stream has been seen to carry SBR (HE-AAC v1 or v2), by its parameters or by a frame the
      * codec decoded: an ADTS header says plain AAC-LC either way. Never cleared. */
     int     sbr;
-    /* What the decoder drops from the first packet on its own (issue #63), in time base units, else 0. */
+    /* What the decoder drops from the first packet on its own, in time base units, else 0. */
     int64_t decoder_trim;
 } AACSeekState;
 

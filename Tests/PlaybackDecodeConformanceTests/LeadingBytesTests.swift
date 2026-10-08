@@ -162,7 +162,7 @@ final class LeadingBytesTests: XCTestCase {
     /// MPEG 2.5 layer II at index 14 and 8 kHz is a 2880-byte frame, the longest the header parser
     /// accepts. Two of them chained, with a read that ends just short of the third header, leave the
     /// scan buffer holding more than one 1792-byte frame's worth of look-ahead; the next full read
-    /// then used to write past the end of it. Meaningful under `-Xswiftc -sanitize=address`.
+    /// must not write past the end of it. Meaningful under `-Xswiftc -sanitize=address`.
     func testChainedMaximumLengthMPEG25FramesDoNotOverrunTheScanBuffer() throws {
         let header: [UInt8] = [0xFF, 0xE5, 0xE8, 0xC0]
         let frame = 2880

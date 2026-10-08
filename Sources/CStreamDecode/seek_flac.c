@@ -1,5 +1,5 @@
 /*
- * seek_flac.c — how native FLAC seeks without a seek table (issue #38; see seek.h).
+ * seek_flac.c — how native FLAC seeks without a seek table (see seek.h).
  *
  * Every FLAC frame header says which frame it is, so a frame found at any byte is a frame of known
  * time: the seek interpolates between known frames to the one that holds the target, as media3's
@@ -286,7 +286,7 @@ static const int64_t kFLACNearBytes = 32 * 1024;
 /*
  * Find the frame of a FLAC stream with no seek table that holds `target` (stream time base), or
  * one at most `kFLACNearBytes` before it, by interpolation between frames whose place and time are
- * both known (issues #38, #42).
+ * both known.
  *
  * libavformat seeks such a stream by bisection over `flac_read_timestamp`, which reads the file's
  * tail for its last timestamp and buffers ten frames per probe through the parser, so it outruns
@@ -296,7 +296,7 @@ static const int64_t kFLACNearBytes = 32 * 1024;
  * narrows the bracket to the true time it finds. As media3's `FlacBinarySearchSeeker` (over
  * `BinarySearchSeeker`) does, the search runs until the bracket is small, not for a number of
  * probes: a fixed ten (and 128 KiB) ended a search from the end of a file across a quiet stretch
- * beside a loud one unplaced (issue #42). Where the bitrate changes slowly, interpolation converges
+ * beside a loud one unplaced. Where the bitrate changes slowly, interpolation converges
  * in a probe or two; where it jumps, or a tag after the last frame counts in the length, the
  * search bisects (see below), so it takes at most twice bisection's probes, each reading at most
  * two of the largest frames: at most 24 on a 100 MB file.
@@ -304,8 +304,8 @@ static const int64_t kFLACNearBytes = 32 * 1024;
  * Sets `*pos` and `*dts` to the frame, which the decode then runs on from, dropping what is before
  * the target. Where that frame is further before the target than `kSeekBudgetBytes` (a probe gave
  * up: a read failed, or no header could be believed), `*short_of` is set: the seek lands on the
- * frame and says so. The byte estimate it used to take landed on whatever frame followed its byte
- * and reported the time asked for, though the frame said which it was: seconds off. `*pos` stays
+ * frame and says so. A byte estimate would land on whatever frame followed its byte and report
+ * the time asked for, though the frame said which it was: seconds off. `*pos` stays
  * -1 when the stream is not native FLAC, has no length, or its first frame is not where its
  * metadata ends. Returns STREAM_DECODE_OK, or a cancel or an interruption.
  */
@@ -322,7 +322,7 @@ static int flac_frame_before(StreamDecoder *d, int64_t target, int64_t *pos, int
     if (want > total) want = total;
     /* FFmpeg's FLAC parser drops its buffer when a large tag follows a lone frame header, so a
      * seek that lands on one of the last frames (the one frame in it, with 160 KiB or more of
-     * tag after it) decodes nothing (issue #52). Two frames' worth earlier, the parser has the
+     * tag after it) decodes nothing. Two frames' worth earlier, the parser has the
      * headers that keep it. media3's FlacExtractor reads frames by header and CRC and has no
      * such lookahead; the cost here is two frames decoded and dropped. */
     if (total - want < 3 * (int64_t)si.max_blocksize) {
@@ -422,7 +422,7 @@ static int flac_estimate_anchor(StreamDecoder *d, double ratio, int64_t target, 
     int64_t want = av_rescale_q(target - d->start_time, d->time_base, per_sample);
     if (want < 0) want = 0;
     if (want > total) want = total;
-    if (total - want < 3 * (int64_t)si.max_blocksize) {   /* issue #52, as in flac_frame_before */
+    if (total - want < 3 * (int64_t)si.max_blocksize) {   /* as in flac_frame_before */
         want -= 2 * (int64_t)si.max_blocksize;
         if (want < 0) want = 0;
     }
@@ -453,7 +453,7 @@ static int flac_estimate_anchor(StreamDecoder *d, double ratio, int64_t target, 
 /* ── the seek strategy ───────────────────────────────────────────────────── */
 
 /* A frame further before the target than a seek may decode lands where it is, at the time its
- * header gives, rather than at the target with the audio elsewhere (issue #42). */
+ * header gives, rather than at the target with the audio elsewhere. */
 static int flac_place(StreamDecoder *d, int64_t target, SeekPlan *plan) {
     int short_of = 0;
     int rc = flac_frame_before(d, target, &plan->anchor_pos, &plan->anchor_dts, &short_of);
@@ -462,7 +462,7 @@ static int flac_place(StreamDecoder *d, int64_t target, SeekPlan *plan) {
 }
 
 /* Native FLAC never takes the byte estimate: it would report the target over audio from wherever
- * the byte falls (issue #54). */
+ * the byte falls. */
 static int flac_has_estimate_anchor(const StreamDecoder *d) {
     FLACInfo si;
     return flac_info(d, &si) && sd_can_estimate_bytes(d);

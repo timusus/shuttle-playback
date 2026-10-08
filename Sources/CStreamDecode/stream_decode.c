@@ -81,7 +81,7 @@ static int avio_read_packet(void *opaque, uint8_t *buf, int buf_size) {
 
 /*
  * Where the audio ends (AVIO offset) when the Xing/Info frame at the head of the prologue declares
- * a stream much shorter than the file, 0 when it does not (issue #50). mp3dec reads that as a
+ * a stream much shorter than the file, 0 when it does not. mp3dec reads that as a
  * concatenated file, drops the tag's frame count and with it the gapless end trim and the duration
  * (mp3_parse_info_tag: "invalid concatenated file detected - using bitrate for duration", which
  * is when the file exceeds the declared bytes by more than 1/16). media3 trusts the tag
@@ -375,7 +375,7 @@ static int is_mpeg_audio(enum AVCodecID codec_id) {
 }
 
 /* The demuxer has given the stream new parameters the open codec has not seen: the next link of a
- * chained Ogg Opus file (#49). FFmpeg 7.1's Ogg demuxer writes the new link's OpusHead (channel
+ * chained Ogg Opus file. FFmpeg 7.1's Ogg demuxer writes the new link's OpusHead (channel
  * count, mapping) to `codecpar` and nothing passes it to the codec, which would decode a stereo
  * link after a mono one as its mono downmix. A chained Vorbis link carries its headers in-band,
  * which the Vorbis decoder reads itself. Opus only: the LATM decoder rewrites its own extradata. */
@@ -673,7 +673,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     d->start_time = stream->start_time == AV_NOPTS_VALUE ? 0 : stream->start_time;
     /* The mov demuxer trims the edit list's start (skip-samples side data) but leaves the codec's
      * last frame whole, so the decode runs up to a frame past the duration the edit list declares
-     * (issue #13). AVAssetReader stops at that duration; so do we. */
+     * AVAssetReader stops at that duration; so do we. */
     if (d->fmt->iformat && d->fmt->iformat->name && strstr(d->fmt->iformat->name, "mov") &&
         stream->duration != AV_NOPTS_VALUE && stream->duration > 0) {
         d->end_pts = d->start_time + stream->duration;
@@ -700,7 +700,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
      *
      * A source with NO TOTAL LENGTH still gets the Xing duration: stock n7.1 mp3dec stored the
      * negative "unknown" `avio_size()` in a uint64_t and discarded the tag, which the local patch
-     * scripts/ffmpeg-patches/0001 fixes (issue #1). A length-less MP3 with no Xing tag reports 0,
+     * scripts/ffmpeg-patches/0001 fixes. A length-less MP3 with no Xing tag reports 0,
      * and the caller falls back to whatever duration it has from elsewhere. */
     if (d->fmt->duration != AV_NOPTS_VALUE) {
         info->duration_sec = (double)d->fmt->duration / (double)AV_TIME_BASE;
@@ -858,7 +858,7 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
      * and the caller's position follows the frame that is actually decoded, so the cost of taking
      * it is nothing this player can observe. */
     d->fmt->flags |= AVFMT_FLAG_FAST_SEEK;
-    /* With no total length, stop the MP4 header at the moov and mdat (issue #9). mov reads root
+    /* With no total length, stop the MP4 header at the moov and mdat. mov reads root
      * atoms until it has both AND the last one ends at `avio_size()` (mov.c mov_read_default); with
      * no size that never holds, so it skipped to the end of the mdat, read past the end of the
      * source for a next atom, and the first packet seeked back and read its 32 KiB again. IGNIDX
@@ -881,7 +881,7 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
          * only a seek arriving while the stream opens. */
         return d->interrupted ? STREAM_DECODE_ERR_INTERRUPTED : STREAM_DECODE_ERR_OPEN;
     }
-    /* Skipped when the header already describes a lossless stream (issue #21): the probe's
+    /* Skipped when the header already describes a lossless stream: the probe's
      * read-ahead is pure play-start latency there. `force_probe` restores the probe. */
     d->skipped_probe = 0;
     if (!(options && options->force_probe)) {
@@ -899,7 +899,7 @@ static int open_format(StreamDecoder *d, const StreamDecodeOptions *options) {
     (void)avformat_find_stream_info(d->fmt, NULL);
     /* Not when it was cut short, though: an interrupted probe leaves out what it had not reached,
      * an MP3's bitrate duration among it, and every later seek then takes another path and lands
-     * somewhere else (issue #5). Such an open fails, and opening again costs only the probe. */
+     * somewhere else. Such an open fails, and opening again costs only the probe. */
     if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
     if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
 
@@ -965,7 +965,7 @@ static int mp3_frame_length(const uint8_t *p, uint32_t *key) {
 }
 
 /*
- * A probe that finds no audio behind more than its budget of junk (issue #24): look past the
+ * A probe that finds no audio behind more than its budget of junk: look past the
  * budget for the first run of `kMP3ResyncChain` MPEG audio frames that follow each other, and open
  * there. A lone 0xFFE sync word in the junk does not chain, so it is not taken. Only runs after
  * a failed open, so a file that opens is read exactly as before.
@@ -1036,7 +1036,7 @@ need_more:
 }
 
 /*
- * A file that is one MPEG audio frame and nothing else (issue #51). mp3dec's header scan wants a
+ * A file that is one MPEG audio frame and nothing else. mp3dec's header scan wants a
  * second frame header after the first and fails the open when it reads end of file there ("Failed
  * to find two consecutive MPEG audio frames"); media3's Mp3Extractor plays it. The open is retried
  * with a copy of the frame appended to what libavformat sees; `phantom_len` makes the AVIO glue
@@ -1078,7 +1078,7 @@ static int reopen_single_frame_mp3(StreamDecoder *d, const StreamDecodeOptions *
  * mp3dec looks 64 KiB past its start for two consecutive frames and, finding none, takes byte 0 as
  * the start of the audio. Decoding still works, because the parser resyncs on the first real frame,
  * but every byte-based estimate is then wrong: the duration counts the junk as audio, and a seek
- * puts its bitrate guess inside the junk and plays from the start of the file (issue #2). The first
+ * puts its bitrate guess inside the junk and plays from the start of the file. The first
  * packet says where the audio really starts; reopening there gives the demuxer the file it should
  * have seen, with its duration and its seeks. Otherwise the packet is kept for the decoder, so
  * nothing is read twice.

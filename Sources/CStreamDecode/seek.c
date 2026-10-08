@@ -45,7 +45,7 @@ static void after_seek_reset(StreamDecoder *d) {
 }
 
 /*
- * Carry on after an interrupted read, as if it had never happened (issues #3 and #7).
+ * Carry on after an interrupted read, as if it had never happened.
  *
  * A seek to the frame the next read would have returned is a resume, and an ordinary seek is the
  * wrong tool for it: it lands on a packet boundary at or before the target and flushes the codec,
@@ -119,7 +119,7 @@ static int budgeted_seek(StreamDecoder *d, int64_t min_ts, int64_t ts, int64_t m
 
 /* The unbudgeted seek to the frame at or before `target`, the ladder's fallback. Like seek_to_byte,
  * it counts a reader seek that failed under it as the seek's failure: libavformat can drop a failed
- * `avio_seek` and report success, which would leave the demuxer where it was (issue #69). The count
+ * `avio_seek` and report success, which would leave the demuxer where it was. The count
  * is taken here, not once per placement, since the budgeted attempts before it fail on purpose. */
 static int seek_back_to(StreamDecoder *d, int64_t target) {
     int64_t failed = d->failed_seeks;
@@ -131,7 +131,7 @@ static int seek_back_to(StreamDecoder *d, int64_t target) {
  *
  * libavformat's byte seek (seek_frame_byte) ignores what `avio_seek` answers and reports success,
  * so a reader that refused the move would leave the demuxer where it was, and the decode would play
- * on from there labelled as the estimate (issue #69). A failed reader seek during it is the
+ * on from there labelled as the estimate. A failed reader seek during it is the
  * seek's failure, and a refusal (`unseekable`, already latched) is reported as such. */
 static int seek_to_byte(StreamDecoder *d, int64_t byte) {
     int64_t failed = d->failed_seeks;
@@ -211,7 +211,7 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
     int64_t preroll = av_rescale_q(seek_preroll_samples(decoder),
                                    (AVRational){ 1, decoder->sample_rate }, decoder->time_base);
 
-    /* Sample-accurate (issues #3 and #6). The demuxer is put down a pre-roll BEFORE the target and
+    /* Sample-accurate. The demuxer is put down a pre-roll BEFORE the target and
      * the decode runs forward from there, dropping what comes before the target and cutting the
      * frame that straddles it, so the next read starts on the requested sample and the codec has
      * converged by then. A demuxer only lands on what it can find: an Ogg page start (each about a
@@ -234,7 +234,7 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
          * file (12 MB measured). After two re-placements the landing stands, reported as it is. */
         int last = attempt >= 2;
         int from_start = from <= decoder->start_time;
-        /* From the first packet, which a decoder trim (issue #63) puts before time zero. */
+        /* From the first packet, which a decoder trim puts before time zero. */
         if (from_start) from = decoder->start_time - sd_aac_first_packet_trim(decoder);
         SeekPlan plan;
         int anchored = 0;
@@ -243,7 +243,7 @@ static int seek_to(StreamDecoder *decoder, double seconds, double *landed_second
 
         decoder->seek_from = from;
         /* A frame further before the target than a seek may decode lands where it is, at the time
-         * its header gives, rather than at the target with the audio elsewhere (FLAC, issue #42). */
+         * its header gives, rather than at the target with the audio elsewhere (FLAC). */
         int64_t land_at = plan.land_at != AV_NOPTS_VALUE ? plan.land_at : target;
         int status = land_exactly(decoder, land_at, anchored);
         if (status == STREAM_DECODE_OK && !from_start && !last && decoder->seek_first_pts != AV_NOPTS_VALUE
@@ -359,11 +359,11 @@ static int place_demuxer(StreamDecoder *decoder, double seconds, int64_t target,
     if (rc < 0 || walked) {
         if (decoder->cancelled) return STREAM_DECODE_ERR_CANCELLED;
         /* An interrupted seek is retried by the caller, and has to land where the uninterrupted
-         * one would: the byte estimate would land somewhere else (issue #5). */
+         * one would: the byte estimate would land somewhere else. */
         if (decoder->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
         if (format->has_estimate_anchor && format->has_estimate_anchor(decoder)) {
             /* A format that never takes the byte estimate (native FLAC: it would report the target
-             * over audio from wherever the byte falls, issue #54). The anchored seek failed (a read
+             * over audio from wherever the byte falls). The anchored seek failed (a read
              * error) or there was no anchor to place, so one bounded probe at the byte estimate
              * finds a frame whose time is known (`flac_estimate_anchor`) and the seek anchors on
              * it. Only when the probe finds no frame does the demuxer's own bisection, which reads
@@ -443,7 +443,7 @@ static int place_demuxer(StreamDecoder *decoder, double seconds, int64_t target,
         if (past_last_frame(decoder, status, seconds)) {
             /* The estimate fell past the last frame's start (an ADTS stream sought to just before
              * its declared end) and the stream ended with nothing decoded, though audio remains
-             * before that end. That is not the stream's end (issue #28). The demuxer's own seek
+             * before that end. That is not the stream's end. The demuxer's own seek
              * gets there exactly when it can within the budget. When it would walk further, or
              * cannot seek there at all, the estimate steps back and decodes on, from an eighth
              * of the budget and twice as far each time (media3's seekers step back so too), so

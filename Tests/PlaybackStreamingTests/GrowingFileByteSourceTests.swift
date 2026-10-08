@@ -585,8 +585,8 @@ final class GrowingFileByteSourceTests: XCTestCase {
     }
 
     /// The link drops mid-body and nothing answers for seconds (airplane mode). The three
-    /// attempts used to go in 0.7 s and the read failed, which the player took for the end of the
-    /// file. A connect nothing answered spends no attempt: the read waits out the outage, and the
+    /// attempts must not run out in 0.7 s and fail the read, which the player takes for the end of
+    /// the file. A connect nothing answered spends no attempt: the read waits out the outage, and the
     /// first request after it resumes the file from its frontier.
     func testAnOutageLongerThanTheRetriesIsWaitedOutAndResumesFromTheFrontier() throws {
         let body = makeBody(64 * 1024)

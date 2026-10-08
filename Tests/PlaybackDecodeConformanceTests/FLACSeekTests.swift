@@ -3,9 +3,9 @@ import XCTest
 
 @testable import PlaybackDecode
 
-/// A FLAC seek on a stream with no seek table (issue #38), beyond what `flac_stereo.flac`'s golden
+/// A FLAC seek on a stream with no seek table , beyond what `flac_stereo.flac`'s golden
 /// pins: that fixture is four seconds, so a far seek in a long file, where libavformat's bisection
-/// outruns the seek budget and the byte estimate is all a seek used to have, is generated here.
+/// outruns the seek budget and a byte estimate is all a seek has, is generated here.
 final class FLACSeekTests: XCTestCase {
 
     /// A file reader that counts what it serves and how often it is sent somewhere. With
@@ -222,7 +222,7 @@ final class FLACSeekTests: XCTestCase {
         try assertSeeksExactly(to: [25.5, 33.3, 21.0, 39.0, 55.123, 52.2], lookalikes: true)
     }
 
-    /// **A search that needs many probes still lands where it says (issue #42).**
+    /// **A search that needs many probes still lands where it says.**
     ///
     /// From near the end, 55.123 s lies across the quiet stretch at 40-50 s from the noise either
     /// side, and the bracket narrowed past ten probes. The search stopped there, unplaced, and the
@@ -231,10 +231,10 @@ final class FLACSeekTests: XCTestCase {
         try assertSeeksExactly(to: [59.9, 59.99, 55.123])
     }
 
-    /// **A FLAC followed by a very large tag lands where it says (issue #42).**
+    /// **A FLAC followed by a very large tag lands where it says.**
     ///
-    /// 256 KiB of zeros after the last frame counted in the byte estimate the search used to fall
-    /// back on, which landed seconds early while reporting the target. Once a probe has found no
+    /// 256 KiB of zeros after the last frame counted in a byte estimate would land seconds early
+    /// while reporting the target. Once a probe has found no
     /// frame after it, the bytes before it are not all audio, so the search bisects rather than
     /// interpolating into the tag again: about eight probes from the end on this file, so it is
     /// allowed twice the usual probing.

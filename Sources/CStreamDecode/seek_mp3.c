@@ -137,7 +137,7 @@ static const uint32_t kMP3SameStreamMask = 0xFFFEFCC0u;
  * An MP3 frame carries no timestamp. `mp3_seek` places a seek by the Xing TOC or by bitrate,
  * syncs to the next frame after that byte and labels the frame with the time it was ASKED for
  * (or, with an Info frame count, a rounded share of it), not the time of the frame it found
- * (issue #3). In a constant-bitrate stream the frame's index follows from its byte offset: frames
+ * In a constant-bitrate stream the frame's index follows from its byte offset: frames
  * after the first are spf * bitrate / (8 * rate) bytes long on average and padding keeps each
  * within one byte of that, so the offset from the end of the first frame, divided and rounded, counts them exactly
  * (the first frame is measured, not assumed, because it is the one an encoder cuts short). A
@@ -214,7 +214,7 @@ static int mp3_frame_of(uint32_t h, MP3Frame *f) {
  * Whether a stream with no tag frame can be taken for constant-bitrate: the frames from the first
  * on that the prologue holds (at least three) are all the first frame's twin. Nothing else in such a
  * file says so. A VBR file that opens at one bitrate and moves on shows it within a few frames; one
- * that does not is beyond what a seek can know, and gets no more than an estimate (issue #16).
+ * that does not is beyond what a seek can know, and gets no more than an estimate.
  */
 static int mp3_prologue_is_cbr(const StreamDecoder *d) {
     int frames = 0;
@@ -377,7 +377,7 @@ static int64_t mp3_preroll_samples(const StreamDecoder *d) {
  * rather than seek by estimate.
  *
  * A constant-bitrate stream lands exactly by its estimate (see `mp3_exact_dts`), so its anchors only
- * serve the first second or so. A VBR stream has no exact landing but this one (issue #3): a Xing
+ * serve the first second or so. A VBR stream has no exact landing but this one: a Xing
  * TOC places a time to 1/256 of the file and a bitrate guess worse, and mp3dec labels the frame it
  * finds there with the time asked for. Nothing in an MP3 frame says what time it is, so the only
  * true time is one counted frame by frame from a frame whose time is known. That count is taken

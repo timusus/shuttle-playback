@@ -521,7 +521,7 @@ final class StreamDecodeTests: XCTestCase {
     /// **A frame with no timestamp after a seek is timed from where the seek went.**
     ///
     /// The pre-roll before a seek's target is dropped by the frames' timestamps. A frame with none
-    /// used to switch the drop off, so the whole pre-roll (16384 samples here) was played and
+    /// must not switch the drop off, or the whole pre-roll (16384 samples here) is played and
     /// reported as the target. No demuxer in this build hands out an untimed packet after a seek,
     /// so the test strips them all.
     func testAFrameWithNoTimestampAfterASeekIsTimedFromWhereTheSeekWent() throws {
