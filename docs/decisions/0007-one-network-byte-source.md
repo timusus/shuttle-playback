@@ -30,7 +30,8 @@ keeps one recovery layer. What Shuttle2 needed that is generic went into `Growin
 ## Consequences
 
 - Music is downloaded whole, which costs cellular data on a track that is only sampled. Whether that
-  is acceptable is measured first in shuttle2#958.
+  is acceptable is measured first in shuttle2#958. (It was not: ADR-0013 caps the read-ahead on
+  expensive paths.)
 - The single 1 GiB cache of ADR-0003 is now per store: the default store keeps 1 GiB, and an owner
   that needs a different ceiling makes its own.
 

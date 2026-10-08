@@ -26,6 +26,9 @@ import PlaybackDecode
 ///   chain from the requested URL once with the generous wait.
 /// - A new network path (``GrowingFilePathMonitor``) ends a transaction still on the network at
 ///   once, as a drop the retry above decides on, instead of leaving it to the idle timeout.
+/// - With a ``GrowingFileReadAhead``, on an expensive or constrained path, the request is cancelled
+///   once the frontier is that far ahead of the decoder and resumed as above, with nothing spent,
+///   when the decoder is within half of it (ADR-0013).
 /// - A transaction whose answer says the resource ends exactly at its base or resume point (`416` with
 ///   `bytes */N`, or a range clamped to the last byte) is a zero-length open, as in media3: the
 ///   length is learned and the read is at its end (``GrowingFileDownload/totalEndingAt(_:status:contentRange:)``).

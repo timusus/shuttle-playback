@@ -104,6 +104,12 @@ while let chunk = decoder.nextChunk() { /* schedule it */ }
   `store.completedFile(for: url)` and play that with `FileByteReader`. If the URL carries a
   per-session token, pass `cacheKey:` (the URL without it) to the source and to `completedFile(for:)`. Call `sweepPartials()` at launch,
   and give each owner (podcasts, music) its own store so one cannot evict the other's files.
+- **Cellular data.** By default a source downloads the whole file on any network. Pass
+  `readAhead: GrowingFileReadAhead(bytes:)` to cap it while the path is expensive or in Low Data
+  Mode: the source stops that many bytes ahead of the decoder and resumes from where it stopped at
+  half of it. Convert from seconds with the stream's bitrate; Shuttle2 passes 60 s worth
+  (`bitrate / 8 * 60`). Wi-Fi, and a host that ignores ranges, still download whole, and a file
+  played to the end is cached as before ([ADR-0013](decisions/0013-read-ahead-on-expensive-paths.md)).
 - **Seeking to exactly the end** reads zero bytes even before the length is known, as media3's
   `DefaultHttpDataSource` does with the host's `416 bytes */N`.
 

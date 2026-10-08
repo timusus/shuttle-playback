@@ -12,8 +12,8 @@ private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback
 /// (``GrowingFileByteSource``) to carry out in order: open a file, send a request, cancel a task,
 /// schedule a timer, wake a parked read, hand an event out. A read gets a ``ReadStep``: serve from
 /// the file, park, end, or fail. Every rule of the source lives here: the read rule (``ReadRule``),
-/// the retry budget (``Retry``), resume or restart, the redirect chain's remembered end, the seek
-/// generation a transaction carries, the measured rate.
+/// the retry budget (``Retry``), resume or restart, the read-ahead pause, the redirect chain's
+/// remembered end, the seek generation a transaction carries, the measured rate.
 ///
 /// No lock, task, file or clock: times come in with each event, and every transition is driven by
 /// a test with literal numbers. The adapter holds the one lock around every call.
