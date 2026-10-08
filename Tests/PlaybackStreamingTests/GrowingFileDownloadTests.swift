@@ -217,11 +217,15 @@ struct GrowingFileDownloadTests {
 /// Carries out ``GrowingFileDownload``'s effects as the adapter would, minus the lock, files and
 /// network: an open always succeeds, a timer goes on the manual clock, requests and events are
 /// recorded, and every effect lands in `log`.
-private final class Harness {
+final class Harness {
     static let url = URL(string: "https://host.example/episode.mp3")!
 
     let clock = ManualGrowingFileClock()
-    var machine = GrowingFileDownload(url: Harness.url)
+    var machine: GrowingFileDownload
+
+    init(readAhead: Int64? = nil) {
+        machine = GrowingFileDownload(url: Harness.url, readAhead: readAhead)
+    }
     private(set) var requests: [GrowingFileDownload.Request] = []
     private(set) var events: [GrowingFileEvent] = []
     private(set) var log: [GrowingFileDownload.Effect] = []
@@ -299,6 +303,10 @@ private final class Harness {
 
     func pathChanged() {
         run(machine.pathChanged(now: now))
+    }
+
+    func pathCost(isExpensive: Bool) {
+        run(machine.pathCost(isExpensive: isExpensive, now: now))
     }
 
     /// A transaction at 0 of a 100000-byte resource, 100 bytes read, then dropped: its retry is

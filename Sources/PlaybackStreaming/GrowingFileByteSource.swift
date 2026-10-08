@@ -144,30 +144,34 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     ///   - connectionPolicy: extra headers and the leaf certificates the user trusted for `url`'s origin; nil
     ///     (the default) is the system's trust and no extra headers. Like `authHeaders`, its headers
     ///     are sent only to that origin, never to another one a redirect lands on.
+    ///   - readAhead: how far the download may run ahead of the decoder while the network path is
+    ///     expensive or constrained (ADR-0013); nil (the default) downloads the whole file on any path.
     ///   - onEvent: the `transaction`/`download` events.
     public convenience init(
         url: URL,
         authHeaders: [String: String],
         cacheKey: URL? = nil,
         connectionPolicy: GrowingFileConnectionPolicy? = nil,
+        readAhead: GrowingFileReadAhead? = nil,
         store: GrowingFileStore = .shared,
         session: URLSession = GrowingFileByteSource.sharedSession,
         onEvent: ((GrowingFileEvent) -> Void)? = nil
     ) {
         self.init(
             url: url, authHeaders: authHeaders, cacheKey: cacheKey, connectionPolicy: connectionPolicy,
-            store: store, session: session, clock: SystemGrowingFileClock.shared, onEvent: onEvent
+            readAhead: readAhead, store: store, session: session, clock: SystemGrowingFileClock.shared, onEvent: onEvent
         )
     }
 
     /// - Parameters:
     ///   - clock: a test's steps through backoffs and windows; the system's otherwise.
-    ///   - pathMonitor: a test's path changes; the shared `NWPathMonitor`'s otherwise.
+    ///   - pathMonitor: a test's paths; the shared `NWPathMonitor`'s otherwise.
     init(
         url: URL,
         authHeaders: [String: String],
         cacheKey: URL? = nil,
         connectionPolicy: GrowingFileConnectionPolicy? = nil,
+        readAhead: GrowingFileReadAhead? = nil,
         store: GrowingFileStore = .shared,
         session: URLSession = GrowingFileByteSource.sharedSession,
         clock: GrowingFileClock,
@@ -182,11 +186,16 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         self.session = session
         self.clock = clock
         self.pathMonitor = pathMonitor
-        self.machine = GrowingFileDownload(url: url)
+        self.machine = GrowingFileDownload(url: url, readAhead: readAhead?.bytes)
         self.onEvent = onEvent
         super.init()
-        let observer = pathMonitor.addObserver { [weak self] in self?.networkPathChanged() }
-        locked { pathObserver = observer }
+        let observer = pathMonitor.addObserver { [weak self] path, isChange in
+            self?.networkPathUpdated(path, isChange: isChange)
+        }
+        locked {
+            pathObserver = observer
+            if let path = pathMonitor.path { _ = machine.pathCost(isExpensive: Self.costs(path), now: clock.now) }
+        }
     }
 
     // MARK: - Published state
@@ -391,8 +400,17 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         condition.lock()
     }
 
-    private func networkPathChanged() {
-        perform(locked { runLocked(machine.pathChanged(now: clock.now)) })
+    /// A change reopens a transaction still on the network; every path sets whether the read-ahead
+    /// cap applies.
+    private func networkPathUpdated(_ path: GrowingFilePathMonitor.Path, isChange: Bool) {
+        perform(locked {
+            let changed = isChange ? runLocked(machine.pathChanged(now: clock.now)) : []
+            return changed + runLocked(machine.pathCost(isExpensive: Self.costs(path), now: clock.now))
+        })
+    }
+
+    private static func costs(_ path: GrowingFilePathMonitor.Path) -> Bool {
+        path.isExpensive || path.isConstrained
     }
 
     private func request(for target: URL, from base: Int64) -> URLRequest {

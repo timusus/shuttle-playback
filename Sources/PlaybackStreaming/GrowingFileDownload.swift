@@ -132,6 +132,11 @@ struct GrowingFileDownload {
         var lastByteAt: TimeInterval = 0
         /// An idle check is scheduled; one at a time.
         var idleCheckPending = false
+        /// The read-ahead cap cancelled the request (ADR-0013): `ended`, though nothing failed, until
+        /// a resume from the frontier once the decoder comes within half the cap.
+        var paused = false
+        /// The rate measured when it paused, which the read rule goes on using while no bytes arrive.
+        var rateAtPause: Double?
         var frontier: Int64 { base + (sniffPending || !hasFile ? 0 : written) }
     }
 
@@ -188,9 +193,14 @@ struct GrowingFileDownload {
     /// read fails instead of asking again.
     private var readOpened = false
     private var effects: [Effect] = []
+    /// How far the frontier may run ahead of the decoder while the path is expensive; nil is no cap.
+    let readAhead: Int64?
+    /// The network path is expensive or constrained: the read-ahead cap applies.
+    private(set) var pathIsExpensive = false
 
-    init(url: URL) {
+    init(url: URL, readAhead: Int64? = nil) {
         self.url = url
+        self.readAhead = readAhead
     }
 
     // MARK: - Published state
@@ -263,8 +273,12 @@ struct GrowingFileDownload {
         let action = ReadRule.action(
             position: offset, base: tx.base, frontier: tx.frontier, totalLength: tx.totalLength,
             isComplete: tx.isComplete, isProbing: isProbing, rangeIgnored: rangeIgnored,
-            downloadBytesPerSecond: downloadBytesPerSecond(now: now), responseLatency: responseLatency
+            downloadBytesPerSecond: tx.paused ? tx.rateAtPause : downloadBytesPerSecond(now: now),
+            responseLatency: responseLatency
         )
+        if tx.paused, action == .serve || action == .wait, let readAhead, tx.frontier - offset <= readAhead / 2 {
+            resume(now: now)
+        }
         switch action {
         case .serve:
             let count = Int(min(Int64(maxLength), tx.frontier - offset))
@@ -453,14 +467,42 @@ struct GrowingFileDownload {
             start(at: offset, seekGeneration: nil, retrying: true)
             return
         }
+        resume(now: now)
+    }
+
+    /// Asks for the current transaction's file from its frontier on, with `If-Range`, in the same
+    /// transaction: a retry's resume, or the end of a read-ahead pause. A fresh attempt with the
+    /// retry's short wait; nothing answering it starts the link window from when it went out.
+    private mutating func resume(now: TimeInterval) {
+        guard let tx = current else { return }
         let from = tx.frontier
         current?.ended = false
+        current?.paused = false
+        current?.rateAtPause = nil
         current?.answered = false
         current?.resumeAt = from
         current?.remembered = finalURL != nil
         send(from: from, ifRange: tx.entityTag, retrying: true, now: now)
         let decoder = offset
         downloadLog.info("download: resume gen=\(tx.generation) at=\(from) decoder=\(decoder)")
+    }
+
+    /// The read-ahead cap applies: a cap was given, the path costs, and a resume would not be
+    /// answered from byte 0 (a host that ignores ranges downloads whole).
+    private var isCapped: Bool { readAhead != nil && pathIsExpensive && !rangeIgnored }
+
+    /// Cancels the request once the frontier is the read-ahead ahead of the decoder. No failure:
+    /// nothing is spent and no timer starts; the file stays, and a read resumes it (``read(maxLength:now:)``).
+    private mutating func pauseIfFarAhead(now: TimeInterval) {
+        guard isCapped, let readAhead, let tx = current, !tx.ended else { return }
+        guard tx.frontier - offset >= readAhead, tx.totalLength.map({ tx.frontier < $0 }) ?? true else { return }
+        current?.ended = true
+        current?.paused = true
+        let rate = downloadBytesPerSecond(now: now)
+        current?.rateAtPause = rate
+        effects.append(.cancelTask)
+        let decoder = offset
+        downloadLog.info("download: pause gen=\(tx.generation) at=\(tx.frontier) decoder=\(decoder)")
     }
 
     /// The current transaction's next request, and its wait for a response: ``target(retrying:)``'s,
@@ -547,6 +589,14 @@ struct GrowingFileDownload {
     mutating func pathChanged(now: TimeInterval) -> [Effect] {
         guard !cancelled, let tx = current, !tx.ended, !tx.isComplete, tx.frontier != tx.totalLength else { return [] }
         end("path_changed at=\(tx.frontier)", retryable: true, pathChanged: true, now: now)
+        return takeEffects()
+    }
+
+    /// The path's cost, on every path the monitor reports. A paused transaction resumes at once
+    /// on a path that no longer costs; one that costs pauses at its next chunk.
+    mutating func pathCost(isExpensive: Bool, now: TimeInterval) -> [Effect] {
+        pathIsExpensive = isExpensive
+        if !cancelled, !isCapped, current?.paused == true { resume(now: now) }
         return takeEffects()
     }
 
@@ -731,6 +781,7 @@ struct GrowingFileDownload {
             lastDownloadEventAt = now
             effects.append(.emit(.download(frontier: frontier, downloadBytesPerSecond: downloadBytesPerSecond(now: now), complete: false)))
         }
+        pauseIfFarAhead(now: now)
         effects.append(.wake)
         return takeEffects()
     }
