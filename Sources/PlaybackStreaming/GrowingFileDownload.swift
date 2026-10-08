@@ -135,7 +135,7 @@ struct GrowingFileDownload {
         /// The read-ahead cap cancelled the request (ADR-0013): `ended`, though nothing failed, until
         /// a resume from the frontier once the decoder comes within half the cap.
         var paused = false
-        /// The rate measured when it paused, which the read rule goes on using while no bytes arrive.
+        /// The rate measured when it paused, which the read rule goes on using until the resumed request delivers.
         var rateAtPause: Double?
         /// The host answered this transaction's range with a `206` from its base.
         var rangeHonoured = false
@@ -278,7 +278,7 @@ struct GrowingFileDownload {
         let action = ReadRule.action(
             position: offset, base: tx.base, frontier: tx.frontier, totalLength: tx.totalLength,
             isComplete: tx.isComplete, isProbing: isProbing, rangeIgnored: rangeIgnored,
-            downloadBytesPerSecond: tx.paused ? tx.rateAtPause : downloadBytesPerSecond(now: now),
+            downloadBytesPerSecond: tx.rateAtPause ?? downloadBytesPerSecond(now: now),
             responseLatency: responseLatency
         )
         if tx.paused, action == .serve || action == .wait, let readAhead, tx.frontier - offset <= readAhead / 2 {
@@ -483,7 +483,6 @@ struct GrowingFileDownload {
         let from = tx.frontier
         current?.ended = false
         current?.paused = false
-        current?.rateAtPause = nil
         current?.answered = false
         current?.resumeAt = from
         current?.remembered = finalURL != nil
@@ -773,6 +772,7 @@ struct GrowingFileDownload {
         }
         current?.written += Int64(count)
         current?.lastByteAt = now
+        current?.rateAtPause = nil
         if tx.sniffPending, tx.written + Int64(count) >= Int64(GrowingFileByteSource.sniffBytes) {
             guard let bytes = head(), Self.isMedia(mimeType: nil, head: bytes) == true else {
                 end("not audio: body sniff", retryable: tx.remembered, refused: true, now: now)

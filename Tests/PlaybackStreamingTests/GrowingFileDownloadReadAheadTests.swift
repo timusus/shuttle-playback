@@ -83,8 +83,20 @@ struct GrowingFileDownloadReadAheadTests {
         #expect(h.machine.downloadBytesPerSecond(now: h.now) == 0, "the measured rate has decayed")
         #expect(throws: Never.self) { try h.machine.seek(to: 150_000) }
         #expect(h.read() == .park)
-        #expect(h.opens == 1, "the seek restarted")
+        #expect(h.opens == 1, "the seek did not restart")
         #expect(h.requests.last == h.request(2, from: 100_000, ifRange: "\"v1\""))
+    }
+
+    @Test("the rate from before the pause holds until the resumed request delivers, across wakes")
+    func theRateHoldsUntilTheResumedRequestDelivers() {
+        let h = started(bytes: 100_000)
+        h.clock.advance(by: 120)
+        #expect(throws: Never.self) { try h.machine.seek(to: 150_000) }
+        #expect(h.read() == .park)
+        h.clock.advance(by: 0.1)
+        #expect(h.read() == .park)
+        #expect(h.opens == 1, "the second wake restarted the resume")
+        #expect(h.requests.count == 2)
     }
 
     @Test("(e) on a cheap path the file downloads whole; a move to a cheap path resumes a pause at once")
