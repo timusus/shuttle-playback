@@ -1,6 +1,10 @@
 # StreamDecodeTests fixtures
 
-Three encodings of the same 20 s signal, 161 KB each, **committed**. A decoder that needs a large
+Three encodings of the same 20 s signal (`tone.mp3`, `tone_moov_first.m4a`, `tone_moov_last.m4a`),
+161 KB each, **committed**, plus the mid-stream-change fixtures below: the three `stitch_*` MP3s, the
+chained Ogg pair (`chained_vorbis_44k_48k.ogg`, 44.1 to 48 kHz; `chained_opus_mono_stereo.opus`,
+mono then stereo; 3 s per stream) and the two FLACs (`flac_51_48k.flac`, 5.1 downmix levels;
+`flac_192k_24bit.flac`, 192 kHz/24-bit). The conformance suite skips all of them. A decoder that needs a large
 real-world file handed to it before it can be tested is a decoder nobody runs the tests for.
 
 The signal is a sum of two sines — 440 Hz left, 660 Hz right — under a 0.05 Hz amplitude sweep, so

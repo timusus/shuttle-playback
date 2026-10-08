@@ -258,7 +258,7 @@ final class StreamDecodeTests: XCTestCase {
             XCTAssertEqual(Double(pcm.count / 2), 6 * 32000, accuracy: chain.slack * 32000 / 44100, "\(name): output length")
 
             /* The second stream is stereo, 440 Hz left / 660 Hz right, whatever the first was. */
-            let check = {
+            let pitches = {
                 XCTAssertEqual(self.pitch(pcm, channels: 2, channel: 0, range: 112_000..<176_000, rate: 32000), 440,
                                accuracy: 2, "\(name): the second stream's left pitch")
                 XCTAssertEqual(self.pitch(pcm, channels: 2, channel: 1, range: 112_000..<176_000, rate: 32000), 660,
@@ -266,9 +266,9 @@ final class StreamDecodeTests: XCTestCase {
             }
             if chain.channels.0 == 1 {
                 // #49: the stereo stream after the mono one comes out as its mono downmix on both channels.
-                XCTExpectFailure("#49: a stereo stream after a mono one decodes as dual mono", failingBlock: check)
+                XCTExpectFailure("#49: a stereo stream after a mono one decodes as dual mono", failingBlock: pitches)
             } else {
-                check()
+                pitches()
             }
         }
     }
@@ -286,15 +286,30 @@ final class StreamDecodeTests: XCTestCase {
             let channels = format.channelCount
             let rate = format.sampleRate
 
-            func check(_ target: Double) throws {
+            func check(_ target: Double, framesBroken: Bool, landingBroken: Bool = false) throws {
                 let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
                 _ = try decoder.open()
                 let landed = try decoder.seek(toSeconds: target)
-                XCTAssertEqual(landed, target, accuracy: 1 / rate, "\(name): seek to \(target)s")
+                let landing = {
+                    XCTAssertEqual(landed, target, accuracy: 1 / rate, "\(name): seek to \(target)s")
+                }
+                if landingBroken {
+                    XCTExpectFailure("#48: a seek in a chained Ogg lands at the first stream's end", failingBlock: landing)
+                } else {
+                    landing()
+                }
                 let after = decodeAll(decoder)
-                /* Reading on from the landing reaches the end of the second stream, not the first's. */
-                XCTAssertEqual(Double(after.count / channels), (6 - landed) * rate, accuracy: chain.slack,
-                               "\(name): seek to \(target)s: frames after it")
+                /* Reading on from the landing reaches the end of the second stream, not the first's.
+                 * #48: after a seek past the first stream's end it does not. */
+                let frames = {
+                    XCTAssertEqual(Double(after.count / channels), (6 - landed) * rate, accuracy: chain.slack,
+                                   "\(name): seek to \(target)s: frames after it")
+                }
+                if framesBroken {
+                    XCTExpectFailure("#48: a seek in a chained Ogg never reaches the second stream", failingBlock: frames)
+                } else {
+                    frames()
+                }
                 guard after.count >= 8192 * channels else { return }
                 let warmup = Int(0.003 * rate)
                 let landedFrame = Int((landed * rate).rounded())
@@ -315,13 +330,11 @@ final class StreamDecodeTests: XCTestCase {
                 XCTAssertLessThan(best.error, 0.05, "\(name): seek to \(target)s: RMS error \(best.error)")
             }
 
-            for target in [0.5, 1.5] { try check(target) }
+            for target in [0.5, 1.5] { try check(target, framesBroken: false) }
             /* #48: a seek in the first stream's later part or the second stream never gets past the
              * first stream's end. */
             for target in [2.5, 3.4, 4.5, 5.5] {
-                XCTExpectFailure("#48: a seek in a chained Ogg never reaches the second stream") {
-                    do { try check(target) } catch { XCTFail("\(error)") }
-                }
+                try check(target, framesBroken: true, landingBroken: target > 3)
             }
         }
     }
