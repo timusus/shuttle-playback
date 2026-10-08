@@ -255,6 +255,9 @@ static int64_t mp3_declared_end(const StreamDecoder *d, int64_t size) {
         int64_t bytes = (int64_t)(((uint32_t)d->prologue[x + 12] << 24) | ((uint32_t)d->prologue[x + 13] << 16)
                                 | ((uint32_t)d->prologue[x + 14] << 8) | d->prologue[x + 15]);
         if ((flags & 3) != 3 || bytes <= 0) return 0;
+        /* A count that cannot even hold the tag frame, or that runs past the file, is corrupt. */
+        int64_t frame_len = (int64_t)spf / 8 * br / sr;
+        if (bytes < p + frame_len || (size > 0 && bytes > size)) return 0;
         int64_t excess = size - p - bytes;
         return excess > bytes >> 4 ? p + bytes : 0;
     }
