@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 6144,
   "channels" : 2,
+  "durationAtEofS" : 1.003,
   "durationS" : 1,
   "expect" : "decodes",
   "fixture" : "sample_opus.mp4",

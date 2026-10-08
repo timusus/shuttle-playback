@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 137216,
   "channels" : 1,
+  "durationAtEofS" : 1.0681179138321995,
   "durationS" : 1.07,
   "expect" : "decodes",
   "fixture" : "sample_fragmented.mp4",

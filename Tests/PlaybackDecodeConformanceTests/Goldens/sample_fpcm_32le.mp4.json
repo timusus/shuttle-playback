@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 308224,
   "channels" : 1,
+  "durationAtEofS" : 1.0216780045351475,
   "durationS" : 1.09,
   "expect" : "decodes",
   "fixture" : "sample_fpcm_32le.mp4",

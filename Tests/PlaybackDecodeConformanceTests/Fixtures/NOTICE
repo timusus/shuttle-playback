@@ -78,8 +78,6 @@ sample_fpcm_32le.mp4
 sample_fpcm_64be.mp4
 sample_fpcm_64le.mp4
 sample_fragmented.mp4
-sample_fragmented_large_bitrates.mp4
-sample_fragmented_seekable.mp4
 sample_ipcm_16be.mp4
 sample_ipcm_24le.mp4
 sample_malformed_free_box.mp4

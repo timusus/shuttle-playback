@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 6144,
   "channels" : 1,
+  "durationAtEofS" : 0.10448979591836735,
   "durationS" : 0.1,
   "expect" : "decodes",
   "fixture" : "sample_mp2_audio.mp4",

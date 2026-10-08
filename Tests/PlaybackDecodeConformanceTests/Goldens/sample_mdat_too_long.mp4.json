@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 102400,
   "channels" : 1,
+  "durationAtEofS" : 1,
   "durationS" : 1.07,
   "expect" : "decodes",
   "fixture" : "sample_mdat_too_long.mp4",

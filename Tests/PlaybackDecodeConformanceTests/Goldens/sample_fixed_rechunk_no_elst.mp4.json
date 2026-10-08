@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 66560,
   "channels" : 1,
+  "durationAtEofS" : 5,
   "durationS" : 5,
   "expect" : "decodes",
   "fixture" : "sample_fixed_rechunk_no_elst.mp4",
