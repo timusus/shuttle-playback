@@ -24,7 +24,8 @@ that the decoder gives the same audio however the bytes arrive, and that a decod
 golden diff to review. To add a format, add a fixture (`Fixtures/make-fixtures.sh`, which needs `ffmpeg`,
 `lame` and `afconvert`; the HE-AAC, Opus and Vorbis outputs are not byte-reproducible, so re-run it only on
 purpose) and regenerate with `GOLDEN_UPDATE=1`. A decoder bug found and not fixed is pinned in
-`KnownIssues.swift` rather than left as a red test.
+`KnownIssues.swift` rather than left as a red test. Fixtures copied from androidx/media, and which
+media3 test case each one answers, are listed in [conformance-mapping.md](conformance-mapping.md).
 
 **Byte-source contract.** `GrowingFileContractTests` runs media3's `DataSourceContractTest` cases against
 the source over `LoopbackMediaServer`. A new server behaviour is one `Resource` in the matrix of
