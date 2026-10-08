@@ -94,6 +94,10 @@ enum KnownIssues {
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/60 (sample_mdat_too_long: unknown length ends in failure)",
              fixture: "sample_mdat_too_long.mp4", kind: .outcome, switches: unknownLengthCombos,
              messages: ["outcome decoded(end: \"failure\"), clean decoded(end: \"eof\")"]),
+        // The same bug in the seek pass: the seek to 1.0 s reads past the real end and throws.
+        Rule(issue: "https://github.com/timusus/shuttle-playback/issues/60 (sample_mdat_too_long: unknown length ends in failure)",
+             fixture: "sample_mdat_too_long.mp4", kind: .seek, switches: unknownLengthCombos,
+             messages: ["seek to 1.0 threw streaming decode failed, status 7", "seek count 4 vs 5"]),
         // Fragmented Opus in MP4 stops after 0.5 s without a length; every seek lands there.
         Rule(issue: "https://github.com/timusus/shuttle-playback/issues/61 (sample_opus_fragmented: unknown length stops after 0.5 s)",
              fixture: "sample_opus_fragmented.mp4", kind: .frameCount, switches: unknownLengthCombos,

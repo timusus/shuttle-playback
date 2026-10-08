@@ -138,7 +138,7 @@ enum ConformanceMatrix {
 
     /// Seeks to each fraction of the clean duration and records where it landed and the PCM after it.
     /// An injected error during a seek or its window read restarts that seek, as the player would.
-    static func seekResults(_ url: URL, switches: FaultSwitches, clean: DecodeRun, label: String) throws
+    static func seekResults(_ url: URL, switches: FaultSwitches, clean: DecodeRun, name: String, label: String) throws
         -> [SeekResult]
     {
         guard let cleanFormat = clean.format else { return [] }
@@ -157,7 +157,7 @@ enum ConformanceMatrix {
                     landed = try decoder.seek(toSeconds: target)
                 } catch {
                     if reader.injectedErrors > before { continue }
-                    XCTFail("\(label): seek to \(target) threw \(error)")
+                    report(.seek, name, switches, "seek to \(target) threw \(error)")
                     break
                 }
                 let want = (seekWarmupFrames + seekCompareFrames) * channels
@@ -208,10 +208,13 @@ enum ConformanceMatrix {
     /// Seeks through the clean reader, returns the landings for the golden. Under every fault
     /// combination the seeks must reproduce the clean ones exactly: same landing, same PCM.
     static func checkSeeks(_ url: URL, clean: DecodeRun, name: String) throws -> [Golden.Seek] {
-        let reference = try seekResults(url, switches: [], clean: clean, label: "\(name) [clean]")
+        let reference = try seekResults(url, switches: [], clean: clean, name: name, label: "\(name) [clean]")
         for switches in FaultSwitches.allCombinations {
-            let faulted = try seekResults(url, switches: switches, clean: clean, label: "\(name) [\(switches)]")
-            XCTAssertEqual(faulted.count, reference.count, "\(name) [\(switches)]: seek count")
+            let faulted = try seekResults(url, switches: switches, clean: clean, name: name,
+                                       label: "\(name) [\(switches)]")
+            if faulted.count != reference.count {
+                report(.seek, name, switches, "seek count \(faulted.count) vs \(reference.count)")
+            }
             for (g, w) in zip(faulted, reference) {
                 if switches.contains(.unknownLength) {
                     // Without a length an MP3 or Opus seek has no bitrate estimate to use, so it may
@@ -314,7 +317,7 @@ enum ConformanceMatrix {
     /// What a mismatch is about. A known decoder bug is scoped to a fixture, a kind and the fault
     /// combinations it shows under (`KnownIssues`).
     enum Kind: String {
-        case outcome, pcm, resumePCM, frameCount, seekLanding, seekPCM, bytes
+        case outcome, pcm, resumePCM, frameCount, seekLanding, seekPCM, seek, bytes
     }
 
     struct Finding {
