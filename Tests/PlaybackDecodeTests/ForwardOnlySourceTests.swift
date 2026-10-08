@@ -9,10 +9,16 @@ private final class ForwardOnlyByteReader: StreamByteReader {
     private let data: Data
     private var offset: Int64 = 0
     private(set) var refusedSeeks = 0
+    private(set) var refusedTargets: [Int64] = []
 
-    init(_ data: Data) { self.data = data }
+    private let knowsLength: Bool
 
-    var totalLength: Int64? { nil }
+    init(_ data: Data, knowsLength: Bool = false) {
+        self.data = data
+        self.knowsLength = knowsLength
+    }
+
+    var totalLength: Int64? { knowsLength ? Int64(data.count) : nil }
     var position: Int64 { offset }
 
     func read(into buffer: UnsafeMutableRawPointer, maxLength: Int) throws -> Int {
@@ -26,6 +32,7 @@ private final class ForwardOnlyByteReader: StreamByteReader {
     func seek(to newOffset: Int64) throws {
         guard newOffset >= offset else {
             refusedSeeks += 1
+            refusedTargets.append(newOffset)
             throw StreamByteReaderError.unseekable
         }
         offset = newOffset
@@ -61,6 +68,23 @@ final class ForwardOnlySourceTests: XCTestCase {
         _ = try decoder.open()
         XCTAssertGreaterThan(drain(decoder), 0)
         XCTAssertEqual(decoder.endReason, .eof)
+    }
+
+    /// A forward-only source that knows its length (a download that has not started a range): an
+    /// untagged CBR MP3 must open and decode with no seek behind the read position, so no open-time
+    /// look at the file's tail.
+    func testUntaggedCBRMP3OfKnownLengthOpensAndDecodesWithoutATailSeek() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("PlaybackDecodeConformanceTests/Fixtures/cbr_no_table.mp3")
+        let source = ForwardOnlyByteReader(try Data(contentsOf: url), knowsLength: true)
+        let decoder = FFmpegStreamDecoder(reader: source)
+        _ = try decoder.open()
+        XCTAssertGreaterThan(drain(decoder), 0)
+        XCTAssertEqual(decoder.endReason, .eof)
+        // The one refusal is the ID3 probe putting its 10 header bytes back (rewind to 0); it is
+        // tolerated. Nothing seeks to the tail.
+        XCTAssertTrue(source.refusedTargets.allSatisfy { $0 == 0 }, "refused: \(source.refusedTargets)")
     }
 
     func testBackwardSeekFailsAsUnseekableNotAsCorruptStream() throws {
