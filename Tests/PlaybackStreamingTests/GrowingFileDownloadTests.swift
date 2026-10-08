@@ -261,6 +261,28 @@ struct GrowingFileDownloadTests {
         #expect(h.read() == .park)
         #expect(h.requests.count == 3, "against a 0.5 s response the same gap waits")
     }
+
+    /// Issue #68 follow-up, ADR-0004: a failure that deleted the file is the read's at a position
+    /// the source still owes bytes; at or past the known total length there is nothing owed, so the
+    /// read is the end of the stream, as it was before the early failure return.
+    @Test("after a file-deleting failure a read below the total fails, and at the total it is the end")
+    func aDeletedFileFailsReadsOnlyBelowTheTotal() {
+        let h = Harness()
+        h.read()
+        h.respond(206, range: "bytes 0-9999/10000", etag: "\"v1\"")
+        h.body(4000)
+        h.read(4000)
+        h.run(h.machine.certificateRejected(attempt: h.requests.last!.attempt, now: h.now))
+        #expect(h.machine.current?.hasFile == false)
+
+        try? h.machine.seek(to: 10_000)
+        #expect(h.read() == .endOfStream(landed: nil), "nothing is owed at the total length")
+
+        // The end read changed nothing: a byte below the total is still owed, and fails.
+        let failed = GrowingFileDownload.ReadStep.Action.fail(.transport(GrowingFileConnectionPolicy.untrustedCertificateReason))
+        try? h.machine.seek(to: 9999)
+        #expect(h.read() == failed)
+    }
 }
 
 /// Carries out ``GrowingFileDownload``'s effects as the adapter would, minus the lock, files and

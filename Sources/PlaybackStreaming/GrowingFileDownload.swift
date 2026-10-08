@@ -270,8 +270,11 @@ struct GrowingFileDownload {
             return step(.again)
         }
         // A failure that deleted the file (a page, a full disk) took its frontier with it, so the
-        // decoder's next read is no seek ahead: it gets the failure.
-        if let reason = failure, !tx.hasFile { return reportFailure(reason) }
+        // decoder's next read is no seek ahead: it gets the failure, unless the total length says
+        // nothing is owed there (ADR-0004: the layer fails what it still owes, not a finished stream).
+        if let reason = failure, !tx.hasFile, tx.totalLength.map({ offset < $0 }) ?? true {
+            return reportFailure(reason)
+        }
         let action = ReadRule.action(
             position: offset, base: tx.base, frontier: tx.frontier, totalLength: tx.totalLength,
             isComplete: tx.isComplete, isProbing: isProbing, rangeIgnored: rangeIgnored,
