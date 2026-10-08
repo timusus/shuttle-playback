@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 0,
   "channels" : 0,
+  "durationAtEofS" : 0,
   "durationS" : 0,
   "expect" : "error:streaming decode failed, status 3",
   "fixture" : "mdat_too_long.m4a",

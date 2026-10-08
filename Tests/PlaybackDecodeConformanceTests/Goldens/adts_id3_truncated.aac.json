@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 14336,
   "channels" : 2,
+  "durationAtEofS" : 2.2058956916099772,
   "durationS" : 2.24,
   "expect" : "decodes",
   "fixture" : "adts_id3_truncated.aac",

@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 24576,
   "channels" : 1,
+  "durationAtEofS" : 24.192,
   "durationS" : 24.19,
   "expect" : "decodes",
   "fixture" : "mpeg25_8k_mono.mp3",

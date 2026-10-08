@@ -33,7 +33,7 @@ ReplayGain; this repo decodes audio only), **sniff** (media3's `peekLimit` forma
 | `mp3SampleWithCbrSeeker` | `bear-cbr-variable-frame-size-no-seek-table.mp3` (flag variants n/a: API) |
 | `mp3Sample_withIndexSeekingFlag_usesCbrSeekerForKnownLength` | `bear-vbr-no-seek-table.mp3`; its 1.872 s seek lands 896 frames early in the golden (VBR with no tag: a seek far from a frame of known time lands by bitrate estimate, as in media3; accepted) |
 | `mp3CbrSampleWithIndexSeekingFlagAndUnknownLength_reportsUnsetAverageBitrate` | `bear-cbr-variable-frame-size-no-seek-table.mp3` under the `unknownLength` combinations; bitrate getter is n/a (API) |
-| `mp3CbrSampleWithNoSeekTableAndTrailingGarbage` | `bear-cbr-no-seek-table-trailing-garbage.mp3` (media3 reports 2.82 s, its dump `durationUs` 2821187; ours over-reports 12.2 s via the bitrate estimate over the trailing garbage; tracked by issue #53) |
+| `mp3CbrSampleWithNoSeekTableAndTrailingGarbage` | `bear-cbr-no-seek-table-trailing-garbage.mp3` (media3 reports 2.82 s, its dump `durationUs` 2821187; ours reports the open-time bitrate estimate, 12.2 s, as media3 does before its correction; at EOF `mediaFramesRead / sampleRate` is 2.8212 s, the golden's `durationAtEofS`, within 0.011 s of media3's; `HeaderlessCBRDurationTests`; issue #53) |
 | `trimmedMp3Sample` | `play-trimmed.mp3`; finding #51 (a single-frame file does not open; the golden records the error) |
 | `mp3SampleWithId3` | `bear-id3.mp3` (audio only; metadata n/a) |
 | `mp3SampleWithId3NumericGenre` | `bear-id3-numeric-genre.mp3` (audio only; metadata n/a) |

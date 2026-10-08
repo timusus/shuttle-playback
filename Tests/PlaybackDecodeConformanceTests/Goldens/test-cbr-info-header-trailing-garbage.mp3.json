@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 158720,
   "channels" : 1,
+  "durationAtEofS" : 1,
   "durationS" : 1.04,
   "expect" : "decodes",
   "fixture" : "test-cbr-info-header-trailing-garbage.mp3",

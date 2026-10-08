@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 32768,
   "channels" : 2,
+  "durationAtEofS" : 4.032,
   "durationS" : 4.03,
   "expect" : "decodes",
   "fixture" : "cbr_no_table.mp3",

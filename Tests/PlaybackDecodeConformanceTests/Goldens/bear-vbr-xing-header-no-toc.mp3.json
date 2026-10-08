@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 71680,
   "channels" : 2,
+  "durationAtEofS" : 2.784,
   "durationS" : 2.81,
   "expect" : "decodes",
   "fixture" : "bear-vbr-xing-header-no-toc.mp3",

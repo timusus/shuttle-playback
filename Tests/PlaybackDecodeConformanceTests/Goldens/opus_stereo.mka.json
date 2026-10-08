@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 30720,
   "channels" : 2,
+  "durationAtEofS" : 4,
   "durationS" : 4.01,
   "expect" : "decodes",
   "fixture" : "opus_stereo.mka",

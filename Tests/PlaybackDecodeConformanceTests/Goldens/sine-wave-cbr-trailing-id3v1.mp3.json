@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 9216,
   "channels" : 1,
+  "durationAtEofS" : 1.0448979591836736,
   "durationS" : 1.06,
   "expect" : "decodes",
   "fixture" : "sine-wave-cbr-trailing-id3v1.mp3",

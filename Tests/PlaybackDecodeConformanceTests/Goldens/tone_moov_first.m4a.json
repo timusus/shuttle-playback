@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 33792,
   "channels" : 2,
+  "durationAtEofS" : 20,
   "durationS" : 20,
   "expect" : "decodes",
   "fixture" : "tone_moov_first.m4a",

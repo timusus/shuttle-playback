@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 22528,
   "channels" : 2,
+  "durationAtEofS" : 4.001088435374149,
   "durationS" : 4.02,
   "expect" : "decodes",
   "fixture" : "vorbis_stereo.webm",

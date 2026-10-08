@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 32768,
   "channels" : 2,
+  "durationAtEofS" : 4.048979591836734,
   "durationS" : 4.05,
   "expect" : "decodes",
   "fixture" : "cbr_padding_bit.mp3",

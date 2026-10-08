@@ -31,6 +31,9 @@ struct Golden: Codable, Equatable {
     var channels: Int
     var frames: Int
     var durationS: Double
+    /// The real length once the clean decode reaches EOF (`frames / sampleRate`), which is what a
+    /// player reads after `endReason == .eof` when `durationS` was only an estimate (#53).
+    var durationAtEofS: Double
     var pcmSha256PerSecondInt16: [String]
     var seeks: [Seek]
     var bytesBeforeFirstAudioMax: Int64
@@ -120,6 +123,9 @@ enum GoldenStore {
         if old.channels != new.channels { changed.append("channels") }
         if old.frames != new.frames { changed.append("frames \(old.frames) -> \(new.frames)") }
         if old.durationS != new.durationS { changed.append("durationS \(old.durationS) -> \(new.durationS)") }
+        if old.durationAtEofS != new.durationAtEofS {
+            changed.append("durationAtEofS \(old.durationAtEofS) -> \(new.durationAtEofS)")
+        }
         if old.pcmSha256PerSecondInt16 != new.pcmSha256PerSecondInt16 {
             let n = max(old.pcmSha256PerSecondInt16.count, new.pcmSha256PerSecondInt16.count)
             let differing = (0..<n).filter {

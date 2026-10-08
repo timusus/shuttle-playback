@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 26624,
   "channels" : 2,
+  "durationAtEofS" : 4,
   "durationS" : 4,
   "expect" : "decodes",
   "fixture" : "aac_edit_list.m4a",

@@ -13,6 +13,11 @@ public struct StreamAudioFormat: Equatable {
     /// `Content-Length` ÷ bitrate). `nil` when the container does not know (ADTS AAC, or an MP3
     /// with no Xing/Info header, read with no total length), in which case the caller falls back
     /// to whatever duration it has from elsewhere. Never 0.
+    ///
+    /// For a CBR MP3 without a Xing/Info/VBRI header it is an estimate (bitrate over the source
+    /// length), too long if the file ends in non-audio bytes. Once ``FFmpegStreamDecoder/endReason``
+    /// is `.eof`, `mediaFramesRead / sampleRate` is the real length (media3 re-emits its SeekMap
+    /// the same way).
     public let duration: TimeInterval?
     public let codec: String
     public let container: String

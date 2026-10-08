@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 99328,
   "channels" : 2,
+  "durationAtEofS" : 2,
   "durationS" : 2,
   "expect" : "decodes",
   "fixture" : "wav_s16.wav",

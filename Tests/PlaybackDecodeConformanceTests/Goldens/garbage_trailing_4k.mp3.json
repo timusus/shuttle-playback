@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 69632,
   "channels" : 2,
+  "durationAtEofS" : 4.048979591836734,
   "durationS" : 4.56,
   "expect" : "decodes",
   "fixture" : "garbage_trailing_4k.mp3",

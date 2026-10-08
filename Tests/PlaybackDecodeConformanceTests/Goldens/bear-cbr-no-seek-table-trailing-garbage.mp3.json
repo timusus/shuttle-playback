@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 66560,
   "channels" : 2,
+  "durationAtEofS" : 2.8212244897959184,
   "durationS" : 12.2,
   "expect" : "decodes",
   "fixture" : "bear-cbr-no-seek-table-trailing-garbage.mp3",

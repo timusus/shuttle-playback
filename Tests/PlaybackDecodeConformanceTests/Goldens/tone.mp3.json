@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 66560,
   "channels" : 2,
+  "durationAtEofS" : 20,
   "durationS" : 20.04,
   "expect" : "decodes",
   "fixture" : "tone.mp3",

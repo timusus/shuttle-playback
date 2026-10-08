@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 25600,
   "channels" : 2,
+  "durationAtEofS" : 4.040272108843538,
   "durationS" : 0,
   "expect" : "decodes",
   "fixture" : "latm_loas.aac",

@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 71680,
   "channels" : 2,
+  "durationAtEofS" : 2.808,
   "durationS" : 2.68,
   "expect" : "decodes",
   "fixture" : "bear-id3-numeric-genre.mp3",

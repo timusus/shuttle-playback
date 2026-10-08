@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 113664,
   "channels" : 2,
+  "durationAtEofS" : 2.0114285714285716,
   "durationS" : 2,
   "expect" : "decodes",
   "fixture" : "garbage_prefix_80k.mp3",

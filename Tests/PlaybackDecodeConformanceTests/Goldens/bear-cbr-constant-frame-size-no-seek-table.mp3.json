@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 77824,
   "channels" : 2,
+  "durationAtEofS" : 2.784,
   "durationS" : 2.78,
   "expect" : "decodes",
   "fixture" : "bear-cbr-constant-frame-size-no-seek-table.mp3",

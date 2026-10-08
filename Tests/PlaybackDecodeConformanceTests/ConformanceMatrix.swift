@@ -401,6 +401,7 @@ enum ConformanceMatrix {
             channels: channels,
             frames: clean.frames,
             durationS: ((format?.duration ?? 0) * 100).rounded() / 100,
+            durationAtEofS: rate > 0 ? Double(clean.frames) / Double(rate) : 0,
             pcmSha256PerSecondInt16: GoldenStore.perSecondHashes(clean.pcm, sampleRate: rate, channels: channels),
             seeks: landings,
             bytesBeforeFirstAudioMax: (clean.bytesBeforeFirstAudio + 1023) / 1024 * 1024)
@@ -447,6 +448,16 @@ enum ConformanceMatrix {
         XCTAssertEqual(got.channels, golden.channels, "\(name): channels")
         XCTAssertEqual(got.frames, golden.frames, "\(name): frame count")
         XCTAssertEqual(got.durationS, golden.durationS, accuracy: 0.011, "\(name): reported duration")
+        XCTAssertEqual(got.durationAtEofS, golden.durationAtEofS, accuracy: 1e-9, "\(name): duration at EOF")
+        if got.sampleRate > 0 {
+            XCTAssertEqual(golden.durationAtEofS, Double(golden.frames) / Double(golden.sampleRate),
+                           accuracy: 1e-9, "\(name): duration at EOF is frames / rate")
+        }
+        // media3's final SeekMap for the headerless CBR fixture with trailing garbage (#53): the
+        // estimate the open reports (12.2 s) is corrected to this once the decode reaches EOF.
+        if name == "bear-cbr-no-seek-table-trailing-garbage.mp3" {
+            XCTAssertEqual(got.durationAtEofS, 2.821187, accuracy: 0.011, "\(name): media3's duration")
+        }
         for (second, pair) in zip(got.pcmSha256PerSecondInt16, golden.pcmSha256PerSecondInt16).enumerated()
         where pair.0 != pair.1 {
             XCTFail("\(name): PCM of second \(second) differs from the golden")

@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 1024,
   "channels" : 2,
+  "durationAtEofS" : 0.026122448979591838,
   "durationS" : 0.03,
   "expect" : "decodes",
   "fixture" : "play-trimmed.mp3",

@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 82944,
   "channels" : 2,
+  "durationAtEofS" : 4,
   "durationS" : 4.07,
   "expect" : "decodes",
   "fixture" : "lame_info_delay_padding.mp3",

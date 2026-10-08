@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 14336,
   "channels" : 2,
+  "durationAtEofS" : 4.224,
   "durationS" : 5.42,
   "expect" : "decodes",
   "fixture" : "adts_he_aac_v1.aac",

@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 73728,
   "channels" : 2,
+  "durationAtEofS" : 10.031020408163265,
   "durationS" : 10.03,
   "expect" : "decodes",
   "fixture" : "cbr_32k_dense_reservoir.mp3",

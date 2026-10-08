@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 32768,
   "channels" : 2,
+  "durationAtEofS" : 4.048979591836734,
   "durationS" : 4.07,
   "expect" : "decodes",
   "fixture" : "id3v1_footer.mp3",

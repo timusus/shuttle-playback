@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 16384,
   "channels" : 2,
+  "durationAtEofS" : 2.4043310657596373,
   "durationS" : 4.05,
   "expect" : "decodes",
   "fixture" : "vbr_xing_longer_than_stream.mp3",

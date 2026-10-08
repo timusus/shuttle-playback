@@ -41,6 +41,13 @@ if decoder.endReason != .eof { /* .failure, .cancelled or .interrupted */ }
 `nextChunk()` returning nil is not always the end of the file: check `endReason`, or a network failure
 looks like a short track. Output is Float32 at the source's own rate, not resampled.
 
+**Duration is an estimate for a headerless CBR MP3.** With no Xing/Info/VBRI header, `format.duration` is
+a bitrate estimate over the source length, so trailing non-audio bytes inflate it (one fixture reports
+12.2 s for 2.82 s of audio); with no source length it is nil. Open reads nothing extra to check (a tail
+scan would restart a `GrowingFileByteSource` download). Once `endReason == .eof`,
+`Double(mediaFramesRead) / format.sampleRate` is the real length, as media3's `ConstantBitrateSeeker`
+re-emits its SeekMap when the decode reaches the garbage. A seek past the real end finishes at `.eof`.
+
 `open()` throws `StreamDecoderError`; a format the build lacks arrives as `.failed(status:)`. The probe
 is budgeted at 64 KiB / 1 s (libavformat's own is 5 MB / 5 s); a heavier file passes
 `probeBudget: StreamProbeBudget(bytes:analyzeDuration:)` to the initialiser. Header-described formats

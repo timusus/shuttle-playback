@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 66560,
   "channels" : 2,
+  "durationAtEofS" : 4,
   "durationS" : 4,
   "expect" : "decodes",
   "fixture" : "flac_stereo.flac",

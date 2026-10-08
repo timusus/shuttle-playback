@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 66560,
   "channels" : 2,
+  "durationAtEofS" : 8.208,
   "durationS" : 8.21,
   "expect" : "decodes",
   "fixture" : "stitch_44k_48k.mp3",

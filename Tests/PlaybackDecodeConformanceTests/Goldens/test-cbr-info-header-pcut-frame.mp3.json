@@ -1,6 +1,7 @@
 {
   "bytesBeforeFirstAudioMax" : 9216,
   "channels" : 1,
+  "durationAtEofS" : 1.026122448979592,
   "durationS" : 1.07,
   "expect" : "decodes",
   "fixture" : "test-cbr-info-header-pcut-frame.mp3",
