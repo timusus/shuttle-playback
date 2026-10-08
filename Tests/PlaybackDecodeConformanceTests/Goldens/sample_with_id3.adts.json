@@ -15,44 +15,44 @@
   "sampleRate" : 44100,
   "seeks" : [
     {
-      "alignFrames" : -1023,
-      "landedS" : 0.023,
+      "alignFrames" : 0,
+      "landedS" : 0,
       "toS" : 0,
       "tolS" : 0.03,
       "windowFrames" : 4096,
       "windowSha256Int16" : "d33c126c5a4a7139c3a9a2f9d8e3eea3bf58e0a8c1168bc433c3e12768dc982d"
     },
     {
-      "alignFrames" : -1023,
+      "alignFrames" : 0,
       "landedS" : 1.107,
       "toS" : 1.107,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "7b5642dd45e180bf46400f4adb4f31ca8315f36857439a7f33759cbecfca1a91"
+      "windowSha256Int16" : "bf9de34d8d85332410a392c5880daf8589c48836ee2969d1c45872231f152fce"
     },
     {
-      "alignFrames" : -1023,
+      "alignFrames" : 0,
       "landedS" : 2.214,
       "toS" : 2.214,
       "tolS" : 0.03,
       "windowFrames" : 4096,
-      "windowSha256Int16" : "d797d193e6d0772f69764bb95b644aeba107cce3e925e63a50b2ad9070779988"
+      "windowSha256Int16" : "1bdaf61f300e9c54d79ce6693b1cdfd0d99e228644dbca2901ed1d70f11902f8"
     },
     {
-      "alignFrames" : -1024,
+      "alignFrames" : 0,
       "landedS" : 3.22,
       "toS" : 3.22,
       "tolS" : 0.03,
-      "windowFrames" : 826,
-      "windowSha256Int16" : "adc1595152ff72649fa3ac06478915a15f8adb25566316950a55fcd55156da96"
+      "windowFrames" : 256,
+      "windowSha256Int16" : "af3c8c27904c3f389b0020c152a617b144c4c68b8260e65fac413f67bbd04535"
     },
     {
-      "alignFrames" : -1024,
+      "alignFrames" : 0,
       "landedS" : 3.32,
       "toS" : 3.32,
       "tolS" : 0.03,
-      "windowFrames" : 256,
-      "windowSha256Int16" : "af3c8c27904c3f389b0020c152a617b144c4c68b8260e65fac413f67bbd04535"
+      "windowFrames" : 0,
+      "windowSha256Int16" : ""
     }
   ],
   "sha256" : "21067efb64c0d3bb4cbefb1e620613264338a1ff87f5765d51037647b6e4b41a"
