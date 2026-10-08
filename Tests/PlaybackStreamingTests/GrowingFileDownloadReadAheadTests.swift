@@ -104,8 +104,15 @@ struct GrowingFileDownloadReadAheadTests {
         #expect(h.machine.current?.paused == false)
     }
 
-    @Test("(f) a host that ignores ranges is never capped")
+    @Test("(f) a host that ignores ranges is never capped, even answering bytes=0- with a 200")
     func aRangeIgnoredHostDownloadsWhole() {
+        let fromZero = Harness(readAhead: Self.readAhead)
+        fromZero.pathCost(isExpensive: true)
+        fromZero.read()
+        fromZero.respond(200, length: 1_000_000)
+        fromZero.body(500_000)
+        #expect(!fromZero.log.contains(.cancelTask))
+
         let h = Harness(readAhead: Self.readAhead)
         h.pathCost(isExpensive: true)
         #expect(throws: Never.self) { try h.machine.seek(to: 5_000) }

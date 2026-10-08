@@ -137,6 +137,8 @@ struct GrowingFileDownload {
         var paused = false
         /// The rate measured when it paused, which the read rule goes on using while no bytes arrive.
         var rateAtPause: Double?
+        /// The host answered this transaction's range with a `206` from its base.
+        var rangeHonoured = false
         var frontier: Int64 { base + (sniffPending || !hasFile ? 0 : written) }
     }
 
@@ -487,14 +489,17 @@ struct GrowingFileDownload {
         downloadLog.info("download: resume gen=\(tx.generation) at=\(from) decoder=\(decoder)")
     }
 
-    /// The read-ahead cap applies: a cap was given, the path costs, and a resume would not be
-    /// answered from byte 0 (a host that ignores ranges downloads whole).
-    private var isCapped: Bool { readAhead != nil && pathIsExpensive && !rangeIgnored }
+    /// The read-ahead cap applies to `tx`: a cap was given, the path costs, and the host answered
+    /// its range with a `206`, so a resume is not answered from byte 0. A host that ignores ranges
+    /// (a `200`, even to `bytes=0-`) downloads whole.
+    private func isCapped(_ tx: Transaction) -> Bool {
+        readAhead != nil && pathIsExpensive && !rangeIgnored && tx.rangeHonoured
+    }
 
     /// Cancels the request once the frontier is the read-ahead ahead of the decoder. No failure:
     /// nothing is spent and no timer starts; the file stays, and a read resumes it (``read(maxLength:now:)``).
     private mutating func pauseIfFarAhead(now: TimeInterval) {
-        guard isCapped, let readAhead, let tx = current, !tx.ended else { return }
+        guard let readAhead, let tx = current, isCapped(tx), !tx.ended else { return }
         guard tx.frontier - offset >= readAhead, tx.totalLength.map({ tx.frontier < $0 }) ?? true else { return }
         current?.ended = true
         current?.paused = true
@@ -596,7 +601,7 @@ struct GrowingFileDownload {
     /// on a path that no longer costs; one that costs pauses at its next chunk.
     mutating func pathCost(isExpensive: Bool, now: TimeInterval) -> [Effect] {
         pathIsExpensive = isExpensive
-        if !cancelled, !isCapped, current?.paused == true { resume(now: now) }
+        if !cancelled, let tx = current, tx.paused, !isCapped(tx) { resume(now: now) }
         return takeEffects()
     }
 
@@ -700,7 +705,7 @@ struct GrowingFileDownload {
                 current?.seekGeneration = nil
             }
         case 206 where range?.start == tx.base:
-            break
+            current?.rangeHonoured = true
         default:
             end(
                 "status=\(status) content-range=\(contentRange ?? "-")", retryable: true,
