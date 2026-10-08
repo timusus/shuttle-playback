@@ -622,7 +622,7 @@ final class StreamDecodeTests: XCTestCase {
     /// table of contents. libavformat's generic seek has nothing to place a timestamp with, so it
     /// DECODES FORWARD FROM THE START until the timestamps reach the target — measured here before
     /// the fix at 12 MB for one seek to 25 minutes, on a file whose whole open cost 32 KiB.
-    /// `stream_decode.c` now caps what a seek may read and falls back to the byte estimate, which
+    /// `seek.c` now caps what a seek may read and falls back to the byte estimate, which
     /// on a constant bitrate is exact.
     func testLargeCBRMP3CostsAWindowToOpenAndToSeek() throws {
         try skipUnlessAvailable()

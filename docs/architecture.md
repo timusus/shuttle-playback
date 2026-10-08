@@ -33,7 +33,9 @@ it reads from its `StreamByteReader` only as much as the caller's next chunk nee
   Each seek has a 64 KiB read budget because FFmpeg's generic seek on an MP3 without a table of contents
   decodes forward from the start (one seek to 25 minutes read 12 MB); past the budget the decoder
   estimates by byte ratio, which is the one inexact landing. A FLAC without a seek table is found by its
-  frame headers for the same reason.
+  frame headers for the same reason. Each format's seek rules are a module (`seek_mp3.c`, `seek_aac.c`,
+  `seek_flac.c`, `seek_ogg.c`, `seek_generic.c`) and `seek.c` owns the budget and fallback ladder
+  ([ADR-0012](decisions/0012-one-seek-strategy-per-format.md)).
 - **`cancel()` and `interrupt()` differ** because a pull loop can be blocked on a dead connection while a
   seek waits behind it: cancelling would answer the seek by destroying the stream. `endReason` exists
   because a nil from `nextChunk()` is not always the end.

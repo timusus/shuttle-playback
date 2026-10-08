@@ -17,5 +17,6 @@ and is kept as history. The overview is in [architecture](../architecture.md).
 | [0009](0009-seeks-are-sample-accurate.md) | A seek decodes a pre-roll and drops it, landing on the requested sample. | Accepted |
 | [0010](0010-the-decoder-owns-output-format-conversion.md) | The decoder resamples; effects stay in the apps. | Accepted |
 | [0011](0011-probe-budget-and-junk-resync.md) | A 64 KiB probe, then a bounded MP3 resync scan. | Accepted |
+| [0012](0012-one-seek-strategy-per-format.md) | Each format's seek rules are one module behind `SeekFormat`; `seek.c` owns the ladder. | Accepted |
 
 These decisions were first made in the Shuttle Podcasts app and moved here with the code.
