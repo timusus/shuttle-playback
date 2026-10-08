@@ -65,6 +65,7 @@ struct StreamDecoder {
     int         prime_skip;       /* MP4 AAC: encoder priming to drop when the file's own edit list does not (issue #25), else 0 */
     int64_t     prime_start;      /* the timestamp of the packet that carries it */
     int         flushing;         /* a NULL packet has been sent to the decoder */
+    int         reopening;        /* draining the codec to reopen it for the held packet's new parameters */
     int         ended;            /* the decoder and the resampler are both drained */
 
     /* Written by `stream_decoder_cancel` from another thread and only ever read, so a plain flag
@@ -547,6 +548,19 @@ static int is_mpeg_audio(enum AVCodecID codec_id) {
 }
 
 static void mp3_measure_preroll(StreamDecoder *d, const AVPacket *pkt);
+static int reopen_codec(StreamDecoder *d);
+
+/* The demuxer has given the stream new parameters the open codec has not seen: the next link of a
+ * chained Ogg Opus file (#49). FFmpeg 7.1's Ogg demuxer writes the new link's OpusHead (channel
+ * count, mapping) to `codecpar` and nothing passes it to the codec, which would decode a stereo
+ * link after a mono one as its mono downmix. A chained Vorbis link carries its headers in-band,
+ * which the Vorbis decoder reads itself. Opus only: the LATM decoder rewrites its own extradata. */
+static int codec_parameters_changed(const StreamDecoder *d) {
+    if (d->dec->codec_id != AV_CODEC_ID_OPUS) return 0;
+    const AVCodecParameters *par = d->fmt->streams[d->audio_idx]->codecpar;
+    return par->extradata_size != d->dec->extradata_size
+        || (par->extradata_size > 0 && memcmp(par->extradata, d->dec->extradata, par->extradata_size) != 0);
+}
 
 /* About 0.8 s of MP3 or 0.7 s of AAC: more than any real burst of damage, little enough that a
  * stream of nothing but garbage gives up promptly. */
@@ -569,7 +583,9 @@ static int pump(StreamDecoder *d) {
 
     for (;;) {
         if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-        if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+        /* A reopen reads nothing until its held packet is in the new codec; an interruption before
+         * then would leave a packet a resume reads again. */
+        if (d->interrupted && !d->reopening) return STREAM_DECODE_ERR_INTERRUPTED;
 
         int rc = avcodec_receive_frame(d->dec, d->frame);
         if (rc == 0) {
@@ -658,6 +674,24 @@ static int pump(StreamDecoder *d) {
             pending_reset(d);
             continue;   /* the resampler is still filling; ask for another frame */
         }
+        if (rc == AVERROR_EOF && d->reopening) {
+            /* The old link is drained: the held packet goes to a codec opened on the new one. The
+             * resampler follows its frames' new layout (`push_through_swr`). The demuxer sets only
+             * the new link's channel count, leaving the old link's mask (mono with 2 channels),
+             * which the codec refuses: the count is kept, and the codec reads its layout from the
+             * OpusHead. */
+            AVChannelLayout *layout = &d->fmt->streams[d->audio_idx]->codecpar->ch_layout;
+            if (!av_channel_layout_check(layout)) {
+                int channels = layout->nb_channels;
+                av_channel_layout_uninit(layout);
+                layout->order = AV_CHANNEL_ORDER_UNSPEC;
+                layout->nb_channels = channels;
+            }
+            int codec_rc = reopen_codec(d);
+            if (codec_rc != STREAM_DECODE_OK) return codec_rc;
+            d->flushing = 0;
+            continue;
+        }
         if (rc == AVERROR_EOF) {
             /* The decoder is drained; whatever libswresample still holds is the last of it. */
             if (!convert_through_swr(d, NULL)) return STREAM_DECODE_ERR_ALLOC;
@@ -722,6 +756,16 @@ static int pump(StreamDecoder *d) {
                 for (int i = 0; i < 4; i++) sd[i] = (uint8_t)((uint32_t)d->prime_skip >> (8 * i));
             }
         }
+        if (!d->reopening && codec_parameters_changed(d)) {
+            /* Drain the old codec first (Opus holds back resampled SILK samples), then reopen. */
+            av_packet_move_ref(d->held, d->pkt);
+            d->has_held = 1;
+            d->reopening = 1;
+            avcodec_send_packet(d->dec, NULL);
+            d->flushing = 1;
+            continue;
+        }
+        d->reopening = 0;
         if (d->drop_timestamps) d->pkt->pts = d->pkt->dts = AV_NOPTS_VALUE;
         d->last_pkt_pos = d->pkt->pos;
         d->last_pkt_dts = d->pkt->dts;
@@ -1630,6 +1674,7 @@ static void after_seek_reset(StreamDecoder *d) {
     d->has_first_pkt = 0;
     d->decode_errors = 0;
     d->flushing = 0;
+    d->reopening = 0;
     d->ended = 0;
     d->last_frame_pts = AV_NOPTS_VALUE;
     d->discard_until = AV_NOPTS_VALUE;

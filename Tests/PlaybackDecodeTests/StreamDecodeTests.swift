@@ -195,15 +195,15 @@ final class StreamDecodeTests: XCTestCase {
         /// Encoder priming and padding at the boundary and the end, in output frames. The ffmpeg
         /// Vorbis encoder pads each stream by up to ~1,000 frames; Opus is trimmed by its pre-skip.
         let slack: Double
-        /// The second stream's RMS over the first's at the open format: stereo downmixed to mono is
-        /// 0.5 x (L + R), 1/sqrt(2) of the mono tone.
+        /// The second stream's RMS over the first's at the open format. Stereo to mono is swresample's
+        /// default downmix, (L + R) / sqrt(2): two unrelated tones at the mono tone's amplitude come
+        /// out at its level (not the Opus codec's own 0.5 x (L + R), #49).
         let secondLevel: Double
     }
 
     private let chains = [
         Chain(name: "chained_vorbis_44k_48k.ogg", rates: (44100, 48000), channels: (2, 2), slack: 2048, secondLevel: 1),
-        Chain(name: "chained_opus_mono_stereo.opus", rates: (48000, 48000), channels: (1, 2), slack: 2048,
-              secondLevel: 0.5 * 2.0.squareRoot()),
+        Chain(name: "chained_opus_mono_stereo.opus", rates: (48000, 48000), channels: (1, 2), slack: 2048, secondLevel: 1),
     ]
 
     func testChainedOggDecodesBothStreamsAtTheOpenFormat() throws {
@@ -257,19 +257,12 @@ final class StreamDecodeTests: XCTestCase {
             XCTAssertEqual(pcm.count % 2, 0, name)
             XCTAssertEqual(Double(pcm.count / 2), 6 * 32000, accuracy: chain.slack * 32000 / 44100, "\(name): output length")
 
-            /* The second stream is stereo, 440 Hz left / 660 Hz right, whatever the first was. */
-            let pitches = {
-                XCTAssertEqual(self.pitch(pcm, channels: 2, channel: 0, range: 112_000..<176_000, rate: 32000), 440,
-                               accuracy: 2, "\(name): the second stream's left pitch")
-                XCTAssertEqual(self.pitch(pcm, channels: 2, channel: 1, range: 112_000..<176_000, rate: 32000), 660,
-                               accuracy: 8, "\(name): the second stream's right pitch")
-            }
-            if chain.channels.0 == 1 {
-                // #49: the stereo stream after the mono one comes out as its mono downmix on both channels.
-                XCTExpectFailure("#49: a stereo stream after a mono one decodes as dual mono", failingBlock: pitches)
-            } else {
-                pitches()
-            }
+            /* The second stream is stereo, 440 Hz left / 660 Hz right, whatever the first was (#49: not
+             * its mono downmix on both channels after a mono stream). */
+            XCTAssertEqual(pitch(pcm, channels: 2, channel: 0, range: 112_000..<176_000, rate: 32000), 440,
+                           accuracy: 2, "\(name): the second stream's left pitch")
+            XCTAssertEqual(pitch(pcm, channels: 2, channel: 1, range: 112_000..<176_000, rate: 32000), 660,
+                           accuracy: 8, "\(name): the second stream's right pitch")
         }
     }
 
