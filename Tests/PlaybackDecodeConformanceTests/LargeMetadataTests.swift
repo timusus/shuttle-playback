@@ -137,11 +137,13 @@ final class LargeMetadataTests: XCTestCase {
 
     /// Open, decode the whole file and compare with the small file's decode; then seek to the middle.
     /// An injected I/O error interrupts a decode, which the matrix recovers by seeking (and a resumed
-    /// decode restarts the codec), so those combinations compare the frame count only and skip the
-    /// seek, which `FaultyByteReader` would interrupt too.
-    private func assertOpensDecodesAndSeeks(large: URL, small: URL, name: String, switches: FaultSwitches) throws {
+    /// decode restarts the codec), so the `ioErrorOncePerPosition` combinations compare the frame
+    /// count only and skip both the PCM comparison and the seek, which `FaultyByteReader` would
+    /// interrupt too. With `seekFailsWithUnknownLength` the seek of the unknown-length combinations is
+    /// pinned as an expected failure (#55): fixing the bug fails the test, so remove the pin then.
+    private func assertOpensDecodesAndSeeks(large: URL, reference: DecodeRun, name: String, switches: FaultSwitches,
+                                            seekFailsWithUnknownLength: Bool) throws {
         let label = "\(name) \(switches)"
-        let reference = try ConformanceMatrix.decode(small, switches: [])
         let run = try ConformanceMatrix.decode(large, switches: switches)
         XCTAssertEqual(run.outcome, .decoded(end: "eof"), label)
         XCTAssertEqual(run.frames, reference.frames, label)
@@ -152,8 +154,22 @@ final class LargeMetadataTests: XCTestCase {
         if !switches.contains(.ioErrorOncePerPosition) { XCTAssertTrue(run.pcm == reference.pcm, "\(label): PCM differs") }
         guard !switches.contains(.ioErrorOncePerPosition) else { return }
         // A seek of the 2 MB-PICTURE FLAC with no length fails (#55); the open and decode above do not.
-        if switches.contains(.unknownLength), name.hasPrefix("FLAC") { return }
+        if seekFailsWithUnknownLength, switches.contains(.unknownLength) {
+            XCTExpectFailure("\(label): known decoder bug, https://github.com/timusus/shuttle-playback/issues/55") {
+                seekToTheMiddle(large: large, reference: reference, label: label, switches: switches)
+            }
+        } else {
+            seekToTheMiddle(large: large, reference: reference, label: label, switches: switches)
+        }
+    }
 
+    private func seekToTheMiddle(large: URL, reference: DecodeRun, label: String, switches: FaultSwitches) {
+        do { try seekToTheMiddleOrThrow(large: large, reference: reference, label: label, switches: switches) } catch {
+            XCTFail("\(label): \(error)")
+        }
+    }
+
+    private func seekToTheMiddleOrThrow(large: URL, reference: DecodeRun, label: String, switches: FaultSwitches) throws {
         let decoder = FFmpegStreamDecoder(reader: try FaultyByteReader(url: large, switches: switches))
         let format = try decoder.open()
         let duration = Double(reference.frames) / format.sampleRate
@@ -167,20 +183,30 @@ final class LargeMetadataTests: XCTestCase {
         XCTAssertEqual(Double(after) / format.sampleRate, duration - landed, accuracy: 0.05, "\(label): frames after the seek")
     }
 
-    private func assertAtEveryReader(large: URL, small: URL, name: String) throws {
+    private func assertAtEveryReader(large: URL, small: URL, name: String, minBytesBeforeAudio: Int64,
+                                     seekFailsWithUnknownLength: Bool = false) throws {
         try XCTSkipUnless(FFmpegStreamDecoder.isAvailable, "this build has no FFmpeg xcframework")
+        let reference = try ConformanceMatrix.decode(small, switches: [])
+        // The file must stress the budget, or the test proves nothing.
+        let clean = try ConformanceMatrix.decode(large, switches: [])
+        XCTAssertGreaterThan(clean.bytesBeforeFirstAudio, minBytesBeforeAudio,
+                             "\(name): bytes before the first audio vs the \(StreamProbeBudget.default.bytes) byte probe budget")
+        XCTAssertGreaterThan(clean.bytesBeforeFirstAudio, 10 * StreamProbeBudget.default.bytes)
         for switches in [FaultSwitches()] + FaultSwitches.allCombinations {
-            try assertOpensDecodesAndSeeks(large: large, small: small, name: name, switches: switches)
+            try assertOpensDecodesAndSeeks(large: large, reference: reference, name: name, switches: switches,
+                                           seekFailsWithUnknownLength: seekFailsWithUnknownLength)
         }
     }
 
     func testFLACWithA2MBPictureOpensDecodesAndSeeksAtTheDefaultBudget() throws {
         let large = try write(try flacWithPicture(pictureBytes: 2 * 1024 * 1024), ext: "flac")
-        try assertAtEveryReader(large: large, small: fixture("flac_stereo.flac"), name: "FLAC 2 MB PICTURE")
+        try assertAtEveryReader(large: large, small: fixture("flac_stereo.flac"), name: "FLAC 2 MB PICTURE",
+                           minBytesBeforeAudio: 2 * 1024 * 1024, seekFailsWithUnknownLength: true)
     }
 
     func testVorbisWithA1MBCommentOpensDecodesAndSeeksAtTheDefaultBudget() throws {
         let large = try write(try vorbisWithComment(commentBytes: 1024 * 1024), ext: "ogg")
-        try assertAtEveryReader(large: large, small: fixture("vorbis_stereo.ogg"), name: "Vorbis 1 MB comment")
+        try assertAtEveryReader(large: large, small: fixture("vorbis_stereo.ogg"), name: "Vorbis 1 MB comment",
+                           minBytesBeforeAudio: 1024 * 1024)
     }
 }
