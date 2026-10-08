@@ -1,0 +1,55 @@
+{
+  "bytesBeforeFirstAudioMax" : 99328,
+  "channels" : 1,
+  "durationS" : 1,
+  "expect" : "decodes",
+  "fixture" : "sample_192khz.wav",
+  "frames" : 192000,
+  "pcmSha256PerSecondInt16" : [
+    "0897141eb84e67aff57570f750efcfbc932e042cb5c532bcfd8ed0fa5fead7d0"
+  ],
+  "sampleRate" : 192000,
+  "seeks" : [
+    {
+      "alignFrames" : 0,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "9f1dcbc35c350d6027f98be0f5c8b43b42ca52b7604459c0c42be3aa88913d47"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 0.333,
+      "toS" : 0.333,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "d905f335ec94d2f812b1504a4064fb4f4806730534e1761b0ac60b8b9ed55bf7"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 0.667,
+      "toS" : 0.667,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "3991e09ebbf8377c36b356f4459caca87d658fcbafeeb60f54a4f058b4382f65"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 0.9,
+      "toS" : 0.9,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "d68ffff2ba2d1a0a0a4c923bc368f77245a8c2697434fbc5d4603ec94578e35d"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 1,
+      "toS" : 1,
+      "tolS" : 0.03,
+      "windowFrames" : 0,
+      "windowSha256Int16" : ""
+    }
+  ],
+  "sha256" : "7dec117314a4ed1a7c23fc07df1e91dea3da961186edf611f0bccdb550348818"
+}

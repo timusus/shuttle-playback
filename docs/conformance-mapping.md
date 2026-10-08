@@ -80,3 +80,62 @@ ReplayGain; this repo decodes audio only), **sniff** (media3's `peekLimit` forma
 `sine-wave-cbr-trailing-id3v1.mp3` is ported but media3 uses it only in `test_utils/.../AssetInfo.java`, not in the five extractor test classes; it is covered here by the conformance matrix and its golden.
 
 Not ported: `1024_incrementing_bytes.mp3` (not audio; no MP3 test above uses it).
+
+## Ogg (`libraries/extractor/.../ogg/`)
+
+Assets are copied from `libraries/test_data/src/test/assets/media/ogg/`; the three `bbb_*` files carry Big Buck Bunny audio (CC BY 3.0, attribution in `Fixtures/NOTICE`). Extra `n/a` reasons: **bytes** (a unit test on hand-built Ogg page bytes, which are not decodable audio, so there is nothing to compare), **codec** (outside our FFmpeg build).
+
+### OggExtractorParameterizedTest
+
+| media3 test | Ours |
+|---|---|
+| `opus` | `bear.opus` |
+| `opus_duplicateHeader` | `bear_duplicate_header.opus` |
+| `flac` | `bear_flac.ogg`; finding #57 (resume after an I/O error decodes extra frames) |
+| `flacNoSeektable` | `bear_flac_noseektable.ogg`; finding #57 |
+| `vorbis` | `bear_vorbis.ogg` |
+| `vorbisWithGapBeforeSecondPage` | `bear_vorbis_gap.ogg` |
+| `vorbisWithPacketSpanningBetweenPages` | `bear_vorbis_with_large_metadata.ogg` |
+
+### OggExtractorNonParameterizedTest
+
+| media3 test | Ours |
+|---|---|
+| `read_afterEndOfInput_doesNotThrowIllegalState` | n/a (API); `bear_flac.ogg` decodes to its end in the matrix |
+| `sniffVorbis`, `sniffFlac`, `sniffFailsOpusFile`, `sniffFailsInvalidOggHeader`, `sniffInvalidHeader`, `sniffFailsEOF` | n/a (sniff; the assets `vorbis_header`, `flac_header`, `opus_header`, `invalid_ogg_header`, `invalid_header`, `eof_header` are 27 to 35 bytes of header, not audio) |
+
+### OggPacketTest, OggPageHeaderTest, VorbisReaderTest
+
+| media3 test | Ours |
+|---|---|
+| `readPacketsWithEmptyPage`, `readPacketWithZeroSizeTerminator`, `readContinuedPacketOverTwoPages`, `readContinuedPacketOverFourPages`, `readDiscardContinuedPacketAtStart`, `readZeroSizedPacketsAtEndOfStream` | n/a (bytes: `OggPacket` unit tests on crafted pages, assets of 294 to 1141 bytes with no audio); packets spanning pages are decoded by `bear_vorbis_with_large_metadata.ogg` |
+| `parseRealFile` | `bear.opus` |
+| `skipToNextPage_*` (3), `populatePageHeader_*` (4) | n/a (API: `OggPageHeader` parsing; `page_header` is 29 bytes) |
+| `appendNumberOfSamples`, `readSetupHeaders_withIOExceptions_readSuccess` | n/a (API: `VorbisReader` internals, asset `binary/ogg/vorbis_header_pages` is headers only); I/O errors during Vorbis setup are in the fault matrix of `bear_vorbis.ogg` |
+
+### DefaultOggSeekerTest
+
+| media3 test | Ours |
+|---|---|
+| `setupWithUnsetEndPositionFails`, `readGranuleOfLastPage_*` (3) | n/a (API: `DefaultOggSeeker`; `three_headers` is 2.4 KB of headers) |
+| `seeking` | n/a (bytes: `random_1000_pages` is 1 MB of random pages, not audio; over the size limit); seeks of the Ogg fixtures are in their goldens, all exact |
+
+Playback tests in `exoplayer/.../e2etest/` (`OggPlaybackTest`, `OggOpusPlaybackTest`) are player-level and stay in the apps; their audio assets `bbb_1ch_16kHz_q10_vorbis.ogg` and `bbb_6ch_8kHz_opus.ogg` (mono 16 kHz Vorbis, 6-channel Opus) are ported.
+
+## WAV (`libraries/extractor/.../wav/`)
+
+Assets are copied from `libraries/test_data/src/test/assets/media/wav/`. Every WAV with a data chunk over about 24 KB that ends the file shows the #36 double read under `unknownLength` (pinned per fixture).
+
+### WavExtractorTest
+
+| media3 test | Ours |
+|---|---|
+| `sample` | `sample.wav` (8-bit and 24-bit variants below) |
+| `sample_withTrailingBytes_extractsSameData` | `sample_with_trailing_bytes.wav` |
+| `sample_withOddMetadataChunkSize_extractsSameData` | `sample_with_odd_metadata_chunk_size.wav` |
+| `sample_imaAdpcm` | `sample_ima_adpcm.wav`; n/a (codec: IMA ADPCM is not in our FFmpeg build, the golden records an open error (`streaming decode failed, status 5`)) |
+| `sample_rf64` | `sample_rf64.wav` |
+| `sample_wav_format_extensible` | `sample_wav_format_extensible.wav` (6 channels); finding #58 (more bytes before the first audio after an I/O error under partial reads) |
+| `sample_float64` | `sample_float64.wav` |
+
+Other WAV assets in media3 (used by the muxer, playback and transformer tests, not `WavExtractorTest`) are ported too, since they widen the format coverage: `sample_8bit.wav`, `sample_float32.wav`, `sample_96khz.wav`, `sample_192khz.wav` (the 192 kHz mono case), `sine_24le.wav`, `sine_32le.wav`, `bbb_2ch_44kHz.wav` and `sample_80KHz_mono_20_repeating_1_samples.wav` (20 frames). No media3 asset in either folder was skipped for size except `random_1000_pages`.

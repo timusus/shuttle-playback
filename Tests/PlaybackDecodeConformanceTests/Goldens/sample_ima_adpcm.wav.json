@@ -1,0 +1,16 @@
+{
+  "bytesBeforeFirstAudioMax" : 0,
+  "channels" : 0,
+  "durationS" : 0,
+  "expect" : "error:streaming decode failed, status 5",
+  "fixture" : "sample_ima_adpcm.wav",
+  "frames" : 0,
+  "pcmSha256PerSecondInt16" : [
+
+  ],
+  "sampleRate" : 0,
+  "seeks" : [
+
+  ],
+  "sha256" : "3bd16a0e8c0d55200813c3e74a8dfa68554cf87190daf40ce3f0bac422ab9773"
+}
