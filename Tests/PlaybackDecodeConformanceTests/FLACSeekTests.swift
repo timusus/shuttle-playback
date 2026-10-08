@@ -72,7 +72,7 @@ final class FLACSeekTests: XCTestCase {
     /// the last samples of every second noise frame spell a valid frame header naming an earlier
     /// frame.
     /// Returns the file, its PCM interleaved, and its largest frame.
-    private func writeFLAC(variable: Bool, trailing: Int = 0, lookalikes: Bool = false) throws -> (URL, [Int16], Int) {
+    private func writeFLAC(variable: Bool, trailing: Int = 0, lookalikes: Bool = false, unknownTotal: Bool = false) throws -> (URL, [Int16], Int) {
         let total = 60 * Self.rate
         var frames = Data()
         var pcm: [Int16] = []
@@ -135,7 +135,7 @@ final class FLACSeekTests: XCTestCase {
         let minBlock = variable ? 1152 : 4096
         file += [UInt8(minBlock >> 8), UInt8(minBlock & 0xFF), 0x10, 0x00]
         file += [0, 0, 0, UInt8(maxFrame >> 16), UInt8(maxFrame >> 8 & 0xFF), UInt8(maxFrame & 0xFF)]
-        let packed = UInt64(Self.rate) << 44 | 1 << 41 | 15 << 36 | UInt64(total)
+        let packed = UInt64(Self.rate) << 44 | 1 << 41 | 15 << 36 | UInt64(unknownTotal ? 0 : total)
         file += (0..<8).map { UInt8(packed >> (56 - 8 * $0) & 0xFF) }
         file += [UInt8](repeating: 0, count: 16)     // no MD5
         let padding = 8192
@@ -266,6 +266,17 @@ final class FLACSeekTests: XCTestCase {
         XCTAssertEqual(Array(got.prefix(window * 2)), want, "PCM differs from the stream's at the landing")
     }
 
+    /// **A FLAC whose STREAMINFO has no sample count seeks exactly (issue #54).**
+    ///
+    /// What FFmpeg writes to a pipe, where it cannot go back to fill the count in. Such a file has
+    /// no duration either, so no bytes can be estimated from: the
+    /// demuxer's own bisection is the only seek (media3 gives such a file no seeking at all), and
+    /// its cost is not bounded; the landing and the PCM are.
+    func testAFLACWithNoSampleCountSeeksExactly() throws {
+        try assertSeeksExactly(to: [45.0, 30.5, 55.123, 0.25, 59.9, 59.99, 21.0, 12.345], unknownTotal: true, bounded: false)
+        try assertSeeksExactly(to: [59.9, 59.99, 55.123, 30.5], trailing: 64 * 1024, unknownTotal: true, bounded: false)
+    }
+
     /// **A read that fails during a seek never makes it land by byte estimate (issue #54).**
     ///
     /// The first read after the n-th reader seek fails, for each n a seek makes (the search's
@@ -294,11 +305,11 @@ final class FLACSeekTests: XCTestCase {
     /// The bytes are bounded by `probing` (plus the probe that crosses it, at most two frames), a
     /// placement at most 64 KiB before the target, the ten frames the FLAC parser buffers before it
     /// hands out the first, and one AVIO refill.
-    private func assertSeeksExactly(to targets: [Double], trailing: Int = 0, lookalikes: Bool = false,
+    private func assertSeeksExactly(to targets: [Double], trailing: Int = 0, lookalikes: Bool = false, unknownTotal: Bool = false, bounded: Bool = true,
                                     probing: Int = 128 * 1024,
                                     file: StaticString = #filePath, line: UInt = #line) throws {
         for variable in [false, true] {
-            let (url, pcm, maxFrame) = try writeFLAC(variable: variable, trailing: trailing, lookalikes: lookalikes)
+            let (url, pcm, maxFrame) = try writeFLAC(variable: variable, trailing: trailing, lookalikes: lookalikes, unknownTotal: unknownTotal)
             let reader = try CountingReader(url)
             let decoder = FFmpegStreamDecoder(reader: reader)
             let format = try decoder.open()
@@ -327,9 +338,9 @@ final class FLACSeekTests: XCTestCase {
                     XCTFail("\(label): PCM differs from the stream's at frame \(miss / 2) after the landing",
                             file: file, line: line)
                 }
-                XCTAssertLessThanOrEqual(bytes, budget, "\(label): read \(bytes) bytes before its first audio",
+                XCTAssertLessThanOrEqual(bounded ? bytes : 0, budget, "\(label): read \(bytes) bytes before its first audio",
                                          file: file, line: line)
-                XCTAssertLessThanOrEqual(reader.seeks - seeksBefore, 16,
+                XCTAssertLessThanOrEqual(bounded ? reader.seeks - seeksBefore : 0, 16,
                                          "\(label): positioned the reader \(reader.seeks - seeksBefore) times",
                                          file: file, line: line)
             }
