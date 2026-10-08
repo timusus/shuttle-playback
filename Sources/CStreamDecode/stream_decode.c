@@ -166,6 +166,11 @@ struct StreamDecoder {
      * the Xing/Info/VBRI frame can be read without a second request. */
     uint8_t      prologue[4096];
     int          prologue_len;
+    /* Bytes the ID3 probe read and could not rewind over (a forward-only source refused the seek),
+     * served to libavformat before the reader's next byte. See `probe_id3_offset`. */
+    uint8_t      lead[10];
+    int          lead_len;
+    int          lead_pos;
     int64_t      io_pos;             /* libavformat's read position */
     int64_t      contiguous_read;    /* the end of the run of bytes read from offset 0, past any seeks */
 
@@ -199,7 +204,15 @@ static int avio_read_packet(void *opaque, uint8_t *buf, int buf_size) {
         d->seek_budget_blown = 1;
         return AVERROR(EIO);
     }
-    int n = d->cb.read(d->opaque, buf, buf_size);
+    int n;
+    if (d->lead_pos < d->lead_len) {
+        n = d->lead_len - d->lead_pos;
+        if (n > buf_size) n = buf_size;
+        memcpy(buf, d->lead + d->lead_pos, (size_t)n);
+        d->lead_pos += n;
+    } else {
+        n = d->cb.read(d->opaque, buf, buf_size);
+    }
     if (n > 0) {
         d->bytes_read += n;
         if (d->seek_budget_armed) d->seek_bytes += n;
@@ -309,6 +322,7 @@ static int64_t avio_seek_packet(void *opaque, int64_t offset, int whence) {
         return target;
     }
 
+    d->lead_len = d->lead_pos = 0;   /* the reader is repositioned: the unread lead is stale */
     int rc = d->cb.seek(d->opaque, target + d->base_offset);
     if (rc == 0) { d->source_eof = 0; d->io_pos = target; return target; }
     switch (rc) {
@@ -341,11 +355,14 @@ static int64_t avio_seek_packet(void *opaque, int64_t offset, int whence) {
  */
 static int64_t probe_id3_offset(StreamDecoder *d) {
     int64_t offset = 0;
+    int have = 0;   /* header bytes read at `offset` */
+    uint8_t header[10];
     for (;;) {
-        uint8_t header[10];
         int got = 0;
+        have = 0;
         while (got < (int)sizeof(header)) {
             int n = d->cb.read(d->opaque, header + got, (int)sizeof(header) - got);
+            if (n > 0) have += n;
             /* Latched as the AVIO glue latches them: a probe cut short is not "no tag". */
             if (n == STREAM_READ_CANCELLED) d->cancelled = 1;
             if (n == STREAM_READ_INTERRUPTED) d->interrupted = 1;
@@ -370,7 +387,14 @@ static int64_t probe_id3_offset(StreamDecoder *d) {
     }
     /* Either there was no tag or the last read was past the last one: go back to where the media
      * (or the file) starts. */
-    if (d->cb.seek(d->opaque, offset) != 0) return 0;
+    if (d->cb.seek(d->opaque, offset) != 0) {
+        /* A forward-only source cannot go back over the bytes just read; hand them to libavformat
+         * from here instead of losing them (media3's DefaultExtractorInput peeks the same way). */
+        if (d->cancelled || d->interrupted || have == 0) return 0;
+        memcpy(d->lead, header, (size_t)have);
+        d->lead_len = have;
+        d->lead_pos = 0;
+    }
     return offset;
 }
 

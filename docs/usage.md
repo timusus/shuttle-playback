@@ -121,8 +121,7 @@ normally and `endReason` is `.eof`. At a fixed output rate the first frame after
 output frame, not bit-identical to the uninterrupted decode.
 
 A forward-only source (a reader whose `seek(to:)` throws `StreamByteReaderError.unseekable`, such as
-an unknown-length chunked transcode) opens and decodes MP3 sequentially; FLAC, Ogg and MP4 do not
-open on one yet (#56). A seek that needs a position it
+an unknown-length chunked transcode) opens and decodes MP3, FLAC, Ogg and MP4 sequentially. A seek that needs a position it
 refuses throws `StreamDecoderError.unseekable`, distinct from `.failed(status:)` (a corrupt stream).
 The decoder has failed after it: `endReason` is `.failure` and reads return nothing, so open a new
 decoder over a seekable source. A seek that libavformat can serve from bytes it still holds succeeds.

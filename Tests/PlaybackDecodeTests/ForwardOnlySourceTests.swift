@@ -149,4 +149,40 @@ final class ForwardOnlySourceTests: XCTestCase {
         XCTAssertEqual(landed, 1, accuracy: 0.05)
         XCTAssertNotNil(decoder.nextChunk())
     }
+
+    // MARK: Issue #56: the other containers open and decode on a forward-only source
+
+    private static let containers = ["flac_51_48k.flac", "chained_vorbis_44k_48k.ogg", "tone_moov_first.m4a"]
+
+    private func fixtureURL(_ fixture: String) -> URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/\(fixture)")
+    }
+
+    private func decodeAll(_ decoder: FFmpegStreamDecoder) throws -> [Float] {
+        _ = try decoder.open()
+        var samples: [Float] = []
+        while let chunk = decoder.nextChunk() { samples += chunk }
+        XCTAssertEqual(decoder.endReason, .eof)
+        return samples
+    }
+
+    func testFLACOggAndMP4DecodeBitIdenticallyToTheSeekableDecode() throws {
+        for fixture in Self.containers {
+            let seekable = try decodeAll(FFmpegStreamDecoder(reader: FileByteReader(url: fixtureURL(fixture), reportsTotalLength: false)))
+            let forward = try decodeAll(FFmpegStreamDecoder(reader: try reader(fixture)))
+            XCTAssertGreaterThan(forward.count, 0, fixture)
+            XCTAssertEqual(forward, seekable, fixture)
+        }
+    }
+
+    func testBackwardSeekOnFLACOggAndMP4IsUnseekable() throws {
+        for fixture in Self.containers {
+            let decoder = FFmpegStreamDecoder(reader: try reader(fixture))
+            _ = try decoder.open()
+            while decoder.bytesConsumed < 100_000, decoder.nextChunk() != nil {}
+            XCTAssertThrowsError(try decoder.seek(toSeconds: 0), fixture) { error in
+                XCTAssertEqual(error as? StreamDecoderError, .unseekable, fixture)
+            }
+        }
+    }
 }
