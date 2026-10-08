@@ -124,7 +124,7 @@ Playback tests in `exoplayer/.../e2etest/` (`OggPlaybackTest`, `OggOpusPlaybackT
 
 ## WAV (`libraries/extractor/.../wav/`)
 
-Assets are copied from `libraries/test_data/src/test/assets/media/wav/`. Every WAV with a data chunk over about 24 KB that ends the file shows the #36 double read under `unknownLength` (pinned per fixture).
+Assets are copied from `libraries/test_data/src/test/assets/media/wav/`. Seven of these WAVs show the #36 double read under `unknownLength` (pinned per fixture in `KnownIssues.swift`).
 
 ### WavExtractorTest
 
