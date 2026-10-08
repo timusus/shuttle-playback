@@ -19,9 +19,18 @@ final class FLACSeekTests: XCTestCase {
         private(set) var bytesRead: Int64 = 0
         private(set) var seeks = 0
 
+        /// With `failFirstReadAfterSeeks`, the first read after that many seeks since `armed` fails.
+        var failFirstReadAfterSeeks: Int?
+        private var armedSeeks = 0
+
         init(_ url: URL, failOnceFrom: Int64? = nil) throws {
             inner = try FileByteReader(url: url)
             self.failOnceFrom = failOnceFrom
+        }
+
+        func arm(failingReadAfterSeeks n: Int) {
+            failFirstReadAfterSeeks = n
+            armedSeeks = 0
         }
 
         var totalLength: Int64? { inner.totalLength }
@@ -32,6 +41,10 @@ final class FLACSeekTests: XCTestCase {
                 failOnceFrom = nil
                 throw ReadFailed()
             }
+            if let after = failFirstReadAfterSeeks, armedSeeks >= after {
+                failFirstReadAfterSeeks = nil
+                throw ReadFailed()
+            }
             let n = try inner.read(into: buffer, maxLength: maxLength)
             bytesRead += Int64(n)
             return n
@@ -39,6 +52,7 @@ final class FLACSeekTests: XCTestCase {
 
         func seek(to offset: Int64) throws {
             seeks += 1
+            armedSeeks += 1
             try inner.seek(to: offset)
         }
 
@@ -250,6 +264,29 @@ final class FLACSeekTests: XCTestCase {
         XCTAssertEqual(start % (4096 * 2), 0, "landed \(landed), not on a frame")
         let want = pcm[start..<start + window * 2].map { Float($0) / 32768 }
         XCTAssertEqual(Array(got.prefix(window * 2)), want, "PCM differs from the stream's at the landing")
+    }
+
+    /// **A read that fails during a seek never makes it land by byte estimate (issue #54).**
+    ///
+    /// The first read after the n-th reader seek fails, for each n a seek makes (the search's
+    /// probes, then the anchored placement). Whichever read it is, the seek reports where it
+    /// landed and the PCM there is the stream's: never the target over audio from elsewhere.
+    func testAReadFailingDuringASeekStillReportsWhereItLanded() throws {
+        let (url, pcm, _) = try writeFLAC(variable: false)
+        for n in 0...9 {
+            let reader = try CountingReader(url)
+            let decoder = FFmpegStreamDecoder(reader: reader)
+            _ = try decoder.open()
+            reader.arm(failingReadAfterSeeks: n)
+            guard let landed = try? decoder.seek(toSeconds: 45.0) else { continue }
+            var got: [Float] = []
+            while got.count < 4096 * 2, let chunk = decoder.nextChunk() { got += chunk }
+            let start = Int((landed * Double(Self.rate)).rounded()) * 2
+            XCTAssertLessThanOrEqual(landed, 45.0 + 0.5 / Double(Self.rate), "n=\(n): landed \(landed)")
+            guard start + 4096 * 2 <= pcm.count else { continue }
+            let want = pcm[start..<start + 4096 * 2].map { Float($0) / 32768 }
+            XCTAssertEqual(Array(got.prefix(4096 * 2)), want, "n=\(n): PCM differs from the stream's at \(landed)")
+        }
     }
 
     /// Seek the generated FLAC, fixed and variable blocksize, to each target in turn, and require

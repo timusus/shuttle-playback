@@ -2692,6 +2692,26 @@ static int demux_seek(StreamDecoder *decoder, double seconds, int64_t target, do
         /* An interrupted seek is retried by the caller, and has to land where the uninterrupted
          * one would: the byte estimate would land somewhere else (issue #5). */
         if (decoder->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+        FLACInfo flac_si;
+        if (flac_info(decoder, &flac_si) && can_estimate_bytes(decoder)) {
+            /* Native FLAC never takes the byte estimate: it would report the target over audio
+             * from wherever the byte falls (issue #54). The anchored seek failed (a read error) or
+             * there was no anchor to place, so the demuxer's own bisection, which reads frame
+             * headers for their times, places it at whatever cost, as an expensive seek beats one
+             * that reports the wrong place. */
+            avio_clear_latched_error(decoder);
+            decoder->source_eof = 0;
+            decoder->anchored = 0;
+            decoder->flac_short_at = AV_NOPTS_VALUE;
+            rc = avformat_seek_file(decoder->fmt, decoder->audio_idx, INT64_MIN, target, target,
+                                    AVSEEK_FLAG_BACKWARD);
+            if (rc < 0) {
+                if (decoder->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+                if (decoder->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+                return STREAM_DECODE_ERR_SEEK;
+            }
+            return kSeekPlaced;
+        }
         if (!can_estimate_bytes(decoder)) {
             /* Nothing to estimate FROM: a source with no length and no container duration, which
              * over HTTP is a chunked response. The walk is then the only seek there is, so it is
