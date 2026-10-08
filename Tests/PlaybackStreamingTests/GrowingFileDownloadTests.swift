@@ -216,7 +216,7 @@ struct GrowingFileDownloadTests {
     /// Issue #68: the read rule weighs the latency of the last accepted response, measured from
     /// its request going out, on the resume path and on the normal one alike.
     @Test("the response latency is recorded per accepted response and decides a seek ahead: wait, or a new request")
-    func responseLatencyDecidesASeekAhead() {
+    func responseLatencyDecidesASeekAhead() throws {
         let h = Harness()
         #expect(h.machine.responseLatency == nil)
         h.read()
@@ -241,10 +241,10 @@ struct GrowingFileDownloadTests {
         #expect(rate > 0)
         let frontier = h.machine.current!.frontier
         h.machine.willSeek(generation: nil)
-        try? h.machine.seek(to: frontier + Int64(rate * 0.15))
+        try h.machine.seek(to: frontier + Int64(rate * 0.15))
         #expect(h.read() == .park)
         #expect(h.requests.count == 2, "a gap the download closes in 0.15 s waits")
-        try? h.machine.seek(to: frontier + Int64(rate * 0.25))
+        try h.machine.seek(to: frontier + Int64(rate * 0.25))
         #expect(h.read() == .park)
         #expect(h.requests.count == 3, "a gap the download closes in 0.25 s is a new request")
         #expect(h.requests.last == h.request(3, from: frontier + Int64(rate * 0.25)))
@@ -257,7 +257,7 @@ struct GrowingFileDownloadTests {
         h.read(1000)
         let rate2 = h.machine.downloadBytesPerSecond(now: h.now)!
         let frontier2 = h.machine.current!.frontier
-        try? h.machine.seek(to: frontier2 + Int64(rate2 * 0.25))
+        try h.machine.seek(to: frontier2 + Int64(rate2 * 0.25))
         #expect(h.read() == .park)
         #expect(h.requests.count == 3, "against a 0.5 s response the same gap waits")
     }
