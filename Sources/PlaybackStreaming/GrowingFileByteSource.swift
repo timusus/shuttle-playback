@@ -197,7 +197,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         }
         locked {
             pathObserver = observer
-            if let path = pathMonitor.path { _ = machine.pathCost(isExpensive: Self.costs(path), now: clock.now) }
+            if let path = pathMonitor.path, path.satisfied { _ = machine.pathCost(isExpensive: Self.costs(path), now: clock.now) }
         }
     }
 
@@ -403,11 +403,14 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         condition.lock()
     }
 
-    /// A change reopens a transaction still on the network; every path sets whether the read-ahead
+    /// A change reopens a transaction still on the network; every satisfied path sets whether the read-ahead
     /// cap applies.
     private func networkPathUpdated(_ path: GrowingFilePathMonitor.Path, isChange: Bool) {
         perform(locked {
             let changed = isChange ? runLocked(machine.pathChanged(now: clock.now)) : []
+            // An unsatisfied path reports no cost; it would lift a pause into a request that
+            // cannot be answered.
+            guard path.satisfied else { return changed }
             return changed + runLocked(machine.pathCost(isExpensive: Self.costs(path), now: clock.now))
         })
     }

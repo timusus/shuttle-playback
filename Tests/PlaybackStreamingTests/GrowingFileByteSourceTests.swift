@@ -1287,6 +1287,22 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertEqual(server.requestedRanges, [0, 0, pausedAt])
     }
 
+    /// An unsatisfied path reports no cost; it must not lift a pause. The resume would go out
+    /// offline and fail on a transaction the decoder still has file to play.
+    func testAnOfflinePathLeavesAPauseAloneAndTheNextSatisfiedPathLiftsIt() throws {
+        let body = makeBody(600_000)
+        let server = try startServer(body: body)
+        server.bytesPerSecond = 1024 * 1024
+        let (source, monitor) = try pausedSource(server, path: Self.hotspot)
+        let pausedAt = source.snapshot.frontier
+        monitor.update(Self.offline)
+        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertEqual(server.requestedRanges, [0], "offline lifted the pause")
+        monitor.update(Self.wifi)
+        XCTAssertTrue(waitUntil { source.snapshot.isComplete }, "the pause was not lifted")
+        XCTAssertEqual(server.requestedRanges, [0, pausedAt])
+    }
+
     /// (f) A host that ignores ranges is never capped: a resume would start it from 0 again.
     func testARangeIgnoringHostDownloadsWholeOnAnExpensivePath() throws {
         let body = makeBody(600_000)
