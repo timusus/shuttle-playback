@@ -191,7 +191,7 @@ Exceptions to "every seek has `alignFrames` 0": the goldens of `sample_empty_tra
 ## ADTS and LATM (`libraries/extractor/.../ts/`, `.../mp3/` siblings)
 
 media3 reads raw ADTS with `AdtsExtractor` (`AdtsExtractorTest`, assets under `media/ts/`) and LATM only
-inside MPEG-TS .
+inside MPEG-TS (`TsExtractor`).
 
 ### AdtsExtractorTest (one row per asset; each runs the 4 `.N.dump` seek variants and `unknown_length`)
 
