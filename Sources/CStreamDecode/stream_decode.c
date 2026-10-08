@@ -168,6 +168,13 @@ struct StreamDecoder {
     int          prologue_len;
     int64_t      io_pos;             /* libavformat's read position */
     int64_t      contiguous_read;    /* the end of the run of bytes read from offset 0, past any seeks */
+
+    /* A one-frame MP3 shown to libavformat with a copy of its frame behind it (see
+     * `reopen_single_frame_mp3`): `phantom_len` bytes at AVIO offset `phantom_at`. */
+    uint8_t      phantom[1792];
+    int          phantom_len;
+    int64_t      phantom_at;
+    int          phantom_samples;    /* the real frame's samples per channel */
 };
 
 enum { MP3_TAG_NONE = 0, MP3_TAG_INFO, MP3_TAG_VBR };
@@ -177,6 +184,14 @@ enum { MP3_TAG_NONE = 0, MP3_TAG_INFO, MP3_TAG_VBR };
 static int avio_read_packet(void *opaque, uint8_t *buf, int buf_size) {
     StreamDecoder *d = (StreamDecoder *)opaque;
     if (d->cancelled || d->interrupted) return AVERROR_EXIT;
+    if (d->phantom_len && d->io_pos >= d->phantom_at) {
+        int64_t off = d->io_pos - d->phantom_at;
+        if (off >= d->phantom_len) return AVERROR_EOF;
+        int n = d->phantom_len - (int)off < buf_size ? d->phantom_len - (int)off : buf_size;
+        memcpy(buf, d->phantom + off, (size_t)n);
+        d->io_pos += n;
+        return n;
+    }
     /* A seek that has already spent its budget is a demuxer walking the file packet by packet to
      * build an index it has no table for. Refusing the read aborts the walk; the caller
      * falls back to the byte estimate, which costs one transaction instead of megabytes. */
@@ -222,7 +237,7 @@ static int64_t avio_seek_packet(void *opaque, int64_t offset, int whence) {
         int64_t size = d->cb.size(d->opaque);
         /* ENOSYS is the documented "I do not know", and it is the ONLY honest answer for a source
          * with no length: a made-up size sends the mov demuxer seeking past the end. */
-        return size >= 0 ? size - d->base_offset : AVERROR(ENOSYS);
+        return size >= 0 ? size - d->base_offset + d->phantom_len : AVERROR(ENOSYS);
     }
 
     int64_t target;
@@ -232,7 +247,7 @@ static int64_t avio_seek_packet(void *opaque, int64_t offset, int whence) {
         case SEEK_END: {
             int64_t size = d->cb.size(d->opaque);
             if (size < 0) return AVERROR(ENOSYS);
-            target = (size - d->base_offset) + offset;
+            target = (size - d->base_offset + d->phantom_len) + offset;
             break;
         }
         default: return AVERROR(EINVAL);
@@ -243,6 +258,10 @@ static int64_t avio_seek_packet(void *opaque, int64_t offset, int whence) {
         return AVERROR(ENOSYS);
     }
     if (target < 0) return AVERROR(EINVAL);
+    if (d->phantom_len && target >= d->phantom_at) {   /* the source has nothing there to seek to */
+        d->io_pos = target;
+        return target;
+    }
 
     int rc = d->cb.seek(d->opaque, target + d->base_offset);
     if (rc == 0) { d->source_eof = 0; d->io_pos = target; return target; }
@@ -786,6 +805,7 @@ static void close_format(StreamDecoder *d);
 static int  skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *options);
 static void avio_clear_latched_error(StreamDecoder *d);
 static int  reopen_past_mp3_junk(StreamDecoder *d, const StreamDecodeOptions *options, int failed);
+static int  reopen_single_frame_mp3(StreamDecoder *d, const StreamDecodeOptions *options, int failed);
 
 StreamDecoder *stream_decoder_open(const StreamDecodeCallbacks *callbacks,
                                    void *opaque,
@@ -831,6 +851,9 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     local_status = open_format(d, options);
     if (local_status == STREAM_DECODE_ERR_NO_AUDIO || local_status == STREAM_DECODE_ERR_OPEN) {
         local_status = reopen_past_mp3_junk(d, options, local_status);
+        if (local_status == STREAM_DECODE_ERR_NO_AUDIO || local_status == STREAM_DECODE_ERR_OPEN) {
+            local_status = reopen_single_frame_mp3(d, options, local_status);
+        }
     }
     if (local_status != STREAM_DECODE_OK) goto fail;
     local_status = skip_unscanned_junk(d, options);
@@ -869,6 +892,10 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     if (d->fmt->iformat && d->fmt->iformat->name && strstr(d->fmt->iformat->name, "mov") &&
         stream->duration != AV_NOPTS_VALUE && stream->duration > 0) {
         d->end_pts = d->start_time + stream->duration;
+    }
+    if (d->phantom_len) {   /* the audio ends where the real frame does, not the copy behind it */
+        d->end_pts = d->start_time + av_rescale_q(d->phantom_samples, (AVRational){ 1, par->sample_rate },
+                                                  stream->time_base);
     }
     d->prime_skip = mp4_aac_prime_skip(d, par);
     if (d->prime_skip > 0) {
@@ -918,6 +945,7 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
     } else if (stream->duration != AV_NOPTS_VALUE) {
         info->duration_sec = (double)stream->duration * av_q2d(stream->time_base);
     }
+    if (d->phantom_len) info->duration_sec = (double)d->phantom_samples / (double)d->sample_rate;
     if (d->prime_skip > 0 && info->duration_sec > 0) {
         info->duration_sec -= (double)d->prime_skip / (double)d->sample_rate;   /* the priming is not audio */
         if (info->duration_sec < 0) info->duration_sec = 0;
@@ -1247,6 +1275,43 @@ need_more:
     d->prologue_len = 0;
     d->source_eof = 0;
     return open_format(d, options);
+}
+
+/*
+ * A file that is one MPEG audio frame and nothing else (issue #51). mp3dec's header scan wants a
+ * second frame header after the first and fails the open when it reads end of file there ("Failed
+ * to find two consecutive MPEG audio frames"); media3's Mp3Extractor plays it. The open is retried
+ * with a copy of the frame appended to what libavformat sees; `phantom_len` makes the AVIO glue
+ * serve it, and the open path clips the audio to the real frame. Only after a failed open, so no
+ * other file is read differently.
+ */
+static int reopen_single_frame_mp3(StreamDecoder *d, const StreamDecodeOptions *options, int failed) {
+    int64_t size = d->cb.size(d->opaque);
+    /* Without a length, the failed open having met end of file is what says the bytes are all there are. */
+    int64_t avail = size >= 0 ? size - d->base_offset : d->source_eof ? d->prologue_len : -1;
+    uint32_t key;
+    int spf, bitrate, rate, side;
+    if (d->cancelled || d->interrupted || avail < 4 || avail > (int64_t)sizeof(d->phantom)
+        || avail != d->prologue_len || mp3_frame_length(d->prologue, &key) != avail
+        || !mp3_parse_header(d->prologue, &spf, &bitrate, &rate, &side)) {
+        return failed;
+    }
+    int rc = reopen_seek(d, d->base_offset);
+    if (rc != STREAM_DECODE_OK) return rc == STREAM_DECODE_ERR_IO ? failed : rc;
+    close_format(d);
+    memcpy(d->phantom, d->prologue, (size_t)avail);
+    d->phantom_len = (int)avail;
+    d->phantom_at = avail;
+    d->phantom_samples = spf;
+    d->io_pos = 0;
+    d->prologue_len = 0;
+    d->source_eof = 0;
+    rc = open_format(d, options);
+    if (rc != STREAM_DECODE_OK) {
+        d->phantom_len = 0;
+        return rc == STREAM_DECODE_ERR_OPEN || rc == STREAM_DECODE_ERR_NO_AUDIO ? failed : rc;
+    }
+    return rc;
 }
 
 /*

@@ -1,16 +1,55 @@
 {
-  "bytesBeforeFirstAudioMax" : 0,
-  "channels" : 0,
-  "durationS" : 0,
-  "expect" : "error:streaming decode failed, status 3",
+  "bytesBeforeFirstAudioMax" : 1024,
+  "channels" : 2,
+  "durationS" : 0.03,
+  "expect" : "decodes",
   "fixture" : "play-trimmed.mp3",
-  "frames" : 0,
+  "frames" : 1152,
   "pcmSha256PerSecondInt16" : [
-
+    "606f558e014930f9c1669f03c71c28945c4631568e39cd308c6c7f4077c7bfb9"
   ],
-  "sampleRate" : 0,
+  "sampleRate" : 44100,
   "seeks" : [
-
+    {
+      "alignFrames" : 0,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03,
+      "windowFrames" : 256,
+      "windowSha256Int16" : "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 0.009,
+      "toS" : 0.009,
+      "tolS" : 0.03,
+      "windowFrames" : 256,
+      "windowSha256Int16" : "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 0.017,
+      "toS" : 0.017,
+      "tolS" : 0.03,
+      "windowFrames" : 256,
+      "windowSha256Int16" : "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 0,
+      "toS" : 0,
+      "tolS" : 0.03,
+      "windowFrames" : 256,
+      "windowSha256Int16" : "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+    },
+    {
+      "alignFrames" : 0,
+      "landedS" : 0.026,
+      "toS" : 0.026,
+      "tolS" : 0.03,
+      "windowFrames" : 0,
+      "windowSha256Int16" : ""
+    }
   ],
   "sha256" : "29b6fce998ce248758548635686f15948bd8b86d6fac116bfeefa647b4e0747c"
 }
