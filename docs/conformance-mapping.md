@@ -187,3 +187,20 @@ Exceptions to "every seek has `alignFrames` 0": the goldens of `sample_empty_tra
 | `sniff_*`, `extract_h264/h265WithoutGopParsingFlags` | n/a (sniff; API: flags) |
 | `FragmentedMp4ExtractorNoSniffingTest` (`sample_fragmented_sideloaded_track.mp4`) | n/a (API: a side-loaded subtitle track; the file alone does not open in FFmpeg, "trun track id unknown", and nothing audible is lost) |
 | `FragmentedMp4ExtractorTest`-style other classes (`BoxParserTest`, `MetadataUtilTest`, `PsshAtomUtilTest`) | n/a (API) |
+
+## ADTS and LATM (`libraries/extractor/.../ts/`, `.../mp3/` siblings)
+
+media3 reads raw ADTS with `AdtsExtractor` (`AdtsExtractorTest`, assets under `media/ts/`) and LATM only
+inside MPEG-TS .
+
+### AdtsExtractorTest (one row per asset; each runs the 4 `.N.dump` seek variants and `unknown_length`)
+
+| media3 asset or test | Ours |
+|---|---|
+| `sample`, `sample_withSeeking` | `sample.adts`; no findings |
+| `sample_with_id3` | `sample_with_id3.adts` (ID3v2 prefix before the first ADTS frame); no findings |
+| `sample_withSeekingAndTruncatedFile` | `sample_cbs_truncated.adts` (stream cut mid-frame); no findings |
+| `sample_cbs.adts` | not in the media3 assets (only its dumps exist) |
+| `sample_latm.ts` (`TsExtractorTest`) | n/a (MPEG-TS container, which this repo does not support; the repo's own `latm_loas.aac` covers raw LOAS/LATM) |
+| `bbb_1ch_8kHz_aac_lc.aac`, `sine.aac` | n/a (used by transformer tests, not an extractor test; `bbb_*` is not copied) |
+| the extractor's `FLAG_ENABLE_CONSTANT_BITRATE_SEEKING` | n/a (API: flag; seeks are sample-accurate here) |

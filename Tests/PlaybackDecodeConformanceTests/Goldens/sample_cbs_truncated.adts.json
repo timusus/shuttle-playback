@@ -1,0 +1,59 @@
+{
+  "bytesBeforeFirstAudioMax" : 32768,
+  "channels" : 1,
+  "durationAtEofS" : 3.297233560090703,
+  "durationS" : 3.5,
+  "expect" : "decodes",
+  "fixture" : "sample_cbs_truncated.adts",
+  "frames" : 145408,
+  "pcmSha256PerSecondInt16" : [
+    "61ee33b26c89acde34640ad3fc5f1ea4ad25c23a79f6028683fe9afd1786f107",
+    "35f3dd2e410a484669234abb98e504aa7075c4e0acc2f780283f76dca7ec493c",
+    "2b28cd831fbcb6e5447af7bd66f715f80c28bfd344597798fa7d52bd17bc95fd",
+    "245a67c9b6a32973ca64ea905ad6d5f4103df46c5b4ae0802124e07f5cf25270"
+  ],
+  "sampleRate" : 44100,
+  "seeks" : [
+    {
+      "alignFrames" : -1023,
+      "landedS" : 0.023,
+      "toS" : 0,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "d33c126c5a4a7139c3a9a2f9d8e3eea3bf58e0a8c1168bc433c3e12768dc982d"
+    },
+    {
+      "alignFrames" : -1023,
+      "landedS" : 1.099,
+      "toS" : 1.099,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "5ca204cee01ff10950afbde73cf98aa3ddb9c5af52656e019a6302cbde26ef4a"
+    },
+    {
+      "alignFrames" : -1023,
+      "landedS" : 2.198,
+      "toS" : 2.198,
+      "tolS" : 0.03,
+      "windowFrames" : 4096,
+      "windowSha256Int16" : "2ec2232ce1c15a1e63e5dd88128f78ac961f2a408230866adfda45276cc709db"
+    },
+    {
+      "alignFrames" : -1024,
+      "landedS" : 3.197,
+      "toS" : 3.197,
+      "tolS" : 0.03,
+      "windowFrames" : 826,
+      "windowSha256Int16" : "04f6ec251dbaa9ecbb258731ce2239605b02e0211ddbbb72c017692efd2b6324"
+    },
+    {
+      "alignFrames" : -1024,
+      "landedS" : 3.297,
+      "toS" : 3.297,
+      "tolS" : 0.03,
+      "windowFrames" : 256,
+      "windowSha256Int16" : "b2e01feab61e6b010fe9f4daf0ed86e24a63f074fd6635b9f829d23d9e9e6e67"
+    }
+  ],
+  "sha256" : "a439c24a730b1e1021e191ac15c4e13c3af5594c5e2dd0420a4c7ac61354af67"
+}
