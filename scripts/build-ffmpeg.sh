@@ -115,6 +115,9 @@ CONFIGURE_FLAGS=(
     --arch=arm64
 )
 
+# release.sh compares this with the "configured:" line of the shipped VERSION.txt.
+if [ "${PRINT_CONFIGURED:-0}" = 1 ]; then echo "${CONFIGURE_FLAGS[*]}"; exit 0; fi
+
 log() { printf '\n=== %s\n' "$*"; }
 
 # ── FFmpeg source ────────────────────────────────────────────────────────────

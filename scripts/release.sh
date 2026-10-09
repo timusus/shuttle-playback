@@ -61,6 +61,16 @@ if [[ "$recorded_patches" != "$actual_patches" ]]; then
     echo "release.sh: scripts/ffmpeg-patches differs (by content) from the patches recorded in the framework's VERSION.txt; rebuild the framework" >&2
     exit 1
 fi
+# Likewise the configure flags and the export list: both change the binary without touching a patch.
+version_txt="${VERSION_TXT:-Frameworks/FFmpeg.xcframework/VERSION.txt}"
+if [[ "$(sed -n 's/^configured: //p' "$version_txt")" != "$(PRINT_CONFIGURED=1 scripts/build-ffmpeg.sh)" ]]; then
+    echo "release.sh: build-ffmpeg.sh configure flags differ from the 'configured:' line of VERSION.txt; rebuild the framework" >&2
+    exit 1
+fi
+if ! grep -qF "exports only $(tr '\n' ' ' < scripts/ffmpeg-exports.txt)(ffmpeg-exports.txt)" "$version_txt"; then
+    echo "release.sh: scripts/ffmpeg-exports.txt differs from the exports recorded in VERSION.txt; rebuild the framework" >&2
+    exit 1
+fi
 
 echo "release.sh: swift test"
 swift test
