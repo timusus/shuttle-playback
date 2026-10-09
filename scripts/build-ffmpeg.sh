@@ -246,8 +246,9 @@ framework_slice() {
 PLIST
     plutil -lint "$RESOURCES/Info.plist" >/dev/null
     # App Store upload requires a manifest per embedded framework. The binary imports fstat, a
-    # file-timestamp API (C617.1: files inside the app container or the user granted access to);
-    # FFmpeg itself touches no other required-reason API.
+    # file-timestamp API. C617.1 covers files in the app, app-group or CloudKit containers; 3B52.1
+    # covers files the user granted access to (document picker, security-scoped URLs). The apps
+    # read both kinds. FFmpeg itself touches no other required-reason API.
     cat > "$RESOURCES/PrivacyInfo.xcprivacy" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -267,6 +268,7 @@ PLIST
             <key>NSPrivacyAccessedAPITypeReasons</key>
             <array>
                 <string>C617.1</string>
+                <string>3B52.1</string>
             </array>
         </dict>
     </array>
