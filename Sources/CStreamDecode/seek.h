@@ -122,7 +122,7 @@ extern const SeekFormat sd_seek_aac;
 extern const SeekFormat sd_seek_ogg;
 extern const SeekFormat sd_seek_generic;
 
-/* The strategy for the stream `open_format` just found (seek.c). */
+/* The strategy for the stream `sd_open_format` just found (seek.c). */
 const SeekFormat *sd_seek_format_for(const StreamDecoder *d);
 
 /* The generic pre-roll, by codec (seek_generic.c). */

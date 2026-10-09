@@ -1,8 +1,9 @@
 /*
  * decoder.h — the decoder's state and the core helpers the seek modules share (internal).
  *
- * stream_decode.c owns the open, the AVIO glue, the decode pump and the resampler; seek.c owns the
- * seek; the seek_*.c modules answer the per-format questions it asks (see seek.h).
+ * stream_decode.c is the public API; avio.c, id3_probe.c, open_format.c and open_mp3_recover.c own
+ * the open, pump.c the decode pump and the codec, resample.c the resampler; seek.c owns the seek;
+ * the seek_*.c modules answer the per-format questions it asks (see seek.h).
  */
 #ifndef CSTREAMDECODE_DECODER_H
 #define CSTREAMDECODE_DECODER_H
@@ -23,17 +24,17 @@ struct StreamDecoder {
     AVFormatContext *fmt;
     AVCodecContext  *dec;
     SwrContext      *swr;
-    /* What `swr` takes in; a frame that differs reconfigures it (see `push_through_swr`). */
+    /* What `swr` takes in; a frame that differs reconfigures it (see `sd_push_through_swr`). */
     int              swr_in_rate;
     int              swr_in_fmt;
     AVChannelLayout  swr_in_layout;
     AVPacket        *pkt;
     AVFrame         *frame;
-    /* A packet read during open (see `skip_unscanned_junk`) that the decoder has not had yet. */
+    /* A packet read during open (see `sd_skip_unscanned_junk`) that the decoder has not had yet. */
     AVPacket        *held;
     int              has_held;
 
-    /* 1 when the last `open_format` skipped `avformat_find_stream_info` (see
+    /* 1 when the last `sd_open_format` skipped `avformat_find_stream_info` (see
      * `header_described_audio_stream`). */
     int         skipped_probe;
     int         audio_idx;
@@ -81,7 +82,7 @@ struct StreamDecoder {
     int          source_eof;
 
     /* Absolute source byte that FFmpeg's offset 0 maps to: the end of the leading ID3v2 tag(s).
-     * See `probe_id3_offset`. Zero for everything without one. */
+     * See `sd_probe_id3_offset`. Zero for everything without one. */
     int64_t      base_offset;
 
     /* Bytes libavformat may read inside one `avformat_seek_file` before the seek is abandoned.
@@ -127,7 +128,7 @@ struct StreamDecoder {
     /* Tests only: see `stream_decoder_drop_timestamps_for_testing`. */
     int          drop_timestamps;
 
-    /* How this stream seeks (seek.h), chosen by `open_format`, and each format's own state. */
+    /* How this stream seeks (seek.h), chosen by `sd_open_format`, and each format's own state. */
     const SeekFormat *seek_fmt;
     MP3SeekState  mp3;
     FLACSeekState flac;
@@ -138,7 +139,7 @@ struct StreamDecoder {
     uint8_t      prologue[4096];
     int          prologue_len;
     /* Bytes the ID3 probe read and could not rewind over (a forward-only source refused the seek),
-     * served to libavformat before the reader's next byte. See `probe_id3_offset`. */
+     * served to libavformat before the reader's next byte. See `sd_probe_id3_offset`. */
     uint8_t      lead[10];
     int          lead_len;
     int          lead_pos;
@@ -146,23 +147,45 @@ struct StreamDecoder {
     int64_t      contiguous_read;    /* the end of the run of bytes read from offset 0, past any seeks */
 
     /* A one-frame MP3 shown to libavformat with a copy of its frame behind it (see
-     * `reopen_single_frame_mp3`): `phantom_len` bytes at AVIO offset `phantom_at`. */
+     * `sd_reopen_single_frame_mp3`): `phantom_len` bytes at AVIO offset `phantom_at`. */
     uint8_t      phantom[1792];
     int          phantom_len;
     int64_t      phantom_at;
     int          phantom_samples;    /* the real frame's samples per channel */
 };
 
-/* stream_decode.c */
+/* pump.c */
 int  sd_pump(StreamDecoder *d);
-int  sd_init_swr(StreamDecoder *d);
-void sd_pending_reset(StreamDecoder *d);
+void sd_hold_first_packet(StreamDecoder *d);
 int  sd_read_audio_packet(StreamDecoder *d);
 int  sd_read_failure_status(StreamDecoder *d);
 int  sd_hold_first_audio_packet(StreamDecoder *d);
-void sd_avio_clear_latched_error(StreamDecoder *d);
 int  sd_open_codec(const StreamDecoder *d, const AVCodec *codec, int flags2, AVCodecContext **out);
 int  sd_reopen_codec(StreamDecoder *d);
+
+/* resample.c */
+int  sd_init_swr(StreamDecoder *d);
+void sd_pending_reset(StreamDecoder *d);
+int  sd_convert_through_swr(StreamDecoder *d, AVFrame *frame);
+int  sd_push_through_swr(StreamDecoder *d, AVFrame *frame, int *lead);
+
+/* avio.c */
+int     sd_avio_read_packet(void *opaque, uint8_t *buf, int buf_size);
+int64_t sd_avio_seek_packet(void *opaque, int64_t offset, int whence);
+int64_t sd_avio_size_seen(const StreamDecoder *d);
+void    sd_avio_clear_latched_error(StreamDecoder *d);
+
+/* id3_probe.c */
+int64_t sd_probe_id3_offset(StreamDecoder *d);
+
+/* open_format.c */
+int  sd_open_format(StreamDecoder *d, const StreamDecodeOptions *options);
+void sd_close_format(StreamDecoder *d);
+
+/* open_mp3_recover.c: each returns `failed` when it does not apply or does not help. */
+int  sd_reopen_past_mp3_junk(StreamDecoder *d, const StreamDecodeOptions *options, int failed);
+int  sd_reopen_single_frame_mp3(StreamDecoder *d, const StreamDecodeOptions *options, int failed);
+int  sd_skip_unscanned_junk(StreamDecoder *d, const StreamDecodeOptions *options);
 
 /* seek_mp3.c: fill in what an MPEG audio frame header says. Returns 0 if `p` is not one. */
 int  sd_mp3_parse_header(const uint8_t *p, int *spf, int *bitrate, int *sample_rate,
