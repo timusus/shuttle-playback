@@ -1,6 +1,6 @@
 // swift-tools-version: 5.9
-// The decode layer shared by Shuttle Podcasts and Shuttle2 on iOS: one static FFmpeg for
-// every app (ADR-0006), the streaming decoder that drives it and the byte-source plumbing around it.
+// The decode layer shared by Shuttle Podcasts and Shuttle2 on iOS: one dynamic FFmpeg for
+// every app (ADR-0001, ADR-0006), the streaming decoder that drives it and the byte-source plumbing around it.
 // Nothing here knows what a podcast, an ad or a queue is. See CLAUDE.md for build, test and release.
 import PackageDescription
 
@@ -18,28 +18,19 @@ let package = Package(
         // A loopback `Range`-aware HTTP server with fault knobs, for a consumer's own tests of
         // anything built on `PlaybackStreaming`. No fixtures in it.
         .library(name: "PlaybackStreamingTestSupport", targets: ["PlaybackStreamingTestSupport"]),
-        // The static FFmpeg itself, for a consumer with its own C against libavformat. One FFmpeg per app: two copies of the same static symbols
-        // would be a duplicate-symbol link failure, or worse, a silent pick of one.
+        // FFmpeg itself, for a consumer with its own C against libavformat. One FFmpeg per app:
+        // a second copy would clash with this framework's symbols, or silently shadow them.
         .library(name: "FFmpeg", targets: ["CFFmpeg"]),
     ],
     targets: [
-        // Committed, not downloaded: see CLAUDE.md, "Where the xcframework lives". Rebuild with
-        // `scripts/build-ffmpeg.sh` (one music-superset build for both apps).
-        .binaryTarget(name: "CFFmpeg", path: "Frameworks/FFmpeg.xcframework"),
-        .target(
-            name: "CStreamDecode",
-            dependencies: ["CFFmpeg"],
-            // libavformat's ID3v2 reader and MP4 `cmov` path call zlib, and its metadata
-            // conversion calls iconv. Both ship with the system on iOS and macOS. libavutil's
-            // VideoToolbox hardware context (hwcontext_videotoolbox.o, built in although nothing
-            // here decodes video) calls CoreFoundation, CoreMedia, CoreVideo and VideoToolbox:
-            // without them a plain consumer target fails to link (issue #10).
-            linkerSettings: [
-                .linkedLibrary("z"), .linkedLibrary("iconv"),
-                .linkedFramework("CoreFoundation"), .linkedFramework("CoreMedia"),
-                .linkedFramework("CoreVideo"), .linkedFramework("VideoToolbox"),
-            ]
-        ),
+        // A dynamic framework the app embeds, so a user can relink against a modified FFmpeg
+        // (LGPL-2.1 section 6, ADR-0001). It links its own system libraries. Committed, not
+        // downloaded (CLAUDE.md); rebuild with `scripts/build-ffmpeg.sh`.
+        .binaryTarget(name: "FFmpeg", path: "Frameworks/FFmpeg.xcframework"),
+        // FFmpeg's headers and the `CFFmpeg` module. They sit outside the framework so
+        // `<libavformat/avformat.h>` resolves as a plain include path, as FFmpeg's headers expect.
+        .target(name: "CFFmpeg", dependencies: ["FFmpeg"]),
+        .target(name: "CStreamDecode", dependencies: ["CFFmpeg"]),
         .target(name: "PlaybackDecode", dependencies: ["CStreamDecode"]),
         .target(name: "PlaybackStreaming", dependencies: ["PlaybackDecode"]),
         .target(name: "PlaybackStreamingTestSupport"),
