@@ -31,6 +31,7 @@ binary in `.gitattributes`. `VERSION.txt` inside it records the tag, configure f
 
 ```sh
 swift test                                          # macOS slice, no simulator; the gate
+land <branch>                                       # from the landing worktree: cherry-pick, verify, push
 swift test --filter PlaybackDecodeConformance       # about 30 s
 GOLDEN_UPDATE=1 swift test --filter PlaybackDecodeConformance   # after an intended change; review the JSON diff
 xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreamingTests \
@@ -51,6 +52,8 @@ is a minor bump at 0.x; so is any decoder change that alters PCM, and the releas
 - When in doubt follow androidx/media (media3): its `DataSource`, `Extractor` and
   `DefaultHttpDataSource` code and issues are the reference for edge cases. Cite the class or issue
   in the ADR or commit, and say why when deviating.
-- Conventional commits (`feat:`, `fix:`, `refactor:`, `build:`, `docs:`, `test:`), pushed straight to
-  `main`. No PRs, no AI attribution, no CI.
+- Conventional commits (`feat:`, `fix:`, `refactor:`, `build:`, `docs:`, `test:`). Work happens on worktree
+  branches and lands via `land <branch>` from a landing worktree (`git worktree add --detach
+  .claude/worktrees/landing origin/main`, once), which verifies with `scripts/land-verify` and pushes
+  to `main`. No PRs, no AI attribution, no CI.
 - Public API is the contract with two apps: `public` only when an app needs it, `Sendable`-friendly.
