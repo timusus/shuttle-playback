@@ -4,6 +4,8 @@
 #
 # Refuses a dirty tree, a branch other than main, a malformed or existing tag, and a red
 # `swift test`. Tags are bare semver (0.1.0), which is what SwiftPM's `from:` resolves.
+# Writes dist/ffmpeg-X.Y.Z-source.tar.xz (FFmpeg tag, patches, build script, configure line) for
+# the owner to attach to the GitHub release; this script creates no release itself.
 set -euo pipefail
 
 version="${1:-}"
@@ -61,6 +63,21 @@ echo "release.sh: PlaybackStreamingTests on iOS simulator $udid"
 xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreamingTests \
     -destination "platform=iOS Simulator,id=$udid" -quiet
 
+# LGPL-2.1 section 6: the apps embed this release's FFmpeg, so its exact source, patches and build
+# recipe are published beside it. Built before tagging, so a tag never lacks its source.
+ffmpeg_tag="$(head -1 Frameworks/FFmpeg.xcframework/VERSION.txt)"
+source_name="ffmpeg-$version-source"
+staging="$(mktemp -d)"
+trap 'rm -rf "$staging"' EXIT
+echo "release.sh: packaging FFmpeg $ffmpeg_tag source as dist/$source_name.tar.xz"
+git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ffmpeg_tag" https://git.ffmpeg.org/ffmpeg.git \
+    "$staging/$source_name/ffmpeg-$ffmpeg_tag"
+rm -rf "$staging/$source_name/ffmpeg-$ffmpeg_tag/.git"
+cp -R scripts/ffmpeg-patches "$staging/$source_name/patches"
+cp scripts/build-ffmpeg.sh Frameworks/FFmpeg.xcframework/VERSION.txt "$staging/$source_name/"
+mkdir -p dist
+tar -cJf "dist/$source_name.tar.xz" -C "$staging" "$source_name"
+
 git tag -a "$version" -m "shuttle-playback $version"
 if ! git push origin "$version"; then
     git tag -d "$version" >/dev/null
@@ -68,3 +85,4 @@ if ! git push origin "$version"; then
     exit 1
 fi
 echo "release.sh: released $version ($(git rev-parse --short HEAD))"
+echo "release.sh: attach dist/$source_name.tar.xz to the $version GitHub release"
