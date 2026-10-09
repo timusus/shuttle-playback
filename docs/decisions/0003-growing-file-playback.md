@@ -1,6 +1,6 @@
 # ADR-0003: Growing-file playback
 
-Status: Accepted, amended by ADR-0007 (the cache is per store) and ADR-0013 (a read-ahead cap on expensive paths)
+Status: Accepted, amended by ADR-0007 (the cache is per store), ADR-0013 (a read-ahead cap on expensive paths) and ADR-0014 (one sparse file per session)
 Date: 2026-10-06
 
 ## Context
