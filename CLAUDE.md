@@ -41,7 +41,9 @@ land <branch>                                       # from the landing worktree:
 scripts/release.sh 0.1.1                            # clean main or landing worktree: tests, dist/ FFmpeg source, tag, push
 ```
 
-No test is skipped except the 30-minute MP3 one (needs host `ffmpeg`). Conformance details, known
+On a build with the FFmpeg xcframework only the 30-minute MP3 test skips (needs host `ffmpeg`);
+the `XCTSkipUnless(FFmpegStreamDecoder.isAvailable)` guards skip only without it. Known decoder
+bugs run under `XCTExpectFailure` (`KnownIssues.swift`, e.g. #55). Conformance details, known
 issues and fixtures: `docs/contributing.md`. Consumers pin a tag, never a branch. A public API change
 is a minor bump at 0.x; so is any decoder change that alters PCM, and the release note says what moved.
 
