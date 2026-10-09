@@ -124,6 +124,14 @@ FFMPEG="${FFMPEG_SRC:-$BUILD_ROOT/ffmpeg-src}"
 if [ -z "${FFMPEG_SRC:-}" ] && [ -f "$REPO_DIR/ffmpeg-$FFMPEG_TAG/configure" ]; then
     FFMPEG="$REPO_DIR/ffmpeg-$FFMPEG_TAG"
 fi
+# A tree from the tarball under another tag would otherwise be ignored and a different FFmpeg cloned.
+if [ -z "${FFMPEG_SRC:-}" ] && [ "$FFMPEG" != "$REPO_DIR/ffmpeg-$FFMPEG_TAG" ]; then
+    for TREE in "$REPO_DIR"/ffmpeg-*/configure; do
+        [ -e "$TREE" ] || continue
+        echo "ERROR: $(dirname "$TREE") is not the FFMPEG_TAG=$FFMPEG_TAG tree; set FFMPEG_TAG to its tag or FFMPEG_SRC to it" >&2
+        exit 1
+    done
+fi
 if [ ! -f "$FFMPEG/configure" ]; then
     # A directory without `configure` is an interrupted clone; git refuses a non-empty target.
     if [ -d "$FFMPEG" ]; then
@@ -137,7 +145,12 @@ fi
 
 # ── local patches ────────────────────────────────────────────────────────────
 # Fixes the decoder needs that the FFmpeg tag lacks, each a small diff with its reason in its
-# header. Applied once (a patch that already reverse-applies is in place) and listed in VERSION.txt.
+# header. Listed in VERSION.txt. The cached clone is reset first so a patch deleted from the repo
+# leaves the binary; the tarball tree is pristine as extracted and a caller's FFMPEG_SRC is not ours to reset.
+if [ "$FFMPEG" = "$BUILD_ROOT/ffmpeg-src" ] && [ -e "$FFMPEG/.git" ]; then
+    git -C "$FFMPEG" checkout --quiet .
+    git -C "$FFMPEG" clean -fdq
+fi
 PATCHES=()
 PATCH_HASHES=()
 for PATCH in "$SCRIPT_DIR"/ffmpeg-patches/*.patch; do
