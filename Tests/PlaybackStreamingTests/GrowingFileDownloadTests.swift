@@ -57,6 +57,40 @@ struct GrowingFileDownloadTests {
         #expect(h.machine.snapshot(fileURL: nil, now: h.now).readWaitingSince == nil)
     }
 
+    @Test("a parked read keeps its first time through the restart its wake opens, as the source's one read does")
+    func aParkedReadKeepsItsTimeThroughARestart() throws {
+        let h = Harness()
+        h.read()
+        h.respond(206, range: "bytes 0-99999/100000")
+        h.body(100)
+        #expect(h.read(100) == .serve(fileOffset: 0, count: 100, landed: nil))
+        let parkedAt = h.now
+        #expect(h.read() == .park)
+
+        h.clock.advance(by: 2)
+        try h.machine.seek(to: 90000)
+        #expect(h.read() == .park, "the wake restarted at the new position and parked again")
+        #expect(h.opens == 2)
+        #expect(h.machine.snapshot(fileURL: nil, now: h.now).readWaitingSince == parkedAt)
+    }
+
+    @Test("a read parked at the frontier of a body of unknown length ends its wait at the end of the stream")
+    func aParkedReadEndsAtTheEndOfTheStream() {
+        let h = Harness()
+        h.read()
+        #expect(h.respond(200))
+        h.body(1000)
+        #expect(h.read(1000) == .serve(fileOffset: 0, count: 1000, landed: nil))
+        let parkedAt = h.now
+        #expect(h.read() == .park)
+        #expect(h.machine.snapshot(fileURL: nil, now: h.now).readWaitingSince == parkedAt)
+
+        h.clock.advance(by: 1)
+        h.end()
+        #expect(h.read() == .endOfStream(landed: nil))
+        #expect(h.machine.snapshot(fileURL: nil, now: h.now).readWaitingSince == nil)
+    }
+
     @Test("a resume answered from another start restarts at the decoder's position, into a new file")
     func aRefusedResumeRestarts() {
         let h = Harness()
