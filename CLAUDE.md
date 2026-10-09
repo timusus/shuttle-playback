@@ -38,7 +38,7 @@ GOLDEN_UPDATE=1 swift test --filter PlaybackDecodeConformance   # after an inten
 xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreamingTests \
   -destination 'platform=iOS Simulator,id=<UDID>'   # UDID from `xcrun simctl list devices available`
 land <branch>                                       # from the landing worktree: cherry-pick, verify, push
-scripts/release.sh 0.1.1                            # clean main only: tests, dist/ FFmpeg source, tag, push
+scripts/release.sh 0.1.1                            # clean main or landing worktree: tests, dist/ FFmpeg source, tag, push
 ```
 
 No test is skipped except the 30-minute MP3 one (needs host `ffmpeg`). Conformance details, known

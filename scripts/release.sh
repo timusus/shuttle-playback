@@ -2,7 +2,7 @@
 #
 # release.sh X.Y.Z — test, tag and push a release that consumers can pin.
 #
-# Refuses a dirty tree, a branch other than main, a malformed or existing tag, and a red
+# Refuses a dirty tree, a branch other than main (a detached HEAD must equal origin/main), a malformed or existing tag, and a red
 # `swift test`. Tags are bare semver (0.1.0), which is what SwiftPM's `from:` resolves.
 # Writes dist/ffmpeg-X.Y.Z-source.tar.xz (package-ffmpeg-source.sh: FFmpeg tree, patches, build script) for
 # the owner to attach to the GitHub release; this script creates no release itself.
@@ -17,8 +17,8 @@ fi
 cd "$(dirname "$0")/.."
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
-if [[ "$branch" != "main" ]]; then
-    echo "release.sh: on '$branch', releases are cut from main" >&2
+if [[ "$branch" != "main" && "$branch" != "HEAD" ]]; then
+    echo "release.sh: on '$branch', releases are cut from main or a detached origin/main" >&2
     exit 1
 fi
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -31,6 +31,11 @@ if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
 fi
 
 git fetch --quiet origin
+# The landing worktree has no main branch; a detached HEAD must be exactly what was landed.
+if [[ "$branch" == "HEAD" && "$(git rev-parse HEAD)" != "$(git rev-parse -q --verify origin/main || true)" ]]; then
+    echo "release.sh: detached HEAD is not origin/main; run from the landing worktree after 'git checkout --detach origin/main'" >&2
+    exit 1
+fi
 # A land pushes from its own worktree, leaving this checkout's main behind; catch up, never push ahead.
 if git rev-parse -q --verify origin/main >/dev/null \
     && ! git merge-base --is-ancestor origin/main HEAD \
