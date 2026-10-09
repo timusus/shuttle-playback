@@ -18,6 +18,12 @@ cd "$(dirname "$0")/.."
 out_dir="${2:-dist}"
 
 ffmpeg_tag="$(head -1 Frameworks/FFmpeg.xcframework/VERSION.txt)"
+# build-ffmpeg.sh looks for ffmpeg-<its FFMPEG_TAG default>/ beside scripts/; a tree named for another tag would be ignored.
+build_tag="$(sed -n 's/^FFMPEG_TAG="${FFMPEG_TAG:-\(.*\)}"$/\1/p' scripts/build-ffmpeg.sh)"
+if [[ -z "$build_tag" || "$build_tag" != "$ffmpeg_tag" ]]; then
+    echo "package-ffmpeg-source: VERSION.txt says '$ffmpeg_tag' but build-ffmpeg.sh defaults FFMPEG_TAG to '${build_tag:-?}'; rebuild the framework" >&2
+    exit 1
+fi
 source_name="ffmpeg-$version-source"
 archive="$out_dir/$source_name.tar.xz"
 staging="$(mktemp -d)"
@@ -33,6 +39,8 @@ root="$staging/$source_name"
 git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ffmpeg_tag" https://git.ffmpeg.org/ffmpeg.git \
     "$root/ffmpeg-$ffmpeg_tag"
 rm -rf "$root/ffmpeg-$ffmpeg_tag/.git"
+# Without .git, ffbuild/version.sh embeds an empty FFMPEG_VERSION; a VERSION file restores the git-describe string (the tag).
+echo "$ffmpeg_tag" > "$root/ffmpeg-$ffmpeg_tag/VERSION"
 mkdir -p "$root/scripts"
 cp -R scripts/ffmpeg-patches "$root/scripts/ffmpeg-patches"
 cp scripts/build-ffmpeg.sh scripts/ffmpeg-exports.txt "$root/scripts/"
