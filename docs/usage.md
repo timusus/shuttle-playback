@@ -143,7 +143,8 @@ media3: the seek lands in the first link.
 
 With a growing-file source, a seek past the frontier restarts the download at the target into a new
 file (a short hop ahead waits instead). Call `source.willSeek(generation:)` first only if you want the
-transaction paired with your seek in `snapshot` and events.
+transaction paired with your seek in `snapshot` and events. A seek past a known `totalLength` throws
+`.unseekable` (the total itself is the end of the stream), so a server's over-estimated length is refused, not waited on.
 
 ## Cancel and interrupt
 

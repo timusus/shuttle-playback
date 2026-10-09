@@ -119,6 +119,9 @@ struct GrowingFileDownload {
         if cancelled { throw StreamByteReaderError.cancelled }
         if interrupted { throw StreamByteReaderError.interrupted }
         guard newOffset >= 0 else { throw StreamByteReaderError.unseekable }
+        // Past a known total nothing can arrive (an estimated transcode length may overpromise);
+        // the total itself is end of stream.
+        if let total = totalLength, newOffset > total { throw StreamByteReaderError.unseekable }
         offset = newOffset
         unclaimedSeek?.sought = true
         stickyFailure = nil

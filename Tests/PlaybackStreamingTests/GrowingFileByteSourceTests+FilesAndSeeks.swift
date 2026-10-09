@@ -189,4 +189,28 @@ extension GrowingFileByteSourceTests {
         XCTAssertEqual(events.transactions.map(\.seekGenerationForTest), [nil, 7])
     }
 
+    /// Issue #71: a transcode served with an estimated length can promise bytes that never come.
+    func testASeekPastAKnownTotalIsRefusedAndOneToTheTotalIsTheEnd() throws {
+        let body = makeBody(48 * 1024)
+        let server = try startServer(body: body)
+        let source = makeSource(server.url)
+        _ = try read(source, 1)
+        XCTAssertEqual(source.totalLength, 48 * 1024)
+
+        XCTAssertThrowsError(try source.seek(to: 48 * 1024 + 1)) {
+            guard case .unseekable? = $0 as? StreamByteReaderError else { return XCTFail("\($0)") }
+        }
+        XCTAssertEqual(source.position, 1, "a refused seek moves nothing")
+
+        try source.seek(to: 48 * 1024)
+        XCTAssertEqual(try read(source, 100), Data(), "the total itself is the end of the stream")
+    }
+
+    func testASeekBeforeTheTotalIsKnownIsAccepted() throws {
+        let server = try startServer(body: makeBody(48 * 1024))
+        let source = makeSource(server.url)
+        XCTAssertNil(source.totalLength)
+        XCTAssertNoThrow(try source.seek(to: 10_000_000))
+    }
+
 }
