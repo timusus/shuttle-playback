@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 #
-# release.sh X.Y.Z — test, tag and push a release that consumers can pin.
+# release.sh X.Y.Z NOTES.md — test, tag, push and publish a release that consumers can pin.
 #
 # Refuses a dirty tree, a branch other than main (a detached HEAD must equal origin/main), a malformed or existing tag, and a red
 # `swift test`. Tags are bare semver (0.1.0), which is what SwiftPM's `from:` resolves.
-# Writes dist/ffmpeg-X.Y.Z-source.tar.xz (package-ffmpeg-source.sh: FFmpeg tree, patches, build script) for
-# the owner to attach to the GitHub release; this script creates no release itself.
+# Writes dist/ffmpeg-X.Y.Z-source.tar.xz (package-ffmpeg-source.sh: FFmpeg tree, patches, build script) and
+# publishes the GitHub release with NOTES.md as its body and the tarball attached.
 set -euo pipefail
 
 version="${1:-}"
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "usage: scripts/release.sh X.Y.Z" >&2
+notes="${2:-}"
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || ! -s "$notes" ]]; then
+    echo "usage: scripts/release.sh X.Y.Z NOTES.md (non-empty release notes)" >&2
     exit 2
 fi
+notes="$(cd "$(dirname "$notes")" && pwd)/$(basename "$notes")"
+# Checked before the tests, so a tag is never pushed without its release.
+gh auth status >/dev/null 2>&1 || { echo "release.sh: gh is not authenticated" >&2; exit 1; }
 
 cd "$(dirname "$0")/.."
 
@@ -100,5 +104,5 @@ if ! git push origin "$version"; then
     echo "release.sh: pushing tag $version failed; local tag removed, rerun to retry" >&2
     exit 1
 fi
+gh release create "$version" --verify-tag --title "$version" --notes-file "$notes" "dist/$source_name.tar.xz"
 echo "release.sh: released $version ($(git rev-parse --short HEAD))"
-echo "release.sh: attach dist/$source_name.tar.xz to the $version GitHub release"

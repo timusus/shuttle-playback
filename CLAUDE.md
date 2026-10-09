@@ -38,7 +38,7 @@ GOLDEN_UPDATE=1 swift test --filter PlaybackDecodeConformance   # after an inten
 xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreamingTests \
   -destination 'platform=iOS Simulator,id=<UDID>'   # UDID from `xcrun simctl list devices available`
 land <branch>                                       # from the landing worktree: cherry-pick, verify, push
-scripts/release.sh 0.1.1                            # clean main or landing worktree: tests, dist/ FFmpeg source, tag, push
+scripts/release.sh 0.1.1 notes.md                   # landing worktree: tests, FFmpeg source, tag, push, publish the release
 ```
 
 On a build with the FFmpeg xcframework only the two generated-MP3 tests (30-minute CBR, 5-minute Xing VBR) skip, without host `ffmpeg` and on iOS;

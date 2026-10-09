@@ -77,9 +77,10 @@ the Xing frame count, losing the gapless trim and the duration).
 
 ## Releasing
 
-`scripts/release.sh X.Y.Z` refuses a dirty tree, a branch other than `main`, a bad or existing version,
+`scripts/release.sh X.Y.Z NOTES.md` refuses missing notes, a dirty tree, a branch other than `main`, a bad or existing version,
 or a `main` behind `origin/main`. It also runs from the landing worktree on a detached HEAD, which must
 equal `origin/main` (`git checkout --detach origin/main`); it pushes only the tag. It runs `swift test`, runs `PlaybackStreamingTests` on an iOS simulator
-(`IOS_SIM_UDID`, else the first available iPhone), tags the bare semver and pushes. Then bump the
+(`IOS_SIM_UDID`, else the first available iPhone), tags the bare semver, pushes, and publishes the GitHub
+release with the notes and the FFmpeg source tarball attached. Then bump the
 consumer's `Package.swift` if the change matters to it and run its tests. A fix that changes neither API
 nor output is a patch; the release note says what moved when PCM does.
