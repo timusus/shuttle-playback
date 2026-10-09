@@ -1,3 +1,4 @@
 *.a binary
+Frameworks/FFmpeg.xcframework/**/FFmpeg binary
 *.mp3 binary
 *.m4a binary
