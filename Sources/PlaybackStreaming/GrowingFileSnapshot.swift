@@ -29,6 +29,10 @@ public struct GrowingFileSnapshot: Equatable, Sendable {
     public var seekGeneration: Int?
     /// Body bytes per second over the last 2 s, nil until the first byte.
     public var downloadBytesPerSecond: Double?
+    /// When the decoder's read parked for bytes not yet on disk, on the source's clock
+    /// (`systemUptime` seconds outside a test); nil while no read waits. It spans the whole read,
+    /// through retries and restarts, so `now - readWaitingSince` is how long the read has stalled.
+    public var readWaitingSince: TimeInterval?
 
     public init(
         base: Int64,
@@ -38,7 +42,8 @@ public struct GrowingFileSnapshot: Equatable, Sendable {
         fileURL: URL?,
         transactionGeneration: Int,
         seekGeneration: Int?,
-        downloadBytesPerSecond: Double?
+        downloadBytesPerSecond: Double?,
+        readWaitingSince: TimeInterval? = nil
     ) {
         self.base = base
         self.frontier = frontier
@@ -48,6 +53,7 @@ public struct GrowingFileSnapshot: Equatable, Sendable {
         self.transactionGeneration = transactionGeneration
         self.seekGeneration = seekGeneration
         self.downloadBytesPerSecond = downloadBytesPerSecond
+        self.readWaitingSince = readWaitingSince
     }
 }
 

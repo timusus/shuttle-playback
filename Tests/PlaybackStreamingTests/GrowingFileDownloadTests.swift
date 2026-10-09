@@ -39,6 +39,24 @@ struct GrowingFileDownloadTests {
         #expect(h.machine.current?.isCached == true)
     }
 
+    @Test("a parked read is reported from its first park, through rechecks and a retry, until it is served")
+    func aParkedReadIsReportedUntilServed() {
+        let h = Harness()
+        #expect(h.machine.snapshot(fileURL: nil, now: h.now).readWaitingSince == nil)
+        let parkedAt = h.now
+        #expect(h.read() == .park)
+        #expect(h.machine.snapshot(fileURL: nil, now: h.now).readWaitingSince == parkedAt)
+
+        h.respond(206, range: "bytes 0-9999/10000")
+        h.clock.advance(by: 2.5)
+        #expect(h.read() == .park)
+        #expect(h.machine.snapshot(fileURL: nil, now: h.now).readWaitingSince == parkedAt, "the second park keeps the first time")
+
+        h.body(1000)
+        #expect(h.read(100) == .serve(fileOffset: 0, count: 100, landed: nil))
+        #expect(h.machine.snapshot(fileURL: nil, now: h.now).readWaitingSince == nil)
+    }
+
     @Test("a resume answered from another start restarts at the decoder's position, into a new file")
     func aRefusedResumeRestarts() {
         let h = Harness()
@@ -342,6 +360,7 @@ final class Harness {
             case .serve(_, let count, _): machine.advance(by: count)
             default: break
             }
+            if step.action != .park { machine.endRead() }
             return step.action
         }
     }

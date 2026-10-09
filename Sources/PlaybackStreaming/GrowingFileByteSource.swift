@@ -257,6 +257,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         guard maxLength > 0 else { return 0 }
         condition.lock()
         defer { condition.unlock() }
+        defer { machine.endRead() }
         while true {
             let step = machine.read(maxLength: maxLength, now: clock.now)
             // A read step's effects never defer work today. If one did, performUnlocked would drop

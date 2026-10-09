@@ -161,7 +161,8 @@ Use `cancel()` when you throw the decoder away.
 ## Show buffering and download state
 
 `source.snapshot` is readable from any thread: `base`, `frontier`, `totalLength`, `isComplete`,
-`downloadBytesPerSecond`, `fileURL`. `onEvent` delivers changes without polling: `.transaction` when a
+`downloadBytesPerSecond`, `fileURL`. `readWaitingSince` is the source clock's time the decoder's read
+parked for bytes (nil when none waits): poll it for a buffering state, and `now - readWaitingSince` is the stall. `onEvent` delivers changes without polling: `.transaction` when a
 response is accepted, `.download` at most once a second, `.seekLanded` when a seek was served from the
 file already on disk. A host that wants protocol-shaped callbacks implements `GrowingFileListener` and
 calls it from `onEvent`; the source does not take a listener. A listener reads the file back through

@@ -28,6 +28,9 @@ struct GrowingFileDownload {
     private(set) var generation = 0
     /// Reads that have parked at the frontier so far.
     private(set) var parks = 0
+    /// When the current read first parked; cleared by ``endRead()`` when the read returns or throws,
+    /// so a wake that re-parks (a retry, a restart) keeps the original time.
+    private(set) var readWaitingSince: TimeInterval?
     /// Set around the decoder's `open()`; see ``ReadRule``.
     var isProbing = false
     private(set) var startup = GrowingFileByteSource.Startup()
@@ -95,7 +98,8 @@ struct GrowingFileDownload {
             fileURL: fileURL,
             transactionGeneration: generation,
             seekGeneration: current?.seekGeneration,
-            downloadBytesPerSecond: downloadBytesPerSecond(now: now)
+            downloadBytesPerSecond: downloadBytesPerSecond(now: now),
+            readWaitingSince: readWaitingSince
         )
     }
 
@@ -177,12 +181,18 @@ struct GrowingFileDownload {
         case .wait:
             if let reason = failure { return reportFailure(reason) }
             parks += 1
+            readWaitingSince = readWaitingSince ?? now
             if !recheckPending {
                 recheckPending = true
                 effects.append(.schedule(.recheck, after: GrowingFileByteSource.recheckSeconds))
             }
             return step(.park)
         }
+    }
+
+    /// The read that was parked has been served, ended or failed.
+    mutating func endRead() {
+        readWaitingSince = nil
     }
 
     /// The failed transaction goes with the error. The error stays until a seek (Play once the
