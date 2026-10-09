@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# build-ffmpeg.sh — the FFmpeg static xcframework the decoder links: ONE build, the music superset,
-# linked by both apps (docs/decisions/0006).
+# build-ffmpeg.sh — the FFmpeg dynamic xcframework the decoder links: ONE build, the music
+# superset, embedded by both apps (docs/decisions/0006).
 #
 # The C shim (`Sources/CStreamDecode`) has no `#if` per codec, it asks FFmpeg to probe and find a
 # decoder, so a codec that is not compiled in simply means "FFmpeg said no".
@@ -10,17 +10,24 @@
 #   demuxers  mp3, aac, loas, mov (MP4/M4A), ogg, flac, wav, aiff, matroska (WebM)
 #   zlib      the system zlib, for Matroska header compression
 #
-# Output: Frameworks/FFmpeg.xcframework, COMMITTED (CLAUDE.md says why).
-#
-# Output layout: ONE static library per slice (ios-arm64, ios-arm64-simulator, macos-arm64) holding
-# libavformat + libavcodec + libswresample + libavutil, plus their headers and a `CFFmpeg`
-# modulemap. The macOS slice is never shipped in an app; it is what lets `swift test` run the
-# decoder tests on the Mac without a simulator.
+# Output, both COMMITTED (CLAUDE.md says why):
+#   Frameworks/FFmpeg.xcframework  ONE dynamic FFmpeg.framework per slice (ios-arm64,
+#                                  ios-arm64-simulator, macos-arm64) holding libavformat +
+#                                  libavcodec + libswresample + libavutil, install name
+#                                  @rpath/FFmpeg.framework/FFmpeg.
+#   Sources/CFFmpeg/include/lib*   their headers, identical across slices. They live in the
+#                                  `CFFmpeg` target, not the framework, so `#include
+#                                  <libavformat/avformat.h>` keeps working: a framework header
+#                                  path would need `<FFmpeg/...>`, which FFmpeg's own headers do not use.
+# The macOS slice is never shipped in an app; it is what lets `swift test` run the decoder tests on
+# the Mac without a simulator.
 #
 # LICENCE: plain LGPL v2.1+. No --enable-gpl, no --enable-version3, no --enable-nonfree, and no
 # external libraries are linked, so the only third-party code in the framework is FFmpeg's own
-# LGPL-2.1 tree. The licence text is copied into the xcframework. The library is linked
-# statically into each app; do not add a GPL-only component to the build.
+# LGPL-2.1 tree. The licence text is copied into the xcframework and every framework. The library
+# is a separate dynamic framework in each app so a user can swap in a modified FFmpeg (LGPL-2.1
+# section 6, https://ffmpeg.org/legal.html); never link it statically and never add a GPL-only
+# component to the build.
 #
 # Usage:
 #   scripts/build-ffmpeg.sh                         # clones n7.1 itself
@@ -30,6 +37,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="${OUT_DIR:-$REPO_DIR/Frameworks}"
+HEADERS_DIR="$REPO_DIR/Sources/CFFmpeg/include"
 
 # `xcode-select -p` can point at CommandLineTools, which has no xcodebuild or iOS SDKs.
 if [[ -z "${DEVELOPER_DIR:-}" ]]; then
@@ -49,6 +57,13 @@ MACOS_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET:-14.0}"
 
 # The four libraries the decode path needs, in link order.
 LIBS=(libavformat libavcodec libswresample libavutil)
+
+# What the libraries call outside themselves, all shipped with the OS: zlib (ID3v2, MP4 `cmov`,
+# Matroska header compression), iconv (metadata conversion), and the frameworks libavutil's
+# VideoToolbox hardware context needs (built in although nothing here decodes video).
+SYSTEM_LIBS=(-lz -liconv -framework CoreFoundation -framework CoreMedia -framework CoreVideo -framework VideoToolbox)
+FRAMEWORK_ID="com.simplecityapps.FFmpeg"
+FRAMEWORK_VERSION="${FFMPEG_TAG#n}"
 
 # ── formats ──────────────────────────────────────────────────────────────────
 # The superset: Shuttle Podcasts' formats (mp3/aac/mov, Ogg Opus and Vorbis) plus Shuttle2's music
@@ -157,46 +172,97 @@ build_slice() {
     make install
 }
 
-# One static library per slice: an xcframework `-library` slice takes exactly one archive.
-merge_slice() {
-    local NAME="$1"
+# One dynamic framework per slice. Every object of the four archives goes in (-force_load), not only
+# what today's shim calls: the framework is the replaceable unit, so it carries the whole public API.
+# $1 slice name, $2 SDK, $3 clang -target triple, $4 CFBundleSupportedPlatforms entry
+framework_slice() {
+    local NAME="$1" SDK="$2" TRIPLE="$3" PLATFORM="$4"
     local PREFIX="$BUILD_ROOT/prefix-$NAME"
-    local MERGED="$BUILD_ROOT/merged-$NAME"
-    rm -rf "$MERGED"
-    mkdir -p "$MERGED"
-    local ARCHIVES=()
-    for l in "${LIBS[@]}"; do ARCHIVES+=("$PREFIX/lib/$l.a"); done
-    xcrun libtool -static -o "$MERGED/libffmpeg.a" "${ARCHIVES[@]}" 2>/dev/null
-    cp -R "$PREFIX/include" "$MERGED/include"
-    # A `-library` xcframework has no module of its own; this modulemap makes `CFFmpeg` importable
-    # from C and Swift targets and names exactly the headers the decode shims call.
-    cat > "$MERGED/include/module.modulemap" <<'MODMAP'
-module CFFmpeg {
-    header "libavformat/avformat.h"
-    header "libavcodec/avcodec.h"
-    header "libswresample/swresample.h"
-    header "libavutil/avutil.h"
-    header "libavutil/opt.h"
-    export *
-}
-MODMAP
+    local FW="$BUILD_ROOT/framework-$NAME/FFmpeg.framework"
+    local SYSROOT
+    SYSROOT="$(xcrun --sdk "$SDK" --show-sdk-path)"
+    rm -rf "$BUILD_ROOT/framework-$NAME"
+
+    local BINARY INSTALL_NAME RESOURCES MIN_OS_KEY MIN_OS
+    if [ "$NAME" = macos ]; then
+        # macOS frameworks use the versioned bundle layout; codesign rejects a shallow one.
+        RESOURCES="$FW/Versions/A/Resources"
+        mkdir -p "$RESOURCES"
+        ln -s A "$FW/Versions/Current"
+        ln -s Versions/Current/FFmpeg "$FW/FFmpeg"
+        ln -s Versions/Current/Resources "$FW/Resources"
+        BINARY="$FW/Versions/A/FFmpeg"
+        INSTALL_NAME="@rpath/FFmpeg.framework/Versions/A/FFmpeg"
+        MIN_OS_KEY=LSMinimumSystemVersion
+        MIN_OS="$MACOS_DEPLOYMENT_TARGET"
+    else
+        RESOURCES="$FW"
+        mkdir -p "$FW"
+        BINARY="$FW/FFmpeg"
+        INSTALL_NAME="@rpath/FFmpeg.framework/FFmpeg"
+        MIN_OS_KEY=MinimumOSVersion
+        MIN_OS="$DEPLOYMENT_TARGET"
+    fi
+
+    local FORCE_LOAD=()
+    for l in "${LIBS[@]}"; do FORCE_LOAD+=("-Wl,-force_load,$PREFIX/lib/$l.a"); done
+    xcrun --sdk "$SDK" clang -target "$TRIPLE" -isysroot "$SYSROOT" -dynamiclib \
+        -install_name "$INSTALL_NAME" \
+        -compatibility_version 1 -current_version "$FRAMEWORK_VERSION" \
+        -Wl,-dead_strip \
+        "${FORCE_LOAD[@]}" "${SYSTEM_LIBS[@]}" \
+        -o "$BINARY"
+
+    cat > "$RESOURCES/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>FFmpeg</string>
+    <key>CFBundleIdentifier</key>
+    <string>$FRAMEWORK_ID</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>FFmpeg</string>
+    <key>CFBundlePackageType</key>
+    <string>FMWK</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$FRAMEWORK_VERSION</string>
+    <key>CFBundleVersion</key>
+    <string>$FRAMEWORK_VERSION</string>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>$PLATFORM</string>
+    </array>
+    <key>$MIN_OS_KEY</key>
+    <string>$MIN_OS</string>
+</dict>
+</plist>
+PLIST
+    plutil -lint "$RESOURCES/Info.plist" >/dev/null
+    # The licence travels inside every app that embeds the framework.
+    cp "$FFMPEG/COPYING.LGPLv2.1" "$RESOURCES/COPYING.LGPLv2.1"
 }
 
 build_slice device iphoneos "arm64-apple-ios${DEPLOYMENT_TARGET}" >/dev/null
 build_slice simulator iphonesimulator "arm64-apple-ios${DEPLOYMENT_TARGET}-simulator" >/dev/null
 build_slice macos macosx "arm64-apple-macos${MACOS_DEPLOYMENT_TARGET}" >/dev/null
-merge_slice device
-merge_slice simulator
-merge_slice macos
+framework_slice device iphoneos "arm64-apple-ios${DEPLOYMENT_TARGET}" iPhoneOS
+framework_slice simulator iphonesimulator "arm64-apple-ios${DEPLOYMENT_TARGET}-simulator" iPhoneSimulator
+framework_slice macos macosx "arm64-apple-macos${MACOS_DEPLOYMENT_TARGET}" MacOSX
 
 OUT="$OUT_DIR/$XCFRAMEWORK_NAME"
 log "Assembling $OUT"
 rm -rf "$OUT"
 mkdir -p "$OUT_DIR"
 xcodebuild -create-xcframework \
-    -library "$BUILD_ROOT/merged-device/libffmpeg.a" -headers "$BUILD_ROOT/merged-device/include" \
-    -library "$BUILD_ROOT/merged-simulator/libffmpeg.a" -headers "$BUILD_ROOT/merged-simulator/include" \
-    -library "$BUILD_ROOT/merged-macos/libffmpeg.a" -headers "$BUILD_ROOT/merged-macos/include" \
+    -framework "$BUILD_ROOT/framework-device/FFmpeg.framework" \
+    -framework "$BUILD_ROOT/framework-simulator/FFmpeg.framework" \
+    -framework "$BUILD_ROOT/framework-macos/FFmpeg.framework" \
     -output "$OUT" >/dev/null
 
 cp "$FFMPEG/COPYING.LGPLv2.1" "$OUT/COPYING.LGPLv2.1"
@@ -204,8 +270,19 @@ cp "$FFMPEG/COPYING.LGPLv2.1" "$OUT/COPYING.LGPLv2.1"
     echo "$FFMPEG_TAG"
     echo "configured: ${CONFIGURE_FLAGS[*]}"
     echo "patches: ${PATCHES[*]:-none}"
+    echo "linkage: dynamic FFmpeg.framework per slice, install name @rpath/FFmpeg.framework/FFmpeg, links ${SYSTEM_LIBS[*]}"
 } > "$OUT/VERSION.txt"
+
+# The headers are the same on every slice (arm64 only); the module map beside them is hand-written.
+log "Installing headers into $HEADERS_DIR"
+diff -r "$BUILD_ROOT/prefix-device/include" "$BUILD_ROOT/prefix-simulator/include" >/dev/null
+diff -r "$BUILD_ROOT/prefix-device/include" "$BUILD_ROOT/prefix-macos/include" >/dev/null
+mkdir -p "$HEADERS_DIR"
+for l in "${LIBS[@]}"; do
+    rm -rf "${HEADERS_DIR:?}/$l"
+    cp -R "$BUILD_ROOT/prefix-device/include/$l" "$HEADERS_DIR/$l"
+done
 
 log "Done"
 du -sh "$OUT"
-find "$OUT" -name 'libffmpeg.a' -exec ls -la {} \;
+find "$OUT" -type f -name FFmpeg -exec ls -la {} \;
