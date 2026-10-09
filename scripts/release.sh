@@ -29,6 +29,13 @@ if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
 fi
 
 git fetch --quiet origin
+# A land pushes from its own worktree, leaving this checkout's main behind; catch up, never push ahead.
+if git rev-parse -q --verify origin/main >/dev/null \
+    && ! git merge-base --is-ancestor origin/main HEAD \
+    && git merge-base --is-ancestor HEAD origin/main; then
+    echo "release.sh: main is behind origin/main; fast-forwarding"
+    git merge --ff-only --quiet origin/main
+fi
 if git rev-parse -q --verify origin/main >/dev/null \
     && ! git merge-base --is-ancestor origin/main HEAD; then
     echo "release.sh: origin/main has commits this branch lacks; pull first" >&2

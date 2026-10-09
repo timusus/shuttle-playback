@@ -8,3 +8,5 @@ DerivedData/
 .claude/WHERE-WE-LEFT-OFF.md
 .claude/settings.local.json
 .claude/worktrees/
+.claude/land-logs/
+.claude/longjobs/
