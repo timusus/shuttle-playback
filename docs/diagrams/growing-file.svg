@@ -28,10 +28,10 @@
     <rect x="730" y="156" width="150" height="50" rx="8"/>
   </g>
   <g text-anchor="middle">
-    <text x="120" y="177" font-weight="600">base &lt;= p &lt; frontier</text><text x="120" y="195" font-size="11" fill="#444">serve from the file</text>
+    <text x="120" y="177" font-weight="600">p in a range on disk</text><text x="120" y="195" font-size="11" fill="#444">serve from the file</text>
     <text x="360" y="177" font-weight="600">p at the end</text><text x="360" y="195" font-size="11" fill="#444">return 0 (end of stream)</text>
     <text x="595" y="177" font-weight="600">just ahead</text><text x="595" y="195" font-size="11" fill="#444">wait if sooner than a request</text>
-    <text x="805" y="177" font-weight="600">behind or far ahead</text><text x="805" y="195" font-size="11" fill="#444">restart: new file</text>
+    <text x="805" y="177" font-weight="600">behind or far ahead</text><text x="805" y="195" font-size="11" fill="#444">restart at the first hole</text>
   </g>
   <text x="20" y="246" font-size="12" fill="#666">A FAILED TRANSACTION (GrowingFileDownload.Retry: 3 answered attempts, 30 s link window, backoff 0.1 s to 2 s)</text>
   <g stroke="#c0392b" stroke-width="1.5" fill="#fdecea">
@@ -42,13 +42,13 @@
   </g>
   <g text-anchor="middle">
     <text x="115" y="286" font-weight="600">drop, 6 s silent body,</text><text x="115" y="304" font-weight="600">or new network path</text>
-    <text x="355" y="286" font-weight="600">backoff</text><text x="355" y="304" font-size="11" fill="#444">file holds decoder position?</text>
-    <text x="595" y="286" font-weight="600">resume from frontier</text><text x="595" y="304" font-size="11" fill="#444">206, same total, same file</text>
-    <text x="805" y="286" font-weight="600">else restart</text><text x="805" y="304" font-size="11" fill="#444">new file at the position</text>
+    <text x="355" y="286" font-weight="600">backoff</text><text x="355" y="304" font-size="11" fill="#444">holds decoder position?</text>
+    <text x="595" y="286" font-weight="600">resume from frontier</text><text x="595" y="304" font-size="11" fill="#444">206, same total, same ETag</text>
+    <text x="805" y="286" font-weight="600">else restart</text><text x="805" y="304" font-size="11" fill="#444">at the position, same file</text>
   </g>
   <g stroke="#444" stroke-width="1.5" fill="none" marker-end="url(#a)">
     <path d="M210 293 L260 293"/><path d="M450 293 L500 293"/><path d="M690 293 L730 293"/>
   </g>
   <text x="20" y="360" font-size="12" fill="#444">Retries exhausted: the read throws StreamByteReaderError.transport, after the bytes already downloaded are read.</text>
-  <text x="20" y="380" font-size="12" fill="#444">A transaction that completes from byte 0 is renamed to &lt;sha256(url)&gt;.audio and cached; partial files are never reused.</text>
+  <text x="20" y="380" font-size="12" fill="#444">One sparse file per session; once every byte is in it, it is renamed to &lt;sha256(url)&gt;.audio and cached; partials are never reused.</text>
 </svg>

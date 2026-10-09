@@ -47,7 +47,9 @@ its bytes.
 
 - `GrowingFileSnapshot.base`/`frontier` name the covered run the reader is in (or the current
   transaction's when the reader is in a hole), not one transaction's file; `fileURL` is the
-  session's file.
+  session's file. `isComplete` says the reader's covered run reaches the total.
+- The probe's footer answer (ADR-0003) does not cut a read at the current transaction's frontier:
+  it cut the last bytes of an MP4's `moov` off the tail, leaving the file a hole short of promotion.
 - A late chunk of a retired transaction can land in the file; it is the same resource's bytes at
   their own offsets, and unrecorded.
 - Seeking back more than the window into a stream of unknown length fetches again.

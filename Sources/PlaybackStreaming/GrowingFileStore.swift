@@ -8,10 +8,11 @@ private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback
 ///
 /// One directory under `Caches`, so iOS may purge it, excluded from backup. Two kinds of file, and
 /// the name is the whole state, so there is no sidecar:
-/// - `<uuid>.partial`: one per transaction of a ``GrowingFileByteSource``. Deleted on a restart,
-///   on a new load and stop (the source's `cancel()`), and by ``sweepPartials()`` at launch.
-///   Never reused by a later session.
-/// - `<sha256(url)>.audio`: a transaction that completed from byte 0, renamed. Kept up to
+/// - `<uuid>.partial`: one per session of a ``GrowingFileByteSource``, sparse, each transaction's
+///   bytes at their resource offsets (ADR-0014). Deleted when the resource changed or a failure
+///   no retry fixes, on a new load and stop (the source's `cancel()`), and by ``sweepPartials()``
+///   at launch. Never reused by a later session.
+/// - `<sha256(url)>.audio`: a partial once every byte of the resource is in it, renamed. Kept up to
 ///   ``budgetBytes``, least recently played first out; the modification date is
 ///   the recency and is touched on every play. Never treated as a user's saved download.
 ///
@@ -84,7 +85,7 @@ public final class GrowingFileStore {
         try? FileManager.default.removeItem(at: partial)
     }
 
-    /// Renames a partial that holds `url` from byte 0 to its end into the cache, then evicts the
+    /// Renames a partial that holds every byte of `url` into the cache, then evicts the
     /// cache to budget around it. Nil when the rename failed (the partial is then left as it was).
     func promote(_ partial: URL, for url: URL) -> URL? {
         let complete = completedURL(for: url)

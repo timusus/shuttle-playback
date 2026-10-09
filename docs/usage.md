@@ -141,8 +141,8 @@ change of channel count or sample rate, which is converted to the open format. S
 link is unsupported ([#48](https://github.com/timusus/shuttle-playback/issues/48)), as in FFmpeg and
 media3: the seek lands in the first link.
 
-With a growing-file source, a seek past the frontier restarts the download at the target into a new
-file (a short hop ahead waits instead). Call `source.willSeek(generation:)` first only if you want the
+With a growing-file source, a seek to bytes already on disk is served from the file; a seek into a
+hole restarts the download at the target, into the same file (a short hop ahead waits instead). Call `source.willSeek(generation:)` first only if you want the
 transaction paired with your seek in `snapshot` and events. A seek past a known `totalLength` throws
 `.unseekable` (the total itself is the end of the stream), so a server's over-estimated length is refused, not waited on.
 
@@ -161,7 +161,8 @@ Use `cancel()` when you throw the decoder away.
 ## Show buffering and download state
 
 `source.snapshot` is readable from any thread: `base`, `frontier`, `totalLength`, `isComplete`,
-`downloadBytesPerSecond`, `fileURL`. `readWaitingSince` is the source clock's time the decoder's read
+`downloadBytesPerSecond`, `fileURL`; `base` and `frontier` are the range on disk the reader is in,
+and `isComplete` says it reaches the end. `readWaitingSince` is the source clock's time the decoder's read
 parked for bytes (nil when none waits): poll it for a buffering state, and `now - readWaitingSince` is the stall. `onEvent` delivers changes without polling: `.transaction` when a
 response is accepted, `.download` at most once a second, `.seekLanded` when a seek was served from the
 file already on disk. A host that wants protocol-shaped callbacks implements `GrowingFileListener` and

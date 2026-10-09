@@ -47,18 +47,19 @@ it reads from its `StreamByteReader` only as much as the caller's next chunk nee
 
 ![Growing-file download and recovery](diagrams/growing-file.svg)
 
-`GrowingFileByteSource` downloads the resource once, as one ranged request, into a file on disk. The
-decoder reads that file, and a read at the end of the written bytes waits
-([ADR-0003](decisions/0003-growing-file-playback.md)). Vocabulary: a *transaction* is one `GET` and its
-file; *base* is the resource offset of the file's first byte; *frontier* is one past its last readable
-byte; a restart is a new transaction. Every rule below is `GrowingFileDownload`'s, a state machine
+`GrowingFileByteSource` downloads the resource with ranged requests into one sparse file per
+session, each byte at its resource offset. The decoder reads that file, and a read at the end of the
+written bytes waits ([ADR-0003](decisions/0003-growing-file-playback.md),
+[ADR-0014](decisions/0014-one-sparse-file-per-session.md)). Vocabulary: a *transaction* is one `GET`;
+*base* is where its bytes start; *frontier* is one past its last readable byte; a restart is a new
+transaction into the same file, asking only up to the next range already on disk. Every rule below is `GrowingFileDownload`'s, a state machine
 with no lock, task, file or clock: events in (a read, a seek, a response, bytes, a task's end, a timer,
 a path change), effects out (serve, park, open a file, send a request, schedule a timer, fail). The
 source is its adapter: one lock, the URLSession delegate, the file descriptors and the clock.
 
 - **A read is decided when it happens, not at the seek** (`GrowingFileDownload.ReadRule`, a pure function): the MP3 footer probe seeks to the tail and back, and deciding at the seek would cancel
-  the head download for a read that never needed the network. A small gap ahead waits; a far one, or a
-  position behind `base`, restarts the download there.
+  the head download for a read that never needed the network. A read in a range on disk is served; a
+  small gap ahead waits; a far one, or a hole behind `base`, restarts the download there.
 - **Recovery lives only in this class** ([ADR-0004](decisions/0004-one-recovery-layer-in-the-byte-source.md)).
   `GrowingFileDownload.Retry` (a pure value type) spends 3 attempts on failures the host answered and a 30 s link
   window on ones nothing answered. A retry resumes from the frontier when the host gives the same range
@@ -66,7 +67,9 @@ source is its adapter: one lock, the URLSession delegate, the file descriptors a
   change, ends the transaction like a drop.
 - **A non-audio answer is a failure**, so a login page is never decoded.
 - **Partial files are never reused across sessions**, because a host can change the bytes behind a
-  stable URL. A transaction that completes from byte 0 becomes a cached `.audio` file.
+  stable URL; within a session, a changed total or strong ETag deletes the file. Once every byte is
+  on disk, whichever transactions wrote it, the file becomes a cached `.audio` file. With no known
+  total, ranges more than 64 MiB behind the reader are dropped.
 - **Threading.** The decoder thread owns `read`/`seek`; the URLSession delegate queue writes bytes and
   runs the retry policy; they meet under one lock and condition. `cancel()`, `interrupt()` and
   `snapshot` are safe from any thread.

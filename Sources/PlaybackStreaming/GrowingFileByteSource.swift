@@ -1,25 +1,32 @@
 import Foundation
 import PlaybackDecode
 
-/// **One download per transaction, to one file; the decoder reads the file and waits at the
-/// frontier**. Unthrottled, no window, no run cache, no redirect cache.
+/// **Every transaction of a session writes into one sparse file at each byte's resource offset;
+/// the decoder reads the file and waits at the frontier** (ADR-0014). Unthrottled, no run cache,
+/// no redirect cache.
 ///
 /// - A transaction is `GET` with `Range: bytes=<base>-` and the caller's auth headers (on every hop
-///   too). Each body chunk is written at its file offset and the frontier advances. A `200` to a
-///   ranged request re-declares the file as starting at byte 0, under a new generation, and the
-///   read waits for its position. A body from byte 0 that completes is renamed into
-///   ``GrowingFileStore``'s cache.
+///   too), bounded (`bytes=<base>-<end>`) when the file already holds a range after `base`, so
+///   nothing on disk is fetched again. Each body chunk is written at its resource offset and the
+///   frontier advances. A read inside a range on disk needs no transaction. A `200` to a ranged
+///   request re-declares the transaction as starting at byte 0, under a new generation, and the
+///   read waits for its position. Once `[0, total)` is on disk, whichever transactions wrote it,
+///   the file is renamed into ``GrowingFileStore``'s cache. A new transaction whose total or
+///   strong ETag differs from the session's deletes the file. With no known total, a range more
+///   than ``GrowingFileDownload/unknownLengthWindowBytes`` behind the reader is dropped and its
+///   blocks punched out.
 /// - A dropped connection, a silent body or a refused status is tried again after the backoff
 ///   ``GrowingFileDownload/Retry`` decides, until it says the read fails with `.transport`: a few
 ///   attempts for failures the host answered, the link window for ones nothing answered. A request
 ///   nothing answers in time (``requestTimeoutSeconds`` for a transaction's first, the shorter
 ///   ``retryRequestTimeoutSeconds`` for a retry, neither past the link window's end) is ended as
 ///   one nothing answered, so a dead link fails about 30 s after it went quiet. A retry whose
-///   file holds the decoder's position resumes it: `Range: bytes=<frontier>-` (with `If-Range`
+///   transaction holds the decoder's position resumes it: `Range: bytes=<frontier>-` (with `If-Range`
 ///   when the host gave a strong ETag), appended to the same file under the same generation, so
 ///   nothing already on disk is fetched again. A resume the host answers with anything but a `206`
-///   from the frontier with the same total (a `200`, or a body the server has changed between requests) is dropped for a restart at the
-///   decoder's position into a new file, as is a retry whose file does not hold that position.
+///   from the frontier with the same total (a `200`, or a body the server has changed between
+///   requests) deletes the file for a restart at the decoder's position; a retry whose
+///   transaction does not hold that position restarts there, keeping the file.
 ///   Retries and resumes go straight to the redirect chain's remembered end, so a slow chain is
 ///   not walked again inside a retry's short wait. A request there that is refused (a `4xx`, a
 ///   page) or unanswered forgets it, a signed hop may have expired, and the next request walks the

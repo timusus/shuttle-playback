@@ -4,24 +4,24 @@ import Foundation
 /// may read it. A host player's buffering and stall rules, and any reader a host puts
 /// beside the player through ``GrowingFileListener``, read this and never the source itself.
 ///
-/// The file holds `[base, frontier)` of the resource, from ONE transaction: a restart is a new
-/// file, a new `base` and a new ``transactionGeneration``. A retry that resumes the file
-/// from its frontier keeps all three, and only when the host answered with the same range start
-/// and total (and `If-Range` when it gave an ETag); a reader of one file sees the bytes that were
-/// played.
+/// The session's one file holds ranges of the resource at their own offsets, written by any of
+/// its transactions (ADR-0014). `[base, frontier)` is the range on disk the reader is in, or the
+/// current transaction's while the reader is in a hole. A restart is a new transaction and a new
+/// ``transactionGeneration``; a retry that resumes from the frontier keeps it, and only when the
+/// host answered with the same range start and total (and `If-Range` when it gave an ETag).
 public struct GrowingFileSnapshot: Equatable, Sendable {
-    /// The resource offset of the file's first byte.
+    /// The resource offset where the reader's range on disk starts.
     public var base: Int64
-    /// One past the last byte on disk and readable.
+    /// One past the last byte of that range: on disk and readable.
     public var frontier: Int64
     /// From `Content-Range` (or `Content-Length + base`); nil while unknown.
     public var totalLength: Int64?
-    /// This transaction's body arrived whole: no more bytes are coming to this file.
+    /// The reader's range on disk reaches the total: nothing up to the end is still owed.
     public var isComplete: Bool
-    /// Where the file is: a `.partial`, or the cache's `.audio` once a body from byte 0 has completed.
+    /// The session's file: a `.partial`, or the cache's `.audio` once every byte is in it.
     /// Nil before the first transaction.
     public var fileURL: URL?
-    /// Counts transactions, from 1. A change means a new file and possibly a different body from the server.
+    /// Counts transactions, from 1. A change means a new request, possibly answered with a different body.
     public var transactionGeneration: Int
     /// The player's seek generation when the transaction was opened by that seek's read: the
     /// pairing a reader uses to anchor a restart's base byte at the seek's landed time. Nil for a
@@ -67,7 +67,7 @@ public protocol GrowingFileSnapshotSource: AnyObject {
 /// constructed the source, which may log them as it likes. Every transaction is a fresh body, so
 /// a continuation flag would always be false and is not carried.
 public enum GrowingFileEvent: Equatable, Sendable {
-    /// A transaction's response was accepted. `base` is where its file starts: 0 when the host
+    /// A transaction's response was accepted. `base` is where its bytes start: 0 when the host
     /// ignored the `Range` and answered `200`.
     /// `seekGeneration` is nil unless the seek of that generation opened it; see
     /// ``GrowingFileSnapshot/seekGeneration``.
