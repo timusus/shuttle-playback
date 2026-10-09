@@ -41,7 +41,7 @@ land <branch>                                       # from the landing worktree:
 scripts/release.sh 0.1.1                            # clean main or landing worktree: tests, dist/ FFmpeg source, tag, push
 ```
 
-On a build with the FFmpeg xcframework only the 30-minute MP3 test skips (needs host `ffmpeg`);
+On a build with the FFmpeg xcframework only the two generated-MP3 tests (30-minute CBR, 5-minute Xing VBR) skip, without host `ffmpeg` and on iOS;
 the `XCTSkipUnless(FFmpegStreamDecoder.isAvailable)` guards skip only without it. Known decoder
 bugs run under `XCTExpectFailure` (`KnownIssues.swift`, e.g. #55). Conformance details, known
 issues and fixtures: `docs/contributing.md`. Consumers pin a tag, never a branch. A public API change
