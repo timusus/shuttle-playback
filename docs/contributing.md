@@ -53,9 +53,10 @@ over real `SecTrust`s (`GrowingFileConnectionPolicyTests`), not through a `URLSe
 ## FFmpeg
 
 `Frameworks/FFmpeg.xcframework` has three slices (ios-arm64, ios-arm64-simulator, macos-arm64), each one
-`libffmpeg.a` of libavformat, libavcodec, libswresample and libavutil, plus headers, a `CFFmpeg` module
-map, the LGPL text and `VERSION.txt` (tag, exact configure flags, applied patches: read it to see what a
-build contains). `CStreamDecode` also links the system `z` and `iconv`.
+dynamic `FFmpeg.framework` of libavformat, libavcodec, libswresample and libavutil linked against the
+system `z`, `iconv` and the CoreMedia family, plus the LGPL text and `VERSION.txt` (tag, exact configure
+flags, applied patches, linkage: read it to see what a build contains). The script also installs the
+headers into `Sources/CFFmpeg/include`, beside the hand-written `CFFmpeg` module map.
 
 ### Rebuilding FFmpeg
 
@@ -67,7 +68,7 @@ and `MACOS_DEPLOYMENT_TARGET` (defaults in the script). After a rebuild:
 
 1. `git diff` on `VERSION.txt` shows only the intended change.
 2. `swift test`, conformance suite included, passes.
-3. The framework is its own commit: `build: rebuild ffmpeg ...`.
+3. The framework is its own commit: `build: rebuild ffmpeg ...`; changed headers go with it.
 
 Patches in `scripts/ffmpeg-patches/` are applied by the script to the cloned source and listed in
 `VERSION.txt`. Add one only for a bug the pinned tag has and the decoder cannot work around, and say

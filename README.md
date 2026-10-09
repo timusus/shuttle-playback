@@ -1,6 +1,6 @@
 # shuttle-playback
 
-The audio decode layer for iOS and macOS, written in Swift over a static FFmpeg. It turns a byte source,
+The audio decode layer for iOS and macOS, written in Swift over FFmpeg. It turns a byte source,
 such as a file or a URL still downloading, into interleaved Float32 PCM that your app schedules however
 it likes.
 
@@ -21,7 +21,7 @@ Link only what you import.
 | `PlaybackDecode` | `FFmpegStreamDecoder` over a `StreamByteReader`: seekable, cancellable. `FileByteReader` reads a local file. |
 | `PlaybackStreaming` | `GrowingFileByteSource`: plays an HTTP(S) URL while it downloads, retrying and resuming after drops. |
 | `PlaybackStreamingTestSupport` | `LoopbackMediaServer`, a local HTTP server with fault knobs, for tests. |
-| `FFmpeg` | The static LGPL-only FFmpeg, for an app with its own C code against libavformat. |
+| `FFmpeg` | The LGPL-only FFmpeg (a dynamic framework), for an app with its own C code against libavformat. |
 
 Formats: MP3, AAC (ADTS and LATM), MP4 and M4A (AAC, ALAC), Ogg and Matroska/WebM (Opus, Vorbis), FLAC,
 and PCM WAV/AIFF. Requires iOS 17 or macOS 14, Swift 5.9, Apple silicon.
@@ -57,5 +57,12 @@ The API may change before 1.0; a public API change is a minor version bump until
 
 Copyright (c) 2026 Tim Malseed. Licensed under the [GPL-3.0](LICENSE). A commercial licence is available
 on request, for a closed-source app for example; contributions need agreement to the
-[CLA](CLA.md) so that is possible. FFmpeg is LGPL-2.1, and its licence text ships inside
-`Frameworks/FFmpeg.xcframework`.
+[CLA](CLA.md) so that is possible.
+
+FFmpeg is LGPL-2.1 and ships as its own dynamic `FFmpeg.framework`, which Xcode embeds in the app, so a
+user can replace it with a modified build (LGPL-2.1 section 6; [ffmpeg.org/legal.html](https://ffmpeg.org/legal.html)).
+Its licence text ships inside the framework. `scripts/release.sh` writes the exact FFmpeg source,
+patches and configure line for each release to `dist/ffmpeg-X.Y.Z-source.tar.xz`, attached to the GitHub
+release. A closed-source app shipping it also owes an FFmpeg notice in its About screen and an EULA
+that allows reverse engineering to debug such modifications (not Apple's standard EULA); both are the
+app's work ([ADR-0001](docs/decisions/0001-ffmpeg-for-demux-and-decode.md)).

@@ -25,7 +25,7 @@
   <text x="370" y="272" text-anchor="middle" font-weight="600">CStreamDecode</text>
   <text x="370" y="290" text-anchor="middle" font-size="12" fill="#444">C shim over libavformat</text>
   <rect x="270" y="316" width="350" height="36" rx="8" fill="#f3f3f3" stroke="#888" stroke-width="1.5"/>
-  <text x="445" y="339" text-anchor="middle" font-weight="600">CFFmpeg (static libffmpeg.a, LGPL-2.1)</text>
+  <text x="445" y="339" text-anchor="middle" font-weight="600">CFFmpeg → FFmpeg.framework (dynamic, LGPL-2.1)</text>
   <g stroke="#444" stroke-width="1.5" fill="none" marker-end="url(#a)">
     <path d="M330 84 L130 130"/>
     <path d="M370 84 L370 130"/>

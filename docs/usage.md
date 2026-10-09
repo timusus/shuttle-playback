@@ -19,10 +19,10 @@ targets: [
 ]
 ```
 
-Pin a tag, never a branch. `PlaybackDecode` links the system libraries the static FFmpeg needs. The
-`FFmpeg` product is only for an app with its own C code against libavformat: it carries no linker
-settings (a binary target cannot), so the app adds CoreFoundation, CoreMedia, CoreVideo and
-VideoToolbox, `z` and `iconv` itself, and must link exactly one FFmpeg.
+Pin a tag, never a branch. FFmpeg is a dynamic `FFmpeg.framework` that links its own system libraries;
+Xcode embeds it in the app with no build-phase change. The `FFmpeg` product is only for an app with its
+own C code against libavformat (`#include <libavformat/avformat.h>` or `import CFFmpeg`), and the app
+must link exactly one FFmpeg.
 
 ## Decode a file
 

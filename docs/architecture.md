@@ -1,15 +1,15 @@
 # Architecture
 
 Three parts: a pull decoder over an abstract byte source, an opt-in network byte source that plays a
-file while it downloads, and a committed static FFmpeg. The reasons behind each are in the
+file while it downloads, and a committed FFmpeg framework. The reasons behind each are in the
 [decisions](decisions/README.md); the mechanics are in the source and its doc comments.
 
 ![Products and their dependencies](diagrams/products.svg)
 
 A consumer links only the products it imports. `PlaybackStreaming` depends on `PlaybackDecode`, so a
-decode-only app never links the network code. The `FFmpeg` product exposes the same static library for
-an app with its own C against libavformat; an app links one copy, since two copies of the same static
-symbols fail to link. The engine knows nothing about podcasts, queues or UI, and effects stay in the
+decode-only app never links the network code. The `FFmpeg` product exposes the same framework and headers for
+an app with its own C against libavformat; an app links one copy, since a second FFmpeg's symbols would
+clash with this one's or silently shadow them. The engine knows nothing about podcasts, queues or UI, and effects stay in the
 apps ([ADR-0005](decisions/0005-shared-engine-repo.md)).
 
 ## The decoder
@@ -73,8 +73,11 @@ source is its adapter: one lock, the URLSession delegate, the file descriptors a
 
 ## FFmpeg
 
-`Frameworks/FFmpeg.xcframework` is the committed LGPL-2.1 static build: one superset for both apps
-([ADR-0006](decisions/0006-one-superset-ffmpeg.md)), with local patches for bugs in the pinned tag.
-Static linking carries an obligation to let a user relink against a modified FFmpeg, and the build never
-enables GPL, version3, nonfree or an external library; take advice if that matters to your distribution.
+`Frameworks/FFmpeg.xcframework` is the committed LGPL-2.1 build: one superset for both apps
+([ADR-0006](decisions/0006-one-superset-ffmpeg.md)), with local patches for bugs in the pinned tag. It is
+a dynamic `FFmpeg.framework` that Xcode embeds in each app, so a user can swap in a modified FFmpeg as
+LGPL-2.1 section 6 requires ([ADR-0001](decisions/0001-ffmpeg-for-demux-and-decode.md)); its headers and
+the `CFFmpeg` module live in `Sources/CFFmpeg`. Each release's FFmpeg source comes from
+`scripts/release.sh`, and the apps add the About notice and a reverse-engineering-permitting EULA. The
+build never enables GPL, version3, nonfree or an external library.
 Rebuilding is in [contributing](contributing.md#rebuilding-ffmpeg).
