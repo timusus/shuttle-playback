@@ -1,8 +1,0 @@
-module CFFmpeg {
-    header "libavformat/avformat.h"
-    header "libavcodec/avcodec.h"
-    header "libswresample/swresample.h"
-    header "libavutil/avutil.h"
-    header "libavutil/opt.h"
-    export *
-}
