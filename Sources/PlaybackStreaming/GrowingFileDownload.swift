@@ -575,6 +575,7 @@ struct GrowingFileDownload {
             current?.isComplete = true
             current?.totalLength = total
             lastKnownTotalLength = total
+            promoteIfWhole()
             if finalURL == nil { finalURL = response.url }
             recordResponse(tx, status: status, now: now)
             effects.append(.emit(.transaction(base: tx.base, generation: tx.generation, seekGeneration: tx.seekGeneration, httpStatus: status)))

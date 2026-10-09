@@ -116,7 +116,24 @@ struct GrowingFileDownloadSessionFileTests {
         #expect(h.machine.file.ranges.ranges.isEmpty)
     }
 
-    @Test("with no known total and nothing dropped,the body's end makes the file whole and promotes it")
+    @Test("a 416 that reveals the total of a body of unknown length promotes a file that is already whole")
+    func aLateTotalFromA416Promotes() {
+        let h = Harness()
+        h.read()
+        h.respond(200)
+        h.body(3000)
+        h.end(error: -1005)
+        h.clock.advance(by: 0.1)
+        #expect(h.requests.last == h.request(2, from: 3000))
+        #expect(!h.machine.file.isCached)
+
+        #expect(!h.respond(416, range: "bytes */3000"))
+        #expect(h.machine.totalLength == 3000)
+        #expect(h.machine.file.isCached, "promoted when the total became known")
+        #expect(h.log.filter { $0 == .promote }.count == 1)
+    }
+
+    @Test("with no known total and nothing dropped, the body's end makes the file whole and promotes it")
     func anUnknownLengthWithinTheWindowPromotes() {
         let h = Harness(unknownLengthWindow: 1000)
         h.read()
