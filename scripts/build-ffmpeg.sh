@@ -120,6 +120,10 @@ log() { printf '\n=== %s\n' "$*"; }
 # ── FFmpeg source ────────────────────────────────────────────────────────────
 mkdir -p "$BUILD_ROOT"
 FFMPEG="${FFMPEG_SRC:-$BUILD_ROOT/ffmpeg-src}"
+# The published source tarball carries the FFmpeg tree beside scripts/, so it builds as extracted.
+if [ -z "${FFMPEG_SRC:-}" ] && [ -f "$REPO_DIR/ffmpeg-$FFMPEG_TAG/configure" ]; then
+    FFMPEG="$REPO_DIR/ffmpeg-$FFMPEG_TAG"
+fi
 if [ ! -f "$FFMPEG/configure" ]; then
     # A directory without `configure` is an interrupted clone; git refuses a non-empty target.
     if [ -d "$FFMPEG" ]; then
@@ -135,13 +139,18 @@ fi
 # Fixes the decoder needs that the FFmpeg tag lacks, each a small diff with its reason in its
 # header. Applied once (a patch that already reverse-applies is in place) and listed in VERSION.txt.
 PATCHES=()
+PATCH_HASHES=()
 for PATCH in "$SCRIPT_DIR"/ffmpeg-patches/*.patch; do
     [ -e "$PATCH" ] || continue
     PATCHES+=("$(basename "$PATCH")")
+    PATCH_HASHES+=("$(shasum -a 256 "$PATCH" | cut -d' ' -f1) $(basename "$PATCH")")
     if git -C "$FFMPEG" apply --reverse --check "$PATCH" 2>/dev/null; then continue; fi
     log "Applying $(basename "$PATCH")"
     git -C "$FFMPEG" apply "$PATCH"
 done
+
+# Identifies what the static libraries were built from; RELINK_ONLY refuses libraries that differ.
+BUILD_STAMP="$({ echo "$FFMPEG_TAG"; echo "${CONFIGURE_FLAGS[*]}"; printf '%s\n' ${PATCH_HASHES[@]+"${PATCH_HASHES[@]}"}; } | shasum -a 256 | cut -d' ' -f1)"
 
 # ── one platform ─────────────────────────────────────────────────────────────
 # $1 slice name (device|simulator|macos), $2 SDK, $3 clang -target triple
@@ -170,6 +179,7 @@ build_slice() {
 
     make -j"$(sysctl -n hw.ncpu)"
     make install
+    echo "$BUILD_STAMP" > "$PREFIX/lib/build.stamp"
 }
 
 # One dynamic framework per slice. Every object of the four archives goes in (-force_load), not only
@@ -281,7 +291,23 @@ PLIST
 }
 
 # RELINK_ONLY=1 reuses the static libraries of an earlier run, for a change to the link step alone.
-if [ "${RELINK_ONLY:-0}" != 1 ]; then
+# VERSION.txt is written from the current patches and flags, so the libraries must match them.
+if [ "${RELINK_ONLY:-0}" = 1 ]; then
+    for NAME in device simulator macos; do
+        LIB_DIR="$BUILD_ROOT/prefix-$NAME/lib"
+        for l in "${LIBS[@]}"; do
+            [ -f "$LIB_DIR/$l.a" ] || { echo "ERROR: RELINK_ONLY=1 but $LIB_DIR/$l.a is missing; run a full build first" >&2; exit 1; }
+        done
+        if [ ! -f "$LIB_DIR/build.stamp" ]; then
+            echo "ERROR: RELINK_ONLY=1 but $LIB_DIR has no build.stamp (built before stamps existed); run a full build" >&2
+            exit 1
+        fi
+        if [ "$(cat "$LIB_DIR/build.stamp")" != "$BUILD_STAMP" ]; then
+            echo "ERROR: RELINK_ONLY=1 but the $NAME libraries were built from different patches, flags or FFmpeg tag; run a full build" >&2
+            exit 1
+        fi
+    done
+else
     build_slice device iphoneos "arm64-apple-ios${DEPLOYMENT_TARGET}" >/dev/null
     build_slice simulator iphonesimulator "arm64-apple-ios${DEPLOYMENT_TARGET}-simulator" >/dev/null
     build_slice macos macosx "arm64-apple-macos${MACOS_DEPLOYMENT_TARGET}" >/dev/null
@@ -305,6 +331,7 @@ cp "$FFMPEG/COPYING.LGPLv2.1" "$OUT/COPYING.LGPLv2.1"
     echo "$FFMPEG_TAG"
     echo "configured: ${CONFIGURE_FLAGS[*]}"
     echo "patches: ${PATCHES[*]:-none}"
+    for h in ${PATCH_HASHES[@]+"${PATCH_HASHES[@]}"}; do echo "patch-sha256: $h"; done
     echo "linkage: dynamic FFmpeg.framework per slice, install name @rpath/FFmpeg.framework/FFmpeg, exports only $(tr '\n' ' ' < "$SCRIPT_DIR/ffmpeg-exports.txt")(ffmpeg-exports.txt), links ${SYSTEM_LIBS[*]}"
 } > "$OUT/VERSION.txt"
 

@@ -4,7 +4,7 @@
 #
 # Refuses a dirty tree, a branch other than main, a malformed or existing tag, and a red
 # `swift test`. Tags are bare semver (0.1.0), which is what SwiftPM's `from:` resolves.
-# Writes dist/ffmpeg-X.Y.Z-source.tar.xz (FFmpeg tag, patches, build script, configure line) for
+# Writes dist/ffmpeg-X.Y.Z-source.tar.xz (package-ffmpeg-source.sh: FFmpeg tree, patches, build script) for
 # the owner to attach to the GitHub release; this script creates no release itself.
 set -euo pipefail
 
@@ -50,11 +50,10 @@ if [[ "$(git rev-parse HEAD)" != "$(git rev-parse -q --verify origin/main || tru
 fi
 
 # The published source must match the binary: VERSION.txt records the patches it was built with.
-recorded_patches="$(sed -n 's/^patches: //p' Frameworks/FFmpeg.xcframework/VERSION.txt | tr ' ' '\n' | sort)"
-actual_patches="$(cd scripts/ffmpeg-patches && ls -1 *.patch 2>/dev/null | sort || true)"
-[[ -n "$actual_patches" ]] || actual_patches="none"
+recorded_patches="$(sed -n 's/^patch-sha256: //p' Frameworks/FFmpeg.xcframework/VERSION.txt | LC_ALL=C sort)"
+actual_patches="$(cd scripts/ffmpeg-patches && { shasum -a 256 *.patch 2>/dev/null || true; } | awk '{print $1 " " $2}' | LC_ALL=C sort)"
 if [[ "$recorded_patches" != "$actual_patches" ]]; then
-    echo "release.sh: scripts/ffmpeg-patches differs from the patches recorded in the framework's VERSION.txt; rebuild the framework" >&2
+    echo "release.sh: scripts/ffmpeg-patches differs (by content) from the patches recorded in the framework's VERSION.txt; rebuild the framework" >&2
     exit 1
 fi
 
@@ -72,24 +71,13 @@ echo "release.sh: PlaybackStreamingTests on iOS simulator $udid"
 xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreamingTests \
     -destination "platform=iOS Simulator,id=$udid" -quiet
 
-# LGPL-2.1 section 6: the apps embed this release's FFmpeg, so its exact source, patches and build
-# recipe are published beside it. Built before tagging, so a tag never lacks its source.
-ffmpeg_tag="$(head -1 Frameworks/FFmpeg.xcframework/VERSION.txt)"
+# Built before tagging, so a tag never lacks its source (LGPL-2.1 section 6); a failed or
+# interrupted run leaves no partial tarball.
 source_name="ffmpeg-$version-source"
-staging="$(mktemp -d)"
-trap 'rm -rf "$staging"' EXIT
-echo "release.sh: packaging FFmpeg $ffmpeg_tag source as dist/$source_name.tar.xz"
-git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ffmpeg_tag" https://git.ffmpeg.org/ffmpeg.git \
-    "$staging/$source_name/ffmpeg-$ffmpeg_tag"
-rm -rf "$staging/$source_name/ffmpeg-$ffmpeg_tag/.git"
-cp -R scripts/ffmpeg-patches "$staging/$source_name/patches"
-cp scripts/build-ffmpeg.sh Frameworks/FFmpeg.xcframework/VERSION.txt "$staging/$source_name/"
-mkdir -p dist
-# Reproducible archive (bsdtar): sorted members, the commit's date as mtime, root ownership.
-stamp="$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M.%S HEAD)"
-(cd "$staging" && find "$source_name" -exec touch -h -t "$stamp" {} + && find "$source_name" | LC_ALL=C sort > "$staging.list")
-tar -cJf "dist/$source_name.tar.xz" -C "$staging" --no-recursion --uid 0 --gid 0 --numeric-owner -T "$staging.list"
-rm -f "$staging.list"
+packaged=0
+trap '[[ "$packaged" == 1 ]] || rm -f "dist/$source_name.tar.xz"' EXIT
+scripts/package-ffmpeg-source.sh "$version"
+packaged=1
 
 git tag -a "$version" -m "shuttle-playback $version"
 if ! git push origin "$version"; then

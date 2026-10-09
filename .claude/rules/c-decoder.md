@@ -5,8 +5,9 @@ paths:
 
 # C decoder and seek modules
 
-- The library is LGPL-2.1 and ships FFmpeg as a dynamic framework each closed-source app embeds (ADR-0001): use only FFmpeg's public
-  libav* API, never GPL or nonfree code, and no external library beyond the system zlib.
+- The library is LGPL-2.1 and ships FFmpeg as a dynamic framework each closed-source app embeds
+  (ADR-0001): use only FFmpeg's public libav* API, never GPL or nonfree code, and no external
+  library beyond the system zlib.
 - Seeks are sample-accurate: the demuxer is put a pre-roll before the target, and the decoder
   decodes and drops up to it. FLAC has no pre-roll (its seek finds a frame by its headers).
 - One seek path per format (`seek_mp3.c`, `seek_aac.c`, `seek_flac.c`, `seek_ogg.c`) behind
