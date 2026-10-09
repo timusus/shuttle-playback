@@ -92,7 +92,31 @@ struct GrowingFileDownloadSessionFileTests {
         #expect(h.requests.last == h.request(2, from: 0, end: 1500))
     }
 
-    @Test("with no known total and nothing dropped, the body's end makes the file whole and promotes it")
+    @Test("a bounded 206 whose total is '*' keeps the known total, so a later response with another total is caught")
+    func aStarTotalKeepsTheKnownTotal() throws {
+        let h = Harness()
+        try h.machine.seek(to: 8000)
+        h.read()
+        h.respond(206, range: "bytes 8000-9999/10000")
+        h.body(2000)
+        h.end()
+
+        try h.machine.seek(to: 4000)
+        h.read()
+        #expect(h.requests.last == h.request(2, from: 4000, end: 8000))
+        #expect(h.respond(206, range: "bytes 4000-7999/*"))
+        #expect(h.machine.totalLength == 10_000)
+        h.body(4000)
+        h.end()
+
+        try h.machine.seek(to: 0)
+        h.read()
+        #expect(h.requests.last == h.request(3, from: 0, end: 4000))
+        #expect(!h.respond(206, range: "bytes 0-3999/20000"), "the file changed behind the URL")
+        #expect(h.machine.file.ranges.ranges.isEmpty)
+    }
+
+    @Test("with no known total and nothing dropped,the body's end makes the file whole and promotes it")
     func anUnknownLengthWithinTheWindowPromotes() {
         let h = Harness(unknownLengthWindow: 1000)
         h.read()

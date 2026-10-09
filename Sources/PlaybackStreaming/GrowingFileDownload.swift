@@ -670,7 +670,8 @@ struct GrowingFileDownload {
             return false
         }
         current?.totalLength = total
-        lastKnownTotalLength = total
+        // A response that gives no total says nothing against the one already known.
+        if let total { lastKnownTotalLength = total }
         if let total { effects.append(.makeRoom(bytes: total - accepted.base)) }
         current?.entityTag = strongTag
         file.entityTag = file.entityTag ?? strongTag
