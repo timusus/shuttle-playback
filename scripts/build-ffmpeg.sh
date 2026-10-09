@@ -39,17 +39,6 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="${OUT_DIR:-$REPO_DIR/Frameworks}"
 HEADERS_DIR="$REPO_DIR/Sources/CFFmpeg/include"
 
-# `xcode-select -p` can point at CommandLineTools, which has no xcodebuild or iOS SDKs.
-if [[ -z "${DEVELOPER_DIR:-}" ]]; then
-    current="$(xcode-select -p 2>/dev/null || true)"
-    if [[ -z "$current" || ! -x "$current/usr/bin/xcodebuild" ]]; then
-        for candidate in /Applications/Xcode.app/Contents/Developer /Applications/Xcode-beta.app/Contents/Developer; do
-            if [[ -x "$candidate/usr/bin/xcodebuild" ]]; then export DEVELOPER_DIR="$candidate"; break; fi
-        done
-        [[ -n "${DEVELOPER_DIR:-}" ]] || { echo "ERROR: no Xcode with xcodebuild found" >&2; exit 1; }
-    fi
-fi
-
 BUILD_ROOT="${BUILD_ROOT:-${TMPDIR:-/tmp}/shuttle-playback-ffmpeg}"
 FFMPEG_TAG="${FFMPEG_TAG:-n7.1}"
 DEPLOYMENT_TARGET="${DEPLOYMENT_TARGET:-17.0}"
@@ -118,7 +107,19 @@ CONFIGURE_FLAGS=(
 # release.sh compares this with the "configured:" line of the shipped VERSION.txt.
 if [ "${PRINT_CONFIGURED:-0}" = 1 ]; then echo "${CONFIGURE_FLAGS[*]}"; exit 0; fi
 
-log() { printf '\n=== %s\n' "$*"; }
+# `xcode-select -p` can point at CommandLineTools, which has no xcodebuild or iOS SDKs. After the
+# PRINT_CONFIGURED exit so release.sh's flag check needs no Xcode.
+if [[ -z "${DEVELOPER_DIR:-}" ]]; then
+    current="$(xcode-select -p 2>/dev/null || true)"
+    if [[ -z "$current" || ! -x "$current/usr/bin/xcodebuild" ]]; then
+        for candidate in /Applications/Xcode.app/Contents/Developer /Applications/Xcode-beta.app/Contents/Developer; do
+            if [[ -x "$candidate/usr/bin/xcodebuild" ]]; then export DEVELOPER_DIR="$candidate"; break; fi
+        done
+        [[ -n "${DEVELOPER_DIR:-}" ]] || { echo "ERROR: no Xcode with xcodebuild found" >&2; exit 1; }
+    fi
+fi
+
+log(){ printf '\n=== %s\n' "$*"; }
 
 # ── FFmpeg source ────────────────────────────────────────────────────────────
 mkdir -p "$BUILD_ROOT"
@@ -160,10 +161,34 @@ for PATCH in "$SCRIPT_DIR"/ffmpeg-patches/*.patch; do
     [ -e "$PATCH" ] || continue
     PATCHES+=("$(basename "$PATCH")")
     PATCH_HASHES+=("$(shasum -a 256 "$PATCH" | cut -d' ' -f1) $(basename "$PATCH")")
+done
+# A tree without .git cannot be reset, and a rebuild skips patches already applied, so a patch removed
+# or edited since the tree was patched would stay in the binary. The marker records what was applied.
+PATCH_MARKER="$FFMPEG/.shuttle-patches"
+WANT_MARKER="$(printf '%s\n' ${PATCH_HASHES[@]+"${PATCH_HASHES[@]}"} | LC_ALL=C sort)"
+if [ ! -e "$FFMPEG/.git" ]; then
+    STALE=0
+    if [ -f "$PATCH_MARKER" ]; then
+        [ "$(cat "$PATCH_MARKER")" = "$WANT_MARKER" ] || STALE=1
+    else
+        # No marker: pristine unless a patch is already in the tree (patched before the marker existed).
+        for PATCH in "$SCRIPT_DIR"/ffmpeg-patches/*.patch; do
+            [ -e "$PATCH" ] || continue
+            if git -C "$FFMPEG" apply --reverse --check "$PATCH" 2>/dev/null; then STALE=1; fi
+        done
+    fi
+    if [ "$STALE" = 1 ]; then
+        echo "ERROR: $FFMPEG was patched with a different patch set than scripts/ffmpeg-patches/; re-extract the source tarball and build again" >&2
+        exit 1
+    fi
+fi
+for PATCH in "$SCRIPT_DIR"/ffmpeg-patches/*.patch; do
+    [ -e "$PATCH" ] || continue
     if git -C "$FFMPEG" apply --reverse --check "$PATCH" 2>/dev/null; then continue; fi
     log "Applying $(basename "$PATCH")"
     git -C "$FFMPEG" apply "$PATCH"
 done
+[ -e "$FFMPEG/.git" ] || printf '%s\n' "$WANT_MARKER" > "$PATCH_MARKER"
 
 # Identifies what the static libraries were built from; RELINK_ONLY refuses libraries that differ.
 BUILD_STAMP="$({ echo "$FFMPEG_TAG"; echo "${CONFIGURE_FLAGS[*]}"; echo "$DEPLOYMENT_TARGET $MACOS_DEPLOYMENT_TARGET"; printf '%s\n' ${PATCH_HASHES[@]+"${PATCH_HASHES[@]}"}; } | shasum -a 256 | cut -d' ' -f1)"
