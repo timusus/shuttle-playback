@@ -390,6 +390,198 @@ static int codec_parameters_changed(const StreamDecoder *d) {
  * stream of nothing but garbage gives up promptly. */
 #define MAX_CONSECUTIVE_DECODE_ERRORS 32
 
+/* What the `sd_pump` helpers return for "nothing to report yet, go round again"; every real status
+ * is >= 0. */
+enum { PUMP_AGAIN = -1 };
+
+/*
+ * A frame the codec produced, through the seek discard, the edit-list clip and the resampler into
+ * `pending`. `skip` is the output frames still to drop before the seek target, when the frame it
+ * fell in came out of the resampler shorter than the cut (a resampler holds the last few samples
+ * back). Returns STREAM_DECODE_OK when `pending` holds audio, PUMP_AGAIN to ask for another frame,
+ * or an error status.
+ */
+static int pump_decoded_frame(StreamDecoder *d, int64_t *skip) {
+    d->decode_errors = 0;
+    sd_aac_frame_decoded(d);
+    if (is_mpeg_audio(d->dec->codec_id) && d->dec->sample_rate > 0) {
+        /* FFmpeg's MPEG audio decoder takes the frame's buffer, and with it the frame's
+         * rate, before it updates the codec's rate from the frame it is decoding, so the
+         * first frame after a rate change (stitched MP3s) is labelled with the old rate.
+         * The codec's rate, read after the decode, is the frame's own. */
+        d->frame->sample_rate = d->dec->sample_rate;
+    }
+    /* The rate this frame came out at: for HE-AAC that is the SBR rate, twice the core
+     * rate an implicitly signalled stream's header gives. */
+    int rate = d->frame->sample_rate > 0 ? d->frame->sample_rate : d->sample_rate;
+    /* Where this frame starts: its timestamp, or, for a frame with none, where the one
+     * before it ended. */
+    int64_t pts = d->frame->best_effort_timestamp;
+    if (pts == AV_NOPTS_VALUE) pts = d->next_pts;
+    int pts_guessed = 0;   /* `pts` is the seek's start, not something the stream said */
+    if (pts == AV_NOPTS_VALUE && d->discard_until != AV_NOPTS_VALUE) {
+        pts_guessed = 1;
+        /* No frame since the seek has said what time it is. The demuxer was asked for
+         * `seek_from` and seeks backward, so the decode starts there or at most one frame
+         * before it: the frames are timed from there and the pre-roll is dropped as
+         * usual, which lands within a frame of the target (exactly, from the start).
+         * Keeping everything instead would play the whole pre-roll, seconds of audio
+         * before the target, reported as the target. */
+        pts = d->seek_from;
+        if (pts > d->start_time) d->landing_exact = 0;
+    }
+    if (pts != AV_NOPTS_VALUE) {
+        d->next_pts = pts + av_rescale_q(d->frame->nb_samples,
+                                         (AVRational){ 1, rate }, d->time_base);
+        if (d->seek_first_pts == AV_NOPTS_VALUE) d->seek_first_pts = pts;
+    }
+    /* Clamp before the seek discard below, or skipped final frames are never clamped and a
+     * seek past the end lands beyond the clipped end. */
+    if (d->end_pts != AV_NOPTS_VALUE && pts != AV_NOPTS_VALUE && !pts_guessed
+        && d->next_pts > d->end_pts)
+        d->next_pts = d->end_pts;   /* where the audio ends */
+    int64_t cut = 0;
+    int landing = 0;   /* this is the frame the seek target falls in */
+    if (d->discard_until != AV_NOPTS_VALUE) {
+        if (pts == AV_NOPTS_VALUE) {
+            d->discard_until = AV_NOPTS_VALUE;   /* nothing to place it by: keep it all */
+        } else {
+            cut = av_rescale_q(d->discard_until - pts, d->time_base,
+                               (AVRational){ 1, rate });
+            if (cut >= d->frame->nb_samples) {   /* wholly before the seek target */
+                av_frame_unref(d->frame);
+                return PUMP_AGAIN;
+            }
+            if (cut < 0) cut = 0;
+            d->discard_until = AV_NOPTS_VALUE;
+            landing = 1;
+        }
+    }
+    if (d->end_pts != AV_NOPTS_VALUE && pts != AV_NOPTS_VALUE && !pts_guessed) {
+        int64_t room = av_rescale_q(d->end_pts - pts, d->time_base,
+                                    (AVRational){ 1, rate });
+        if (room <= cut) {   /* wholly past the edit list's end */
+            av_frame_unref(d->frame);
+            return PUMP_AGAIN;
+        }
+        if (room < d->frame->nb_samples) d->frame->nb_samples = (int)room;
+    }
+    d->last_frame_pts = pts == AV_NOPTS_VALUE ? AV_NOPTS_VALUE
+        : pts + av_rescale_q(cut, (AVRational){ 1, rate }, d->time_base);
+    int lead = 0;
+    int ok = push_through_swr(d, d->frame, &lead);
+    av_frame_unref(d->frame);
+    if (ok != STREAM_DECODE_OK) return ok;
+    /* Same rate in and out, so the resampler holds nothing back: frame sample N is
+     * pending frame N. At another rate (a mid-stream change, or a fixed output format) it
+     * is the same instant at the output rate, behind whatever the old resampler flushed
+     * when the rate changed, which is kept: it is the end of the audio before this frame,
+     * unless the seek target is in this frame. */
+    if (landing) {
+        *skip += lead + (rate == d->out_rate ? cut
+            : av_rescale_q(cut, (AVRational){ 1, rate }, (AVRational){ 1, d->out_rate }));
+    }
+    d->pending_offset = *skip < d->pending_frames ? (int)*skip : d->pending_frames;
+    *skip -= d->pending_offset;
+    if (d->pending_frames > d->pending_offset) return STREAM_DECODE_OK;
+    sd_pending_reset(d);
+    return PUMP_AGAIN;   /* the resampler is still filling; ask for another frame */
+}
+
+/* The old link is drained: the held packet goes to a codec opened on the new one. The
+ * resampler follows its frames' new layout (`push_through_swr`). The demuxer sets only
+ * the new link's channel count, leaving the old link's mask (mono with 2 channels),
+ * which the codec refuses: the count is kept, and the codec reads its layout from the
+ * OpusHead. */
+static int pump_reopen_codec(StreamDecoder *d) {
+    AVChannelLayout *layout = &d->fmt->streams[d->audio_idx]->codecpar->ch_layout;
+    if (!av_channel_layout_check(layout)) {
+        int channels = layout->nb_channels;
+        av_channel_layout_uninit(layout);
+        layout->order = AV_CHANNEL_ORDER_UNSPEC;
+        layout->nb_channels = channels;
+    }
+    int codec_rc = sd_reopen_codec(d);
+    if (codec_rc != STREAM_DECODE_OK) return codec_rc;
+    d->flushing = 0;
+    return PUMP_AGAIN;
+}
+
+/* The decoder is drained; whatever libswresample still holds is the last of it. */
+static int pump_finish(StreamDecoder *d) {
+    if (!convert_through_swr(d, NULL)) return STREAM_DECODE_ERR_ALLOC;
+    d->ended = 1;
+    return d->pending_frames > 0 ? STREAM_DECODE_OK : STREAM_DECODE_EOF;
+}
+
+/* A frame the codec cannot decode is a glitch, not the end of the recording: skip it
+ * like a rejected packet. Out of memory is not the stream's fault, and a run of
+ * MAX_CONSECUTIVE_DECODE_ERRORS failures with no good frame between is garbage, not
+ * damage, so that ends with an error rather than spinning to the end of the file. */
+static int pump_decode_error(StreamDecoder *d, int rc) {
+    if (rc == AVERROR(ENOMEM)) return STREAM_DECODE_ERR_ALLOC;
+    if (++d->decode_errors > MAX_CONSECUTIVE_DECODE_ERRORS) return STREAM_DECODE_ERR_DECODER;
+    return PUMP_AGAIN;
+}
+
+/* The codec wants input: the next audio packet (the held one first) to it, or the end of the
+ * source to it as a NULL packet. Returns PUMP_AGAIN or an error status. */
+static int pump_feed_packet(StreamDecoder *d) {
+    int read = 0;
+    if (d->has_held) {
+        av_packet_move_ref(d->pkt, d->held);
+        d->has_held = 0;
+    } else {
+        read = av_read_frame(d->fmt, d->pkt);
+    }
+    if (read < 0) {
+        av_packet_unref(d->pkt);
+        if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
+        if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
+        if (read == AVERROR_EXIT) return STREAM_DECODE_ERR_CANCELLED;
+        if (read == AVERROR_EOF) {
+            avcodec_send_packet(d->dec, NULL);
+            d->flushing = 1;
+            return PUMP_AGAIN;
+        }
+        return STREAM_DECODE_ERR_IO;
+    }
+    /* A read that was cut short still hands back what it had: `av_get_packet` returns the
+     * bytes it got as a truncated packet. The codec would reject it and its audio would be
+     * gone, so it is dropped here and read again whole after the resume. */
+    if (d->cancelled || d->interrupted) {
+        av_packet_unref(d->pkt);
+        return d->cancelled ? STREAM_DECODE_ERR_CANCELLED : STREAM_DECODE_ERR_INTERRUPTED;
+    }
+    if (d->pkt->stream_index != d->audio_idx) {
+        av_packet_unref(d->pkt);
+        return PUMP_AGAIN;
+    }
+    sd_aac_packet_read(d, d->pkt);
+    if (!d->reopening && codec_parameters_changed(d)) {
+        /* Drain the old codec first (Opus holds back resampled SILK samples), then reopen. */
+        av_packet_move_ref(d->held, d->pkt);
+        d->has_held = 1;
+        d->reopening = 1;
+        avcodec_send_packet(d->dec, NULL);
+        d->flushing = 1;
+        return PUMP_AGAIN;
+    }
+    d->reopening = 0;
+    if (d->drop_timestamps) d->pkt->pts = d->pkt->dts = AV_NOPTS_VALUE;
+    d->last_pkt_pos = d->pkt->pos;
+    d->last_pkt_dts = d->pkt->dts;
+    d->has_last_pkt = d->pkt->pos >= 0 && d->pkt->dts != AV_NOPTS_VALUE;
+    d->has_first_pkt = 0;
+    if (d->seek_fmt->packet_fed) d->seek_fmt->packet_fed(d, d->pkt);
+    int sent = avcodec_send_packet(d->dec, d->pkt);
+    av_packet_unref(d->pkt);
+    /* A packet the decoder rejects is a corrupt frame, not the end of the stream: skip it and
+     * keep going, which is what every player does with a bad MP3 frame. */
+    (void)sent;
+    return PUMP_AGAIN;
+}
+
 /*
  * Advance until `pending` holds audio, or the stream is over.
  *
@@ -401,8 +593,6 @@ static int codec_parameters_changed(const StreamDecoder *d) {
 int sd_pump(StreamDecoder *d) {
     sd_pending_reset(d);
     if (d->ended) return STREAM_DECODE_EOF;
-    /* Output frames still to drop before the seek target, when the frame it fell in came out of
-     * the resampler shorter than the cut (a resampler holds the last few samples back). */
     int64_t skip = 0;
 
     for (;;) {
@@ -411,186 +601,16 @@ int sd_pump(StreamDecoder *d) {
         if (d->interrupted && !d->reopening) return STREAM_DECODE_ERR_INTERRUPTED;
 
         int rc = avcodec_receive_frame(d->dec, d->frame);
-        if (rc == 0) {
-            d->decode_errors = 0;
-            sd_aac_frame_decoded(d);
-            if (is_mpeg_audio(d->dec->codec_id) && d->dec->sample_rate > 0) {
-                /* FFmpeg's MPEG audio decoder takes the frame's buffer, and with it the frame's
-                 * rate, before it updates the codec's rate from the frame it is decoding, so the
-                 * first frame after a rate change (stitched MP3s) is labelled with the old rate.
-                 * The codec's rate, read after the decode, is the frame's own. */
-                d->frame->sample_rate = d->dec->sample_rate;
-            }
-            /* The rate this frame came out at: for HE-AAC that is the SBR rate, twice the core
-             * rate an implicitly signalled stream's header gives. */
-            int rate = d->frame->sample_rate > 0 ? d->frame->sample_rate : d->sample_rate;
-            /* Where this frame starts: its timestamp, or, for a frame with none, where the one
-             * before it ended. */
-            int64_t pts = d->frame->best_effort_timestamp;
-            if (pts == AV_NOPTS_VALUE) pts = d->next_pts;
-            int pts_guessed = 0;   /* `pts` is the seek's start, not something the stream said */
-            if (pts == AV_NOPTS_VALUE && d->discard_until != AV_NOPTS_VALUE) {
-                pts_guessed = 1;
-                /* No frame since the seek has said what time it is. The demuxer was asked for
-                 * `seek_from` and seeks backward, so the decode starts there or at most one frame
-                 * before it: the frames are timed from there and the pre-roll is dropped as
-                 * usual, which lands within a frame of the target (exactly, from the start).
-                 * Keeping everything instead would play the whole pre-roll, seconds of audio
-                 * before the target, reported as the target. */
-                pts = d->seek_from;
-                if (pts > d->start_time) d->landing_exact = 0;
-            }
-            if (pts != AV_NOPTS_VALUE) {
-                d->next_pts = pts + av_rescale_q(d->frame->nb_samples,
-                                                 (AVRational){ 1, rate }, d->time_base);
-                if (d->seek_first_pts == AV_NOPTS_VALUE) d->seek_first_pts = pts;
-            }
-            /* Clamp before the seek discard below, or skipped final frames are never clamped and a
-             * seek past the end lands beyond the clipped end. */
-            if (d->end_pts != AV_NOPTS_VALUE && pts != AV_NOPTS_VALUE && !pts_guessed
-                && d->next_pts > d->end_pts)
-                d->next_pts = d->end_pts;   /* where the audio ends */
-            int64_t cut = 0;
-            int landing = 0;   /* this is the frame the seek target falls in */
-            if (d->discard_until != AV_NOPTS_VALUE) {
-                if (pts == AV_NOPTS_VALUE) {
-                    d->discard_until = AV_NOPTS_VALUE;   /* nothing to place it by: keep it all */
-                } else {
-                    cut = av_rescale_q(d->discard_until - pts, d->time_base,
-                                       (AVRational){ 1, rate });
-                    if (cut >= d->frame->nb_samples) {   /* wholly before the seek target */
-                        av_frame_unref(d->frame);
-                        continue;
-                    }
-                    if (cut < 0) cut = 0;
-                    d->discard_until = AV_NOPTS_VALUE;
-                    landing = 1;
-                }
-            }
-            if (d->end_pts != AV_NOPTS_VALUE && pts != AV_NOPTS_VALUE && !pts_guessed) {
-                int64_t room = av_rescale_q(d->end_pts - pts, d->time_base,
-                                            (AVRational){ 1, rate });
-                if (room <= cut) {   /* wholly past the edit list's end */
-                    av_frame_unref(d->frame);
-                    continue;
-                }
-                if (room < d->frame->nb_samples) d->frame->nb_samples = (int)room;
-            }
-            d->last_frame_pts = pts == AV_NOPTS_VALUE ? AV_NOPTS_VALUE
-                : pts + av_rescale_q(cut, (AVRational){ 1, rate }, d->time_base);
-            int lead = 0;
-            int ok = push_through_swr(d, d->frame, &lead);
-            av_frame_unref(d->frame);
-            if (ok != STREAM_DECODE_OK) return ok;
-            /* Same rate in and out, so the resampler holds nothing back: frame sample N is
-             * pending frame N. At another rate (a mid-stream change, or a fixed output format) it
-             * is the same instant at the output rate, behind whatever the old resampler flushed
-             * when the rate changed, which is kept: it is the end of the audio before this frame,
-             * unless the seek target is in this frame. */
-            if (landing) {
-                skip += lead + (rate == d->out_rate ? cut
-                    : av_rescale_q(cut, (AVRational){ 1, rate }, (AVRational){ 1, d->out_rate }));
-            }
-            d->pending_offset = skip < d->pending_frames ? (int)skip : d->pending_frames;
-            skip -= d->pending_offset;
-            if (d->pending_frames > d->pending_offset) return STREAM_DECODE_OK;
-            sd_pending_reset(d);
-            continue;   /* the resampler is still filling; ask for another frame */
-        }
-        if (rc == AVERROR_EOF && d->reopening) {
-            /* The old link is drained: the held packet goes to a codec opened on the new one. The
-             * resampler follows its frames' new layout (`push_through_swr`). The demuxer sets only
-             * the new link's channel count, leaving the old link's mask (mono with 2 channels),
-             * which the codec refuses: the count is kept, and the codec reads its layout from the
-             * OpusHead. */
-            AVChannelLayout *layout = &d->fmt->streams[d->audio_idx]->codecpar->ch_layout;
-            if (!av_channel_layout_check(layout)) {
-                int channels = layout->nb_channels;
-                av_channel_layout_uninit(layout);
-                layout->order = AV_CHANNEL_ORDER_UNSPEC;
-                layout->nb_channels = channels;
-            }
-            int codec_rc = sd_reopen_codec(d);
-            if (codec_rc != STREAM_DECODE_OK) return codec_rc;
-            d->flushing = 0;
-            continue;
-        }
-        if (rc == AVERROR_EOF) {
-            /* The decoder is drained; whatever libswresample still holds is the last of it. */
-            if (!convert_through_swr(d, NULL)) return STREAM_DECODE_ERR_ALLOC;
-            d->ended = 1;
-            return d->pending_frames > 0 ? STREAM_DECODE_OK : STREAM_DECODE_EOF;
-        }
-        if (rc != AVERROR(EAGAIN)) {
-            /* A frame the codec cannot decode is a glitch, not the end of the recording: skip it
-             * like a rejected packet. Out of memory is not the stream's fault, and a run of
-             * MAX_CONSECUTIVE_DECODE_ERRORS failures with no good frame between is garbage, not
-             * damage, so that ends with an error rather than spinning to the end of the file. */
-            if (rc == AVERROR(ENOMEM)) return STREAM_DECODE_ERR_ALLOC;
-            if (++d->decode_errors > MAX_CONSECUTIVE_DECODE_ERRORS) return STREAM_DECODE_ERR_DECODER;
-            continue;
-        }
-
-        if (d->flushing) {
-            /* EAGAIN after a NULL packet cannot happen, but treat it as the end rather than
-             * looping: an unbounded loop here is a hung player. */
-            if (!convert_through_swr(d, NULL)) return STREAM_DECODE_ERR_ALLOC;
-            d->ended = 1;
-            return d->pending_frames > 0 ? STREAM_DECODE_OK : STREAM_DECODE_EOF;
-        }
-
-        int read = 0;
-        if (d->has_held) {
-            av_packet_move_ref(d->pkt, d->held);
-            d->has_held = 0;
-        } else {
-            read = av_read_frame(d->fmt, d->pkt);
-        }
-        if (read < 0) {
-            av_packet_unref(d->pkt);
-            if (d->cancelled) return STREAM_DECODE_ERR_CANCELLED;
-            if (d->interrupted) return STREAM_DECODE_ERR_INTERRUPTED;
-            if (read == AVERROR_EXIT) return STREAM_DECODE_ERR_CANCELLED;
-            if (read == AVERROR_EOF) {
-                avcodec_send_packet(d->dec, NULL);
-                d->flushing = 1;
-                continue;
-            }
-            return STREAM_DECODE_ERR_IO;
-        }
-        /* A read that was cut short still hands back what it had: `av_get_packet` returns the
-         * bytes it got as a truncated packet. The codec would reject it and its audio would be
-         * gone, so it is dropped here and read again whole after the resume. */
-        if (d->cancelled || d->interrupted) {
-            av_packet_unref(d->pkt);
-            return d->cancelled ? STREAM_DECODE_ERR_CANCELLED : STREAM_DECODE_ERR_INTERRUPTED;
-        }
-        if (d->pkt->stream_index != d->audio_idx) {
-            av_packet_unref(d->pkt);
-            continue;
-        }
-        sd_aac_packet_read(d, d->pkt);
-        if (!d->reopening && codec_parameters_changed(d)) {
-            /* Drain the old codec first (Opus holds back resampled SILK samples), then reopen. */
-            av_packet_move_ref(d->held, d->pkt);
-            d->has_held = 1;
-            d->reopening = 1;
-            avcodec_send_packet(d->dec, NULL);
-            d->flushing = 1;
-            continue;
-        }
-        d->reopening = 0;
-        if (d->drop_timestamps) d->pkt->pts = d->pkt->dts = AV_NOPTS_VALUE;
-        d->last_pkt_pos = d->pkt->pos;
-        d->last_pkt_dts = d->pkt->dts;
-        d->has_last_pkt = d->pkt->pos >= 0 && d->pkt->dts != AV_NOPTS_VALUE;
-        d->has_first_pkt = 0;
-        if (d->seek_fmt->packet_fed) d->seek_fmt->packet_fed(d, d->pkt);
-        int sent = avcodec_send_packet(d->dec, d->pkt);
-        av_packet_unref(d->pkt);
-        /* A packet the decoder rejects is a corrupt frame, not the end of the stream: skip it and
-         * keep going, which is what every player does with a bad MP3 frame. */
-        (void)sent;
+        int status;
+        if (rc == 0) status = pump_decoded_frame(d, &skip);
+        else if (rc == AVERROR_EOF && d->reopening) status = pump_reopen_codec(d);
+        else if (rc == AVERROR_EOF) status = pump_finish(d);
+        else if (rc != AVERROR(EAGAIN)) status = pump_decode_error(d, rc);
+        /* EAGAIN after a NULL packet cannot happen, but treat it as the end rather than
+         * looping: an unbounded loop here is a hung player. */
+        else if (d->flushing) status = pump_finish(d);
+        else status = pump_feed_packet(d);
+        if (status != PUMP_AGAIN) return status;
     }
 }
 
