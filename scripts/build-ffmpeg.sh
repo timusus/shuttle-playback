@@ -150,7 +150,7 @@ for PATCH in "$SCRIPT_DIR"/ffmpeg-patches/*.patch; do
 done
 
 # Identifies what the static libraries were built from; RELINK_ONLY refuses libraries that differ.
-BUILD_STAMP="$({ echo "$FFMPEG_TAG"; echo "${CONFIGURE_FLAGS[*]}"; printf '%s\n' ${PATCH_HASHES[@]+"${PATCH_HASHES[@]}"}; } | shasum -a 256 | cut -d' ' -f1)"
+BUILD_STAMP="$({ echo "$FFMPEG_TAG"; echo "${CONFIGURE_FLAGS[*]}"; echo "$DEPLOYMENT_TARGET $MACOS_DEPLOYMENT_TARGET"; printf '%s\n' ${PATCH_HASHES[@]+"${PATCH_HASHES[@]}"}; } | shasum -a 256 | cut -d' ' -f1)"
 
 # ── one platform ─────────────────────────────────────────────────────────────
 # $1 slice name (device|simulator|macos), $2 SDK, $3 clang -target triple
@@ -303,7 +303,7 @@ if [ "${RELINK_ONLY:-0}" = 1 ]; then
             exit 1
         fi
         if [ "$(cat "$LIB_DIR/build.stamp")" != "$BUILD_STAMP" ]; then
-            echo "ERROR: RELINK_ONLY=1 but the $NAME libraries were built from different patches, flags or FFmpeg tag; run a full build" >&2
+            echo "ERROR: RELINK_ONLY=1 but the $NAME libraries were built from different patches, flags, deployment targets or FFmpeg tag; run a full build" >&2
             exit 1
         fi
     done
