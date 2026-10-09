@@ -137,6 +137,11 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     private var machine: GrowingFileDownload
     /// The machine's current transaction's file and task.
     private var current: Transaction?
+    private var requestsSent = 0
+
+    /// Requests issued so far: a test asserts "nothing was sent" on this, at once, instead of
+    /// waiting to see whether the server hears one.
+    var requestsSentForTest: Int { locked { requestsSent } }
 
     /// - Parameters:
     ///   - authHeaders: resolved by the caller before construction; values are never logged.
@@ -350,6 +355,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
                 current?.task = task
                 current?.attempt = send.attempt
                 task.delegate = self
+                requestsSent += 1
                 task.resume()
             case .schedule(let timer, let seconds):
                 clock.schedule(after: seconds) { [weak self] in

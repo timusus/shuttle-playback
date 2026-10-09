@@ -121,6 +121,17 @@ final class StallingFileByteReader: StreamByteReader {
         return stalledValue
     }
 
+    /// Blocks until a read is parked in the stall, or `timeout` passes; the gate already
+    /// broadcasts on parking.
+    func waitUntilStalled(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        gate.lock(); defer { gate.unlock() }
+        while !stalledValue {
+            if !gate.wait(until: deadline) { break }
+        }
+        return stalledValue
+    }
+
     func read(into buffer: UnsafeMutableRawPointer, maxLength: Int) throws -> Int {
         gate.lock()
         while delivered >= stallAfterBytes, !interrupted, !cancelled {

@@ -772,9 +772,7 @@ final class StreamDecodeTests: XCTestCase {
         }
         /* Interrupt only once a read is actually parked in the stall: interrupting before that
          * would prove nothing about a blocked call coming back. */
-        let deadline = Date().addingTimeInterval(5)
-        while !reader.isStalled, Date() < deadline { usleep(2000) }
-        XCTAssertTrue(reader.isStalled, "the reader never reached the stall")
+        XCTAssertTrue(reader.waitUntilStalled(timeout: 5), "the reader never reached the stall")
         decoder.interrupt()
         wait(for: [blocked], timeout: 5.0)
 

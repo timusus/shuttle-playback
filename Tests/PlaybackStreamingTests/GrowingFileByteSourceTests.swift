@@ -134,6 +134,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if condition() { return true }
+            // Kept: URLSession and the loopback server raise no signal for these states.
             Thread.sleep(forTimeInterval: 0.01)
         }
         return condition()
@@ -260,8 +261,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertTrue(clock.drive(step: 0.01) { server.requestedRanges.count == 3 }, "no restart after the refused resume")
         XCTAssertEqual(server.requestedRanges, [0, 20_000, 10_000])
         clock.advance(by: GrowingFileByteSource.retryRequestTimeoutSeconds - 0.5)
-        Thread.sleep(forTimeInterval: 0.1)
-        XCTAssertEqual(server.requestedRanges.count, 3, "the restart was given up on before a retry's wait")
+        XCTAssertEqual(source.requestsSentForTest, 3, "the restart was given up on before a retry's wait")
         clock.advance(by: 0.5 + GrowingFileDownload.Retry.firstBackoffSeconds * 2 + 0.1)
         XCTAssertTrue(waitUntil { server.requestedRanges.count == 4 }, "the restart waited longer than a retry's wait")
         XCTAssertEqual(server.requestedRanges.last, 10_000)
@@ -443,7 +443,8 @@ final class GrowingFileByteSourceTests: XCTestCase {
         let server = try startServer(body: makeBody(64 * 1024))
         server.delayForEveryRange = 30
         let policy = GrowingFileConnectionPolicy(trustedLeafSHA256: [String(repeating: "AB", count: 32)])
-        let source = makeSource(server.url, connectionPolicy: policy)
+        let clock = ManualGrowingFileClock()
+        let source = makeSource(server.url, connectionPolicy: policy, clock: clock)
         let pending = readAsync(source, 100)
         XCTAssertTrue(waitUntil { server.requestHeads.count == 1 && source.currentTask != nil })
         source.certificateRejected(task: try XCTUnwrap(source.currentTask))
@@ -451,8 +452,8 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertTrue(pending.finished(within: 5), "a refused certificate fails the read without waiting out a retry")
         guard case .transport(let reason)? = readerError(pending.result) else { return XCTFail("\(pending.result)") }
         XCTAssertEqual(reason, GrowingFileConnectionPolicy.untrustedCertificateReason)
-        Thread.sleep(forTimeInterval: 0.5)
-        XCTAssertEqual(server.requestHeads.count, 1, "no retry")
+        clock.advance(by: GrowingFileDownload.Retry.linkWindowSeconds)
+        XCTAssertEqual(source.requestsSentForTest, 1, "no retry")
     }
 
     // MARK: - Failure
@@ -536,12 +537,12 @@ final class GrowingFileByteSourceTests: XCTestCase {
         let server = try startServer(body: makeBody(32 * 1024))
         server.delayForEveryRange = 3600
         let clock = ManualGrowingFileClock()
-        let pending = readAsync(makeSource(server.url, clock: clock), 1)
+        let source = makeSource(server.url, clock: clock)
+        let pending = readAsync(source, 1)
         XCTAssertTrue(waitUntil { server.requestedRanges.count == 1 })
 
         clock.advance(by: GrowingFileByteSource.requestTimeoutSeconds - 0.5)
-        Thread.sleep(forTimeInterval: 0.1)
-        XCTAssertEqual(server.requestedRanges.count, 1, "the first request was given up on before its header wait")
+        XCTAssertEqual(source.requestsSentForTest, 1, "the first request was given up on before its header wait")
 
         // +20 s: the first wait ends; 0.1 s later the retry goes out with the short wait.
         clock.advance(by: 0.5 + GrowingFileDownload.Retry.firstBackoffSeconds + 0.01)
@@ -628,8 +629,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         XCTAssertTrue(waitUntil { source.snapshot.frontier == 20_000 })
 
         clock.advance(by: GrowingFileByteSource.idleTimeoutSeconds - 0.5)
-        Thread.sleep(forTimeInterval: 0.1)
-        XCTAssertEqual(server.requestedRanges, [0], "a body silent for less than the idle timeout was ended")
+        XCTAssertEqual(source.requestsSentForTest, 1, "a body silent for less than the idle timeout was ended")
 
         server.stallsAfterBodyBytes = nil
         clock.advance(by: 1)
@@ -691,6 +691,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         // Twice the idle timeout on the clock, a second at a time, with chunks arriving in between.
         for _ in 0..<Int(GrowingFileByteSource.idleTimeoutSeconds * 2) {
             clock.advance(by: 1)
+            // Kept: the server's real-time drip is what delivers a chunk between advances.
             Thread.sleep(forTimeInterval: 0.06)
         }
         XCTAssertEqual(server.requestedRanges, [0], "a body still arriving was ended")
@@ -999,7 +1000,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
 
         // Well past the idle timeout and the link window on the source's clock.
         clock.advance(by: GrowingFileDownload.Retry.linkWindowSeconds * 2)
-        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertEqual(source.requestsSentForTest, 1)
         XCTAssertEqual(try readToEnd(source), body.suffix(from: 1000))
         XCTAssertEqual(server.requestedRanges, [0])
         XCTAssertEqual(source.snapshot.transactionGeneration, 1)
@@ -1140,8 +1141,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         monitor.update(Self.wifi)
         monitor.update(Self.offline)
         clock.advance(by: 1)
-        Thread.sleep(forTimeInterval: 0.1)
-        XCTAssertEqual(server.requestedRanges, [0], "a path that was no change reopened the transaction")
+        XCTAssertEqual(source.requestsSentForTest, 1, "a path that was no change reopened the transaction")
 
         server.stallsAfterBodyBytes = nil
         monitor.update(Self.cellular)
@@ -1225,7 +1225,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         let server = try startServer(body: body)
         server.bytesPerSecond = 512 * 1024
         let (source, _) = try pausedSource(server, path: Self.expensiveCellular)
-        // Uncapped, another half second would be 256 kB more.
+        // Uncapped, another half second would be 256 kB more. Kept: the server's real-time drip is the behaviour measured.
         Thread.sleep(forTimeInterval: 0.5)
         source.cancel()
         XCTAssertEqual(server.requestedRanges, [0])
@@ -1280,8 +1280,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         let (source, hotspot) = try pausedSource(server, path: Self.hotspot)
         let pausedAt = source.snapshot.frontier
         hotspot.update(Self.lowDataWifi)
-        Thread.sleep(forTimeInterval: 0.2)
-        XCTAssertEqual(server.requestedRanges, [0, 0], "Low Data Mode is a cost too, and no change")
+        XCTAssertEqual(source.requestsSentForTest, 1, "Low Data Mode is a cost too, and no change")
         hotspot.update(Self.wifi)
         XCTAssertTrue(waitUntil { source.snapshot.isComplete }, "the pause was not lifted")
         XCTAssertEqual(server.requestedRanges, [0, 0, pausedAt])
@@ -1296,8 +1295,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         let (source, monitor) = try pausedSource(server, path: Self.hotspot)
         let pausedAt = source.snapshot.frontier
         monitor.update(Self.offline)
-        Thread.sleep(forTimeInterval: 0.2)
-        XCTAssertEqual(server.requestedRanges, [0], "offline lifted the pause")
+        XCTAssertEqual(source.requestsSentForTest, 1, "offline lifted the pause")
         monitor.update(Self.wifi)
         XCTAssertTrue(waitUntil { source.snapshot.isComplete }, "the pause was not lifted")
         XCTAssertEqual(server.requestedRanges, [0, pausedAt])
@@ -1331,8 +1329,7 @@ final class GrowingFileByteSourceTests: XCTestCase {
         monitor.update(Self.wifi)
         monitor.update(Self.cellular)
         clock.advance(by: 1)
-        Thread.sleep(forTimeInterval: 0.1)
-        XCTAssertEqual(server.requestedRanges, [0])
+        XCTAssertEqual(source.requestsSentForTest, 1)
     }
 
     // MARK: - 416, gzip and a changing resource
@@ -1478,11 +1475,10 @@ final class GrowingFileByteSourceTests: XCTestCase {
 
         source.cancel()
         XCTAssertTrue(pending.finished(within: 20))
-        let requests = server.requestHeads.count
+        let requests = source.requestsSentForTest
         // Longer than every backoff left: a retry that ignored the cancel shows here.
         clock.advance(by: 10)
-        Thread.sleep(forTimeInterval: 0.2)
-        XCTAssertEqual(server.requestHeads.count, requests, "no request after cancel")
+        XCTAssertEqual(source.requestsSentForTest, requests, "no request after cancel")
         XCTAssertEqual(partials(), [])
         XCTAssertNil(source.snapshot.fileURL)
     }

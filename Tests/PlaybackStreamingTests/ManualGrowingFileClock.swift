@@ -49,6 +49,7 @@ final class ManualGrowingFileClock: GrowingFileClock, @unchecked Sendable {
         while Date() < deadline {
             if condition() { return true }
             advance(by: step)
+            // Kept: the loopback server answers on its own thread and raises no signal.
             Thread.sleep(forTimeInterval: 0.005)
         }
         return condition()
