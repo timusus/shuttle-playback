@@ -210,6 +210,7 @@ framework_slice() {
         -install_name "$INSTALL_NAME" \
         -compatibility_version 1 -current_version "$FRAMEWORK_VERSION" \
         -Wl,-dead_strip \
+        -Wl,-exported_symbols_list,"$SCRIPT_DIR/ffmpeg-exports.txt" \
         "${FORCE_LOAD[@]}" "${SYSTEM_LIBS[@]}" \
         -o "$BINARY"
 
@@ -244,13 +245,45 @@ framework_slice() {
 </plist>
 PLIST
     plutil -lint "$RESOURCES/Info.plist" >/dev/null
+    # App Store upload requires a manifest per embedded framework. The binary imports fstat, a
+    # file-timestamp API (C617.1: files inside the app container or the user granted access to);
+    # FFmpeg itself touches no other required-reason API.
+    cat > "$RESOURCES/PrivacyInfo.xcprivacy" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>
+PLIST
+    plutil -lint "$RESOURCES/PrivacyInfo.xcprivacy" >/dev/null
     # The licence travels inside every app that embeds the framework.
     cp "$FFMPEG/COPYING.LGPLv2.1" "$RESOURCES/COPYING.LGPLv2.1"
 }
 
-build_slice device iphoneos "arm64-apple-ios${DEPLOYMENT_TARGET}" >/dev/null
-build_slice simulator iphonesimulator "arm64-apple-ios${DEPLOYMENT_TARGET}-simulator" >/dev/null
-build_slice macos macosx "arm64-apple-macos${MACOS_DEPLOYMENT_TARGET}" >/dev/null
+# RELINK_ONLY=1 reuses the static libraries of an earlier run, for a change to the link step alone.
+if [ "${RELINK_ONLY:-0}" != 1 ]; then
+    build_slice device iphoneos "arm64-apple-ios${DEPLOYMENT_TARGET}" >/dev/null
+    build_slice simulator iphonesimulator "arm64-apple-ios${DEPLOYMENT_TARGET}-simulator" >/dev/null
+    build_slice macos macosx "arm64-apple-macos${MACOS_DEPLOYMENT_TARGET}" >/dev/null
+fi
 framework_slice device iphoneos "arm64-apple-ios${DEPLOYMENT_TARGET}" iPhoneOS
 framework_slice simulator iphonesimulator "arm64-apple-ios${DEPLOYMENT_TARGET}-simulator" iPhoneSimulator
 framework_slice macos macosx "arm64-apple-macos${MACOS_DEPLOYMENT_TARGET}" MacOSX
@@ -270,7 +303,7 @@ cp "$FFMPEG/COPYING.LGPLv2.1" "$OUT/COPYING.LGPLv2.1"
     echo "$FFMPEG_TAG"
     echo "configured: ${CONFIGURE_FLAGS[*]}"
     echo "patches: ${PATCHES[*]:-none}"
-    echo "linkage: dynamic FFmpeg.framework per slice, install name @rpath/FFmpeg.framework/FFmpeg, links ${SYSTEM_LIBS[*]}"
+    echo "linkage: dynamic FFmpeg.framework per slice, install name @rpath/FFmpeg.framework/FFmpeg, exports only $(tr '\n' ' ' < "$SCRIPT_DIR/ffmpeg-exports.txt")(ffmpeg-exports.txt), links ${SYSTEM_LIBS[*]}"
 } > "$OUT/VERSION.txt"
 
 # The headers are the same on every slice (arm64 only); the module map beside them is hand-written.
