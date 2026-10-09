@@ -175,6 +175,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     /// - Parameters:
     ///   - clock: a test's steps through backoffs and windows; the system's otherwise.
     ///   - pathMonitor: a test's paths; the shared `NWPathMonitor`'s otherwise.
+    ///   - unknownLengthWindow: a test's small window for a body of unknown length.
     init(
         url: URL,
         authHeaders: [String: String],
@@ -185,6 +186,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         session: URLSession = GrowingFileByteSource.sharedSession,
         clock: GrowingFileClock,
         pathMonitor: GrowingFilePathMonitor = .shared,
+        unknownLengthWindow: Int64 = GrowingFileDownload.unknownLengthWindowBytes,
         onEvent: ((GrowingFileEvent) -> Void)? = nil
     ) {
         self.url = url
@@ -195,7 +197,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         self.session = session
         self.clock = clock
         self.pathMonitor = pathMonitor
-        self.machine = GrowingFileDownload(url: url, readAhead: readAhead?.bytes)
+        self.machine = GrowingFileDownload(url: url, readAhead: readAhead?.bytes, unknownLengthWindow: unknownLengthWindow)
         self.onEvent = onEvent
         super.init()
         let observer = pathMonitor.addObserver { [weak self] path, isChange in
@@ -372,6 +374,8 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
                     machine.promoted()
                     deferred.append(.evict)
                 }
+            case .punchHole(let range):
+                if let file { Self.punchHole(range, in: file.descriptor) }
             case .makeRoom(let bytes):
                 deferred.append(.makeRoom(bytes))
             case .emit(let event):
@@ -390,6 +394,19 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
             return nil
         }
         return SessionFile(descriptor: fd, fileURL: file)
+    }
+
+    /// Frees the whole blocks of `range`. Its start rounds down, since every byte before a dropped
+    /// range is dropped too; its end rounds down, keeping the block it shares with bytes still kept.
+    /// A failure only keeps the blocks.
+    private static func punchHole(_ range: Range<Int64>, in descriptor: Int32) {
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_blksize > 0 else { return }
+        let block = Int64(info.st_blksize)
+        let start = range.lowerBound / block * block, end = range.upperBound / block * block
+        guard end > start else { return }
+        var hole = fpunchhole_t(fp_flags: 0, reserved: 0, fp_offset: off_t(start), fp_length: off_t(end - start))
+        _ = fcntl(descriptor, F_PUNCHHOLE, &hole)
     }
 
     /// Outside `condition`.

@@ -59,8 +59,11 @@ extension GrowingFileDownload {
             if isCovered { return .serve }
             if let totalLength, position >= totalLength { return .endOfStream }
             guard let frontier, position >= frontier else { return .restart }
+            // A transaction already at the read (a tail fetched for an MP4's `moov`) brings the
+            // footer next; cutting it would leave the file a hole short of promotion (ADR-0014).
+            if position == frontier { return .wait }
             if isProbing, let totalLength, position >= totalLength - footerBytes { return .endOfStream }
-            if position == frontier || rangeIgnored { return .wait }
+            if rangeIgnored { return .wait }
             guard let downloadBytesPerSecond, downloadBytesPerSecond > 0, let responseLatency else { return .restart }
             return Double(position - frontier) / downloadBytesPerSecond < responseLatency ? .wait : .restart
         }

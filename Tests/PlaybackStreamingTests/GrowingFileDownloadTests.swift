@@ -347,8 +347,8 @@ final class Harness {
     let clock = ManualGrowingFileClock()
     var machine: GrowingFileDownload
 
-    init(readAhead: Int64? = nil) {
-        machine = GrowingFileDownload(url: Harness.url, readAhead: readAhead)
+    init(readAhead: Int64? = nil, unknownLengthWindow: Int64 = GrowingFileDownload.unknownLengthWindowBytes) {
+        machine = GrowingFileDownload(url: Harness.url, readAhead: readAhead, unknownLengthWindow: unknownLengthWindow)
     }
     private(set) var requests: [GrowingFileDownload.Request] = []
     private(set) var events: [GrowingFileEvent] = []
@@ -360,8 +360,10 @@ final class Harness {
         events.filter { if case .transaction = $0 { true } else { false } }.count
     }
 
-    func request(_ attempt: Int, from: Int64, ifRange: String? = nil, url: URL = Harness.url) -> GrowingFileDownload.Request {
-        GrowingFileDownload.Request(attempt: attempt, url: url, from: from, ifRange: ifRange)
+    func request(
+        _ attempt: Int, from: Int64, end: Int64? = nil, ifRange: String? = nil, url: URL = Harness.url
+    ) -> GrowingFileDownload.Request {
+        GrowingFileDownload.Request(attempt: attempt, url: url, from: from, end: end, ifRange: ifRange)
     }
 
     func run(_ effects: [GrowingFileDownload.Effect]) {
@@ -378,7 +380,7 @@ final class Harness {
                 events.append(event)
             case .promote:
                 machine.promoted()
-            case .retire, .release, .cancelTask, .wake, .makeRoom:
+            case .retire, .release, .cancelTask, .wake, .makeRoom, .punchHole:
                 break
             }
         }

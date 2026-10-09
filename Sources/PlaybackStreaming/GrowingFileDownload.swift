@@ -100,12 +100,12 @@ struct GrowingFileDownload {
         let run = file.ranges.run(containing: offset)
         // A transaction whose file is gone has nothing readable.
         let tx = file.exists ? current : nil
-        let frontier = run?.upperBound ?? tx?.frontier ?? offset
         return GrowingFileSnapshot(
             base: run?.lowerBound ?? tx?.base ?? offset,
-            frontier: frontier,
+            frontier: run?.upperBound ?? tx?.frontier ?? offset,
             totalLength: totalLength,
-            isComplete: current?.isComplete == true && totalLength.map { frontier >= $0 } ?? false,
+            // Nothing up to the end is owed to the reader, whichever transactions wrote it.
+            isComplete: totalLength.map { (run?.upperBound ?? offset) >= $0 } ?? false,
             fileURL: fileURL,
             transactionGeneration: generation,
             seekGeneration: current?.seekGeneration,
@@ -157,6 +157,7 @@ struct GrowingFileDownload {
         readOpened = false
         if cancelled { return step(.fail(.cancelled)) }
         if interrupted { return step(.fail(.interrupted)) }
+        for range in file.dropBehind(offset, totalLength: totalLength) { effects.append(.punchHole(range)) }
         let run = file.ranges.run(containing: offset)
         guard current != nil || run != nil else {
             if opened { return step(.fail(.transport(failure ?? "no transaction"))) }
@@ -277,6 +278,18 @@ struct GrowingFileDownload {
         let opened = generation, host = url.host ?? "?"
         downloadLog.info("download: open gen=\(opened) base=\(open.base) host=\(host, privacy: .public)")
         return takeEffects() + [.wake]
+    }
+
+    /// Promotes the file once `[0, total)` is on disk, whichever transactions wrote it (ADR-0014).
+    /// A body with more to send then (the whole file answering a bounded request) could only
+    /// rewrite bytes already there, so it ends.
+    private mutating func promoteIfWhole() {
+        guard file.isWhole(totalLength: totalLength) else { return }
+        effects.append(.promote)
+        guard let tx = current, !tx.ended, tx.frontier < min(tx.end ?? .max, tx.totalLength ?? .max) else { return }
+        current?.ended = true
+        current?.isComplete = true
+        effects.append(.cancelTask)
     }
 
     /// The complete file is the cache's now.
@@ -488,10 +501,12 @@ struct GrowingFileDownload {
             // into the retry. Looks again when a chunk came in the meantime, and stops once the
             // transaction is done with the network. The link went quiet at the last byte, so that
             // is where the link window starts if nothing answers the retry. Nothing is checked
-            // before the response arrives: that wait is the response timer's.
+            // before the response arrives: that wait is the response timer's, nor once every byte
+            // is in and only the completion is on the way.
             guard current?.id == id else { break }
             current?.idleCheckPending = false
-            guard !cancelled, let tx = current, tx.answered, !tx.ended, !tx.isComplete else { break }
+            guard !cancelled, let tx = current, tx.answered, !tx.ended, !tx.isComplete,
+                  tx.frontier < min(tx.totalLength ?? .max, tx.end ?? .max) else { break }
             let silent = now - tx.lastByteAt
             guard silent >= GrowingFileByteSource.idleTimeoutSeconds else {
                 scheduleIdleCheck(after: GrowingFileByteSource.idleTimeoutSeconds - silent)
@@ -711,6 +726,7 @@ struct GrowingFileDownload {
         }
         // Only the bytes this chunk made readable: a range dropped from the set is never re-added.
         if let frontier = current?.frontier { file.record(tx.frontier..<frontier) }
+        promoteIfWhole()
         // Progress is the decoder's: a host that drops before the read position (a 200 from
         // byte 0, every time) spends its retries instead of looping.
         if let frontier = current?.frontier, frontier > offset { retry.reset() }
@@ -747,7 +763,7 @@ struct GrowingFileDownload {
         let total = tx.totalLength ?? (tx.end == nil ? tx.frontier : nil)
         current?.totalLength = total
         if let total { lastKnownTotalLength = total }
-        if file.isWhole(totalLength: totalLength) { effects.append(.promote) }
+        promoteIfWhole()
         downloadLog.info("download: complete gen=\(tx.generation) base=\(tx.base) frontier=\(tx.frontier)")
         let complete = total.map { tx.frontier >= $0 } ?? false
         effects.append(.emit(.download(frontier: tx.frontier, downloadBytesPerSecond: downloadBytesPerSecond(now: now), complete: complete)))

@@ -76,6 +76,10 @@ final class GrowingFileDecodeTests: XCTestCase {
             $0.bytesPerSecond = 32 * 1024
         })
         XCTAssertGreaterThan(source.snapshot.transactionGeneration, 1, "the index fetch is its own transaction")
+        // Head, tail and the media between, from three transactions, are one file (ADR-0014).
+        let fixture = try XCTUnwrap(Bundle.module.url(forResource: "tone_moov_last", withExtension: "m4a", subdirectory: "Fixtures"))
+        let cached = try XCTUnwrap(GrowingFileStore(directory: directory).completedFile(for: try XCTUnwrap(server).url))
+        XCTAssertEqual(try Data(contentsOf: cached), try Data(contentsOf: fixture))
     }
 
     func testAnMP3WhoseConnectionDropsMidBodyDecodesAsOnDisk() throws {

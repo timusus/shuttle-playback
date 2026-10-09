@@ -46,6 +46,8 @@ extension GrowingFileDownload {
         case wake
         /// Rename the complete file into the cache and report it with ``promoted()``.
         case promote
+        /// Free the file's blocks for a range no longer kept; best effort.
+        case punchHole(Range<Int64>)
         /// After the lock is released: reserve room in the store for this many bytes.
         case makeRoom(bytes: Int64)
         /// After the lock is released.

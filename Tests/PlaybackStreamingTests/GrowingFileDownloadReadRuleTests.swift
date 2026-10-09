@@ -65,6 +65,7 @@ final class GrowingFileDownloadReadRuleTests: XCTestCase {
         XCTAssertEqual(action(9871, probing: true), .restart, "below the footer the probe's read is a seek")
         XCTAssertEqual(action(9872), .restart, "outside the probe the footer is real audio")
         XCTAssertEqual(action(9872, frontier: 9900, probing: true), .serve, "a footer already on disk is served")
+        XCTAssertEqual(action(9872, frontier: 9872, probing: true), .wait, "a transaction at the read brings the footer next")
     }
 
     func testRangeIgnoredHostIsWaitedForNeverRestarted() {
