@@ -31,11 +31,11 @@ binary in `.gitattributes`. `VERSION.txt` inside it records the tag, configure f
 
 ```sh
 swift test                                          # macOS slice, no simulator; the gate
-land <branch>                                       # from the landing worktree: cherry-pick, verify, push
 swift test --filter PlaybackDecodeConformance       # about 30 s
 GOLDEN_UPDATE=1 swift test --filter PlaybackDecodeConformance   # after an intended change; review the JSON diff
 xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreamingTests \
   -destination 'platform=iOS Simulator,id=<UDID>'   # UDID from `xcrun simctl list devices available`
+land <branch>                                       # from the landing worktree: cherry-pick, verify, push
 scripts/release.sh 0.1.1                            # clean main only: tests, tag (bare semver), push
 ```
 

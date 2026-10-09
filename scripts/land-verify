@@ -5,7 +5,7 @@
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
-cat >/dev/null # changed paths on stdin; every phase always runs
+[ -t 0 ] || cat >/dev/null # changed paths on stdin; every phase always runs
 
 artifacts="${LAND_ARTIFACT_DIR:-$(mktemp -d)}"
 mkdir -p "$artifacts"
@@ -26,7 +26,9 @@ compile_failures() {
 test_failures() {
     {
         plain "$1" | sed -nE "s|^Test Case '-\[([^ ]+) ([^]]+)\]' failed.*|\1/\2|p"
-        plain "$1" | sed -nE 's|^.*✘ Test (.+) failed after .*|\1|p'
+        # Drop the run summary and the per-case count of a parameterized test: both vary between trees.
+        plain "$1" | sed -E -e '/✘ Test run with /d' -e 's|^.*✘ Test (.+) failed after .*|\1|p' -e 'd' \
+            | sed -E 's/ with [0-9]+ test cases?$//'
     } | sort -u
 }
 
@@ -35,6 +37,11 @@ run_phase() {
     shift 2
     local log="$artifacts/$phase.log"
     echo "verify: == $phase"
+    # A stale .build would report another tree's failures.
+    if [[ "$phase" == test && "$failed" -ne 0 ]]; then
+        echo "verify: -- test failed: build failed"
+        return
+    fi
     if "$@" >"$log" 2>&1; then
         return
     fi

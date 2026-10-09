@@ -41,6 +41,11 @@ if git rev-parse -q --verify origin/main >/dev/null \
     echo "release.sh: origin/main has commits this branch lacks; pull first" >&2
     exit 1
 fi
+# Only landed work is released: tagging local commits ahead of origin would publish unverified code.
+if [[ "$(git rev-parse HEAD)" != "$(git rev-parse -q --verify origin/main || true)" ]]; then
+    echo "release.sh: main differs from origin/main (unlanded commits); land them first" >&2
+    exit 1
+fi
 
 echo "release.sh: swift test"
 swift test
@@ -57,6 +62,9 @@ xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreaming
     -destination "platform=iOS Simulator,id=$udid" -quiet
 
 git tag -a "$version" -m "shuttle-playback $version"
-git push origin main
-git push origin "$version"
+if ! git push origin "$version"; then
+    git tag -d "$version" >/dev/null
+    echo "release.sh: pushing tag $version failed; local tag removed, rerun to retry" >&2
+    exit 1
+fi
 echo "release.sh: released $version ($(git rev-parse --short HEAD))"
