@@ -22,7 +22,8 @@ targets: [
 Pin a tag, never a branch. FFmpeg is a dynamic `FFmpeg.framework` that links its own system libraries;
 Xcode embeds it in the app with no build-phase change. The `FFmpeg` product is only for an app with its
 own C code against libavformat (`#include <libavformat/avformat.h>` or `import CFFmpeg`), and the app
-must link exactly one FFmpeg.
+must link exactly one FFmpeg. An app that reaches PlaybackDecode only through its own framework or
+extension target must still embed and sign `FFmpeg.framework` in the app itself.
 
 ## Decode a file
 

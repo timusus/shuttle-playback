@@ -49,6 +49,15 @@ if [[ "$(git rev-parse HEAD)" != "$(git rev-parse -q --verify origin/main || tru
     exit 1
 fi
 
+# The published source must match the binary: VERSION.txt records the patches it was built with.
+recorded_patches="$(sed -n 's/^patches: //p' Frameworks/FFmpeg.xcframework/VERSION.txt | tr ' ' '\n' | sort)"
+actual_patches="$(cd scripts/ffmpeg-patches && ls -1 *.patch 2>/dev/null | sort || true)"
+[[ -n "$actual_patches" ]] || actual_patches="none"
+if [[ "$recorded_patches" != "$actual_patches" ]]; then
+    echo "release.sh: scripts/ffmpeg-patches differs from the patches recorded in the framework's VERSION.txt; rebuild the framework" >&2
+    exit 1
+fi
+
 echo "release.sh: swift test"
 swift test
 
@@ -76,7 +85,11 @@ rm -rf "$staging/$source_name/ffmpeg-$ffmpeg_tag/.git"
 cp -R scripts/ffmpeg-patches "$staging/$source_name/patches"
 cp scripts/build-ffmpeg.sh Frameworks/FFmpeg.xcframework/VERSION.txt "$staging/$source_name/"
 mkdir -p dist
-tar -cJf "dist/$source_name.tar.xz" -C "$staging" "$source_name"
+# Reproducible archive (bsdtar): sorted members, the commit's date as mtime, root ownership.
+stamp="$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M.%S HEAD)"
+(cd "$staging" && find "$source_name" -exec touch -h -t "$stamp" {} + && find "$source_name" | LC_ALL=C sort > "$staging.list")
+tar -cJf "dist/$source_name.tar.xz" -C "$staging" --no-recursion --uid 0 --gid 0 --numeric-owner -T "$staging.list"
+rm -f "$staging.list"
 
 git tag -a "$version" -m "shuttle-playback $version"
 if ! git push origin "$version"; then
