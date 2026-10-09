@@ -21,8 +21,13 @@ struct GrowingFileDownload {
 
     // MARK: - State
 
+    /// How far behind the reader a range of a resource with no known total is kept (ADR-0014): an
+    /// hour at 128 kbps, under the store's free-space headroom.
+    static let unknownLengthWindowBytes: Int64 = 64 << 20
+
     let url: URL
     private(set) var current: Transaction?
+    private(set) var file: SessionFile
     /// The decoder's read position.
     private(set) var offset: Int64 = 0
     private(set) var generation = 0
@@ -70,7 +75,7 @@ struct GrowingFileDownload {
     private var transactionsOpened = 0
     private var attemptsSent = 0
     /// An ``Effect/openFile`` is out: what the transaction it opens is.
-    private var pendingOpen: (base: Int64, seekGeneration: Int?, retrying: Bool)?
+    private var pendingOpen: (base: Int64, end: Int64?, seekGeneration: Int?, retrying: Bool)?
     /// The last read step opened a transaction because there was none; if it is still missing the
     /// read fails instead of asking again.
     private var readOpened = false
@@ -80,21 +85,27 @@ struct GrowingFileDownload {
     /// The network path is expensive or constrained: the read-ahead cap applies.
     private(set) var pathIsExpensive = false
 
-    init(url: URL, readAhead: Int64? = nil) {
+    init(url: URL, readAhead: Int64? = nil, unknownLengthWindow: Int64 = Self.unknownLengthWindowBytes) {
         self.url = url
         self.readAhead = readAhead
+        self.file = SessionFile(unknownLengthWindow: unknownLengthWindow)
     }
 
     // MARK: - Published state
 
     var totalLength: Int64? { current?.totalLength ?? lastKnownTotalLength }
 
+    /// `base`/`frontier` are the covered run the reader is in, else the current transaction's (ADR-0014).
     mutating func snapshot(fileURL: URL?, now: TimeInterval) -> GrowingFileSnapshot {
-        GrowingFileSnapshot(
-            base: current?.base ?? offset,
-            frontier: current?.frontier ?? offset,
+        let run = file.ranges.run(containing: offset)
+        // A transaction whose file is gone has nothing readable.
+        let tx = file.exists ? current : nil
+        let frontier = run?.upperBound ?? tx?.frontier ?? offset
+        return GrowingFileSnapshot(
+            base: run?.lowerBound ?? tx?.base ?? offset,
+            frontier: frontier,
             totalLength: totalLength,
-            isComplete: current?.isComplete ?? false,
+            isComplete: current?.isComplete == true && totalLength.map { frontier >= $0 } ?? false,
             fileURL: fileURL,
             transactionGeneration: generation,
             seekGeneration: current?.seekGeneration,
@@ -146,32 +157,39 @@ struct GrowingFileDownload {
         readOpened = false
         if cancelled { return step(.fail(.cancelled)) }
         if interrupted { return step(.fail(.interrupted)) }
-        guard let tx = current else {
+        let run = file.ranges.run(containing: offset)
+        guard current != nil || run != nil else {
             if opened { return step(.fail(.transport(failure ?? "no transaction"))) }
             if let reason = stickyFailure { return step(.fail(.transport(reason))) }
             start(at: offset, seekGeneration: claimSeek())
             readOpened = true
             return step(.again)
         }
+        let tx = current
         // A failure that deleted the file (a page, a full disk) took its frontier with it, so the
         // decoder's next read is no seek ahead: it gets the failure, unless the total length says
         // nothing is owed there (ADR-0004: the layer fails what it still owes, not a finished stream).
-        if let reason = failure, !tx.hasFile, tx.totalLength.map({ offset < $0 }) ?? true {
+        if let tx, let reason = failure, !file.exists, tx.totalLength.map({ offset < $0 }) ?? true {
             return reportFailure(reason)
         }
+        // Only a transaction that will bring bytes up to the read is waited for.
+        let frontier = tx.flatMap { tx in
+            !tx.isComplete && offset >= tx.frontier && offset < (tx.end ?? .max) ? tx.frontier : nil
+        }
         let action = ReadRule.action(
-            position: offset, base: tx.base, frontier: tx.frontier, totalLength: tx.totalLength,
-            isComplete: tx.isComplete, isProbing: isProbing, rangeIgnored: rangeIgnored,
-            downloadBytesPerSecond: tx.rateAtPause ?? downloadBytesPerSecond(now: now),
+            position: offset, isCovered: run != nil, frontier: frontier, totalLength: tx?.totalLength,
+            isProbing: isProbing, rangeIgnored: rangeIgnored,
+            downloadBytesPerSecond: tx?.rateAtPause ?? downloadBytesPerSecond(now: now),
             responseLatency: responseLatency
         )
-        if tx.paused, action == .serve || action == .wait, let readAhead, tx.frontier - offset <= readAhead / 2 {
+        if let tx, tx.paused, action == .serve || action == .wait, let readAhead,
+           offset >= tx.base, tx.frontier - offset <= readAhead / 2 {
             resume(now: now)
         }
         switch action {
         case .serve:
-            let count = Int(min(Int64(maxLength), tx.frontier - offset))
-            return step(.serve(fileOffset: offset - tx.base, count: count, landed: landSeek()))
+            let count = Int(min(Int64(maxLength), (run?.upperBound ?? offset) - offset))
+            return step(.serve(fileOffset: offset, count: count, landed: landSeek()))
         case .endOfStream:
             return step(.endOfStream(landed: landSeek()))
         case .restart:
@@ -199,7 +217,8 @@ struct GrowingFileDownload {
     /// player shows it seeks to where it stopped), whose read opens a fresh one there with a fresh
     /// budget; the total length stays known.
     private mutating func reportFailure(_ reason: String) -> ReadStep {
-        retireCurrent()
+        // The file's bytes stay for a seek to read; a file with none is not kept.
+        retireCurrent(discardingFile: file.ranges.ranges.isEmpty)
         current = nil
         effects.append(.release)
         failure = nil
@@ -221,17 +240,17 @@ struct GrowingFileDownload {
             let wasted = max(0, tx.frontier - max(offset, tx.base))
             let share = tx.totalLength.map { $0 > 0 ? Double(wasted) / Double($0) : 0 } ?? 0
             downloadLog.info("download: cancel bytes_wasted=\(wasted) share=\(share, format: .fixed(precision: 3))")
-            retireCurrent()
         }
+        // The session's file goes with it even when no transaction is left.
+        retireCurrent(discardingFile: true)
         effects.append(.wake)
         return takeEffects()
     }
 
     /// The complete file leaves the cache: whether there was one, which the adapter deletes.
     mutating func dropCachedFile() -> Bool {
-        guard let tx = current, tx.isCached, tx.hasFile else { return false }
-        current?.hasFile = false
-        current?.isCached = false
+        guard file.isCached, file.exists else { return false }
+        file.deleted()
         return true
     }
 
@@ -246,11 +265,12 @@ struct GrowingFileDownload {
             failure = "cannot open a partial"
             return takeEffects() + [.wake]
         }
+        file.exists = true
         generation += 1
         transactionsOpened += 1
         current = Transaction(
             id: transactionsOpened, generation: generation, seekGeneration: open.seekGeneration,
-            remembered: finalURL != nil, base: open.base
+            remembered: finalURL != nil, base: open.base, end: open.end
         )
         if startup.requestIssuedAt == nil { startup.requestIssuedAt = now }
         send(from: open.base, ifRange: nil, retrying: open.retrying, now: now)
@@ -261,7 +281,7 @@ struct GrowingFileDownload {
 
     /// The complete file is the cache's now.
     mutating func promoted() {
-        current?.isCached = true
+        file.isCached = true
         if let tx = current { downloadLog.info("download: cached gen=\(tx.generation)") }
     }
 
@@ -270,15 +290,20 @@ struct GrowingFileDownload {
         if startup.firstResponseAt == nil, let host { startup.hosts.append(host) }
     }
 
-    /// Retires the current transaction and asks for one at `start` (0 once the host ignores ranges).
+    /// Retires the current transaction and asks for one at the first hole from `start`, up to the
+    /// next covered range (ADR-0014; media3's `CacheDataSource` bounds a network read the same way),
+    /// or for the whole body once the host ignores ranges.
     /// - Parameters:
     ///   - seekGeneration: the seek this transaction answers, nil when none asked for it.
     ///   - retrying: a retry's restart, whose request waits the shorter time (``target(retrying:)``).
-    private mutating func start(at start: Int64, seekGeneration: Int?, retrying: Bool = false) {
-        if current != nil { retireCurrent() }
+    ///   - discardingFile: the session's file is not this resource's any more.
+    private mutating func start(at start: Int64, seekGeneration: Int?, retrying: Bool = false, discardingFile: Bool = false) {
+        if current != nil { retireCurrent(discardingFile: discardingFile) }
         current = nil
         failure = nil
-        pendingOpen = (rangeIgnored ? 0 : start, seekGeneration, retrying)
+        let from = rangeIgnored ? 0 : file.ranges.firstHole(atOrAfter: start)
+        let end = rangeIgnored ? nil : file.ranges.nextCoveredStart(after: from)
+        pendingOpen = (from, end, seekGeneration, retrying)
         effects.append(.openFile)
     }
 
@@ -297,12 +322,12 @@ struct GrowingFileDownload {
         return unclaimedSeek?.generation
     }
 
-    /// Cancels the task and deletes the file unless it is the cache's now.
-    private mutating func retireCurrent() {
-        guard let tx = current else { return }
+    /// Cancels the task; its bytes stay in the session's file. `discardingFile` deletes the file too,
+    /// unless it is the cache's now.
+    private mutating func retireCurrent(discardingFile: Bool = false) {
         current?.ended = true
-        let discard = tx.hasFile && !tx.isCached
-        if discard { current?.hasFile = false }
+        let discard = discardingFile && file.exists && !file.isCached
+        if discard { file.deleted() }
         effects.append(.retire(discardFile: discard))
     }
 
@@ -337,7 +362,7 @@ struct GrowingFileDownload {
         )
         guard case .retry(let backoff) = decision else {
             downloadLog.error("download: failed gen=\(tx.generation) \(reason, privacy: .public)")
-            if !retryable { retireCurrent() }
+            if !retryable { retireCurrent(discardingFile: true) }
             failure = reason
             effects.append(.wake)
             return
@@ -356,8 +381,8 @@ struct GrowingFileDownload {
     /// generation and claims none, and a resume keeps the one its transaction had.
     private mutating func retryCurrent(now: TimeInterval) {
         guard let tx = current else { return }
-        let resumable = !rangeIgnored && tx.hasFile && !tx.isCached && !tx.sniffPending
-            && tx.written > 0 && offset >= tx.base && offset <= tx.frontier
+        let resumable = !rangeIgnored && file.exists && !file.isCached && !tx.sniffPending
+            && tx.written > 0 && offset >= tx.base && offset <= tx.frontier && tx.end.map { tx.frontier < $0 } ?? true
         guard resumable else {
             start(at: offset, seekGeneration: nil, retrying: true)
             return
@@ -392,7 +417,7 @@ struct GrowingFileDownload {
     /// nothing is spent and no timer starts; the file stays, and a read resumes it (``read(maxLength:now:)``).
     private mutating func pauseIfFarAhead(now: TimeInterval) {
         guard let readAhead, let tx = current, isCapped(tx), !tx.ended else { return }
-        guard tx.frontier - offset >= readAhead, tx.totalLength.map({ tx.frontier < $0 }) ?? true else { return }
+        guard tx.frontier - offset >= readAhead, tx.frontier < min(tx.totalLength ?? .max, tx.end ?? .max) else { return }
         current?.ended = true
         current?.paused = true
         let rate = downloadBytesPerSecond(now: now)
@@ -412,7 +437,7 @@ struct GrowingFileDownload {
         current?.attemptStartedAt = now
         let wait = min(target.timeout, retry.linkWindowLeft(now: now) ?? target.timeout)
         effects.append(.schedule(.response(attempt: attemptsSent), after: wait))
-        effects.append(.send(Request(attempt: attemptsSent, url: target.url, from: from, ifRange: ifRange)))
+        effects.append(.send(Request(attempt: attemptsSent, url: target.url, from: from, end: current?.end, ifRange: ifRange)))
     }
 
     /// Where the next request goes and how long it waits for its response: the chain's remembered
@@ -484,7 +509,8 @@ struct GrowingFileDownload {
     /// frontier after the backoff, from the same budget. A transaction done with the network, or
     /// whose every byte is in and only its completion is still on the way, is left alone.
     mutating func pathChanged(now: TimeInterval) -> [Effect] {
-        guard !cancelled, let tx = current, !tx.ended, !tx.isComplete, tx.frontier != tx.totalLength else { return [] }
+        guard !cancelled, let tx = current, !tx.ended, !tx.isComplete,
+              tx.frontier < min(tx.totalLength ?? .max, tx.end ?? .max) else { return [] }
         end("path_changed at=\(tx.frontier)", retryable: true, pathChanged: true, now: now)
         return takeEffects()
     }
@@ -555,8 +581,9 @@ struct GrowingFileDownload {
                     "download: resume_refused gen=\(tx.generation) status=\(status) content-range=\(contentRange ?? "-", privacy: .public)"
                 )
                 // A retry's restart, to the end of the chain that just answered: the short wait.
+                // Bytes these can no longer be checked against are not kept.
                 if finalURL == nil { finalURL = response.url }
-                start(at: offset, seekGeneration: nil, retrying: true)
+                start(at: offset, seekGeneration: nil, retrying: true, discardingFile: true)
                 return false
             default:
                 end(
@@ -581,6 +608,7 @@ struct GrowingFileDownload {
         }
         switch status {
         case 200:
+            current?.end = nil
             if tx.base > 0 {
                 // The host ignored the range: this body is the file from byte 0, and the read
                 // waits for its position to arrive. Restarting would only get 200 again. A new
@@ -614,12 +642,23 @@ struct GrowingFileDownload {
         case nil: current?.sniffPending = accepted.base == 0
         case true?: break
         }
+        // A bounded request's length ends at its bound, not the resource's end.
         let total = range?.total
-            ?? (response.expectedContentLength > 0 ? response.expectedContentLength + accepted.base : nil)
+            ?? (response.expectedContentLength > 0 && accepted.end == nil ? response.expectedContentLength + accepted.base : nil)
+        let strongTag = response.entityTag.flatMap { $0.hasPrefix("W/") ? nil : $0 }
+        let changedTotal = total != nil && lastKnownTotalLength != nil && total != lastKnownTotalLength
+        let changedTag = strongTag != nil && file.entityTag != nil && strongTag != file.entityTag
+        if !file.ranges.ranges.isEmpty, changedTotal || changedTag {
+            // The resource changed behind the URL: none of the file's bytes are its.
+            downloadLog.warning("download: resource_changed gen=\(accepted.generation) total=\(total ?? -1)")
+            start(at: offset, seekGeneration: accepted.seekGeneration, retrying: true, discardingFile: true)
+            return false
+        }
         current?.totalLength = total
         lastKnownTotalLength = total
         if let total { effects.append(.makeRoom(bytes: total - accepted.base)) }
-        if let tag = response.entityTag, !tag.hasPrefix("W/") { current?.entityTag = tag }
+        current?.entityTag = strongTag
+        file.entityTag = file.entityTag ?? strongTag
         if finalURL == nil { finalURL = response.url }
         recordResponse(accepted, status: status, now: now)
         effects.append(.emit(.transaction(
@@ -644,7 +683,7 @@ struct GrowingFileDownload {
     /// longer wanted.
     func chunkOffset(attempt: Int) -> Int64? {
         guard !cancelled, let tx = current, tx.attempt == attempt, !tx.ended else { return nil }
-        return tx.written
+        return tx.base + tx.written
     }
 
     /// A chunk of `count` bytes was written at ``chunkOffset(attempt:)``, or failed with `writeError`.
@@ -670,6 +709,8 @@ struct GrowingFileDownload {
             }
             current?.sniffPending = false
         }
+        // Only the bytes this chunk made readable: a range dropped from the set is never re-added.
+        if let frontier = current?.frontier { file.record(tx.frontier..<frontier) }
         // Progress is the decoder's: a host that drops before the read position (a 200 from
         // byte 0, every time) spends its retries instead of looping.
         if let frontier = current?.frontier, frontier > offset { retry.reset() }
@@ -695,18 +736,21 @@ struct GrowingFileDownload {
             end("not audio: body of \(tx.written) bytes", retryable: tx.remembered, refused: true, now: now)
             return takeEffects()
         }
-        if let total = tx.totalLength, tx.frontier < total {
-            end("short body ended=\(tx.frontier) total=\(total)", retryable: true, now: now)
+        let expectedEnd = min(tx.end ?? .max, tx.totalLength ?? .max)
+        if expectedEnd < .max, tx.frontier < expectedEnd {
+            end("short body ended=\(tx.frontier) expected=\(expectedEnd)", retryable: true, now: now)
             return takeEffects()
         }
         current?.ended = true
         current?.isComplete = true
-        let total = tx.totalLength ?? tx.frontier
+        // A bounded body ends at its bound, which says nothing of the resource's end.
+        let total = tx.totalLength ?? (tx.end == nil ? tx.frontier : nil)
         current?.totalLength = total
-        lastKnownTotalLength = total
-        if tx.base == 0, tx.hasFile { effects.append(.promote) }
+        if let total { lastKnownTotalLength = total }
+        if file.isWhole(totalLength: totalLength) { effects.append(.promote) }
         downloadLog.info("download: complete gen=\(tx.generation) base=\(tx.base) frontier=\(tx.frontier)")
-        effects.append(.emit(.download(frontier: tx.frontier, downloadBytesPerSecond: downloadBytesPerSecond(now: now), complete: true)))
+        let complete = total.map { tx.frontier >= $0 } ?? false
+        effects.append(.emit(.download(frontier: tx.frontier, downloadBytesPerSecond: downloadBytesPerSecond(now: now), complete: complete)))
         effects.append(.wake)
         return takeEffects()
     }

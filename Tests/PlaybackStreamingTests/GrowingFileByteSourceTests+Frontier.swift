@@ -145,8 +145,9 @@ extension GrowingFileByteSourceTests {
         ])
 
         try source.seek(to: 100)
-        XCTAssertEqual(try read(source, 100), body.subdata(in: 100..<200), "before the base restarts")
-        XCTAssertEqual(source.snapshot.transactionGeneration, 3)
+        XCTAssertEqual(try read(source, 100), body.subdata(in: 100..<200), "before the base is read from the file")
+        XCTAssertEqual(source.snapshot.transactionGeneration, 2)
+        XCTAssertEqual(server.requestedRanges, [0, 400_000])
     }
 
     /// Issue #68: a far seek the download would close in a couple of seconds is still a new

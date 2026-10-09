@@ -36,7 +36,7 @@ struct GrowingFileDownloadTests {
         h.end()
         #expect(h.read() == .serve(fileOffset: 4000, count: 6000, landed: nil))
         #expect(h.read() == .endOfStream(landed: nil))
-        #expect(h.machine.current?.isCached == true)
+        #expect(h.machine.file.isCached)
     }
 
     @Test("a parked read is reported from its first park, through rechecks and a retry, until it is served")
@@ -126,11 +126,12 @@ struct GrowingFileDownloadTests {
         h.body(6000)
         #expect(h.read() == .serve(fileOffset: 5000, count: 1000, landed: nil))
 
-        // Every later transaction starts at 0.
+        // Every later transaction starts at 0, into the same file (ADR-0014).
         h.end(error: -1005)
         h.clock.advance(by: 0.1)
         #expect(h.opens == 2)
-        #expect(h.log.contains(.retire(discardFile: true)))
+        #expect(h.log.contains(.retire(discardFile: false)))
+        #expect(!h.log.contains(.retire(discardFile: true)))
         #expect(h.requests.last == h.request(2, from: 0))
     }
 
@@ -151,7 +152,7 @@ struct GrowingFileDownloadTests {
         h.respond(206, range: "bytes 90000-99999/100000")
         #expect(h.events.last == .transaction(base: 90000, generation: 2, seekGeneration: 3, httpStatus: 206))
         h.body(500)
-        #expect(h.read() == .serve(fileOffset: 0, count: 500, landed: nil))
+        #expect(h.read() == .serve(fileOffset: 90000, count: 500, landed: nil))
     }
 
     @Test("a retry that fires after a seek but before its read restarts untagged; the read reports the landing")
@@ -167,7 +168,7 @@ struct GrowingFileDownloadTests {
         h.respond(206, range: "bytes 90000-99999/100000")
         #expect(h.events.last == .transaction(base: 90000, generation: 2, seekGeneration: nil, httpStatus: 206))
         h.body(500)
-        #expect(h.read() == .serve(fileOffset: 0, count: 500, landed: 3))
+        #expect(h.read() == .serve(fileOffset: 90000, count: 500, landed: 3))
     }
 
     @Test("a body silent for 6 s ends like a drop, spends an attempt, and resumes from the frontier")
@@ -325,7 +326,7 @@ struct GrowingFileDownloadTests {
         h.body(4000)
         h.read(4000)
         h.run(h.machine.certificateRejected(attempt: h.requests.last!.attempt, now: h.now))
-        #expect(h.machine.current?.hasFile == false)
+        #expect(h.machine.file.exists == false)
 
         try? h.machine.seek(to: 10_000)
         #expect(h.read() == .endOfStream(landed: nil), "nothing is owed at the total length")

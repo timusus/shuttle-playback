@@ -15,13 +15,13 @@ extension GrowingFileDownload {
         static let footerBytes: Int64 = 128
 
         enum Action: Equatable, Sendable {
-            /// `position` is in `[base, frontier)`: copy from the file.
+            /// `position` is on disk: copy from the file.
             case serve
             /// End of stream: answer 0.
             case endOfStream
             /// Block until bytes land, the body completes, or a cancel or interrupt arrives.
             case wait
-            /// Cancel the download and open a new transaction, into a new file, at `position`.
+            /// Retire the download and open a new transaction at the first hole from `position`.
             case restart
         }
 
@@ -29,12 +29,15 @@ extension GrowingFileDownload {
         /// footer, reads it and seeks back, and deciding at the seek would cancel the head download for
         /// a read that never needed the network.
         ///
-        /// A gap ahead of the frontier is waited for only while the download closes it sooner than a
+        /// A hole ahead of the frontier is waited for only while the download closes it sooner than a
         /// new request would answer (`gap / rate < responseLatency`); otherwise the download restarts
         /// at the position. media3's `seekToUs` never waits on a seek its buffer cannot
         /// serve: it cancels the loader and loads from the target.
         ///
         /// - Parameters:
+        ///   - isCovered: `position` is in a range of the session's file (ADR-0014).
+        ///   - frontier: the current transaction's, when it is bringing bytes up to `position`: it
+        ///     started at or before it, is not done, and asked for it. Nil restarts a hole.
         ///   - isProbing: the decoder is inside `open()`; a footer look past the frontier is then
         ///     answered EOF at once (FFmpeg reads that as "no footer"). Outside the probe the same read
         ///     waits, or the last frames would be cut.
@@ -45,19 +48,17 @@ extension GrowingFileDownload {
         ///     its request went out; nil (none yet) restarts.
         static func action(
             position: Int64,
-            base: Int64,
-            frontier: Int64,
+            isCovered: Bool,
+            frontier: Int64?,
             totalLength: Int64?,
-            isComplete: Bool,
             isProbing: Bool,
             rangeIgnored: Bool,
             downloadBytesPerSecond: Double?,
             responseLatency: TimeInterval?
         ) -> Action {
-            if position >= base, position < frontier { return .serve }
+            if isCovered { return .serve }
             if let totalLength, position >= totalLength { return .endOfStream }
-            if position < base { return .restart }
-            if isComplete { return .endOfStream }
+            guard let frontier, position >= frontier else { return .restart }
             if isProbing, let totalLength, position >= totalLength - footerBytes { return .endOfStream }
             if position == frontier || rangeIgnored { return .wait }
             guard let downloadBytesPerSecond, downloadBytesPerSecond > 0, let responseLatency else { return .restart }

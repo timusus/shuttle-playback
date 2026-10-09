@@ -6,35 +6,39 @@ import XCTest
 /// does, pinned with literals.
 final class GrowingFileDownloadReadRuleTests: XCTestCase {
 
+    /// The file covers `[0, 1000)` and a transaction from 0 is at 1000, unless told otherwise.
     private func action(
         _ position: Int64,
-        base: Int64 = 0,
-        frontier: Int64 = 1000,
+        covered: Bool? = nil,
+        frontier: Int64? = 1000,
         total: Int64? = 10_000,
-        complete: Bool = false,
         probing: Bool = false,
         rangeIgnored: Bool = false,
         rate: Double? = 100,
         latency: TimeInterval? = 3
     ) -> GrowingFileDownload.ReadRule.Action {
         GrowingFileDownload.ReadRule.action(
-            position: position, base: base, frontier: frontier, totalLength: total,
-            isComplete: complete, isProbing: probing, rangeIgnored: rangeIgnored, downloadBytesPerSecond: rate,
+            position: position, isCovered: covered ?? (position < (frontier ?? 0)), frontier: frontier,
+            totalLength: total, isProbing: probing, rangeIgnored: rangeIgnored, downloadBytesPerSecond: rate,
             responseLatency: latency
         )
     }
 
-    func testInsideTheFileIsServed() {
+    func testCoveredIsServed() {
         XCTAssertEqual(action(0), .serve)
         XCTAssertEqual(action(999), .serve)
-        XCTAssertEqual(action(600, base: 500), .serve)
+        XCTAssertEqual(action(5000, covered: true, frontier: nil), .serve, "another transaction's bytes")
     }
 
-    func testAtTheFrontierWaitsAndEndsOnlyWhenComplete() {
+    func testAtTheFrontierWaitsAndEndsAtTheTotal() {
         XCTAssertEqual(action(1000), .wait)
-        XCTAssertEqual(action(1000, frontier: 1000, total: nil, complete: true), .endOfStream)
-        XCTAssertEqual(action(10_000, frontier: 10_000, complete: true), .endOfStream)
+        XCTAssertEqual(action(1000, frontier: 1000, total: 1000), .endOfStream)
         XCTAssertEqual(action(12_000), .endOfStream, "past the known end there is nothing to fetch")
+    }
+
+    func testAHoleNoTransactionIsBringingRestarts() {
+        XCTAssertEqual(action(1000, covered: false, frontier: nil), .restart)
+        XCTAssertEqual(action(1000, covered: false, frontier: nil, rangeIgnored: true), .restart)
     }
 
     func testUnknownLengthWaitsAtTheFrontierUntilComplete() {
@@ -54,10 +58,6 @@ final class GrowingFileDownloadReadRuleTests: XCTestCase {
         XCTAssertEqual(action(1001, rate: 0), .restart, "a stopped download restarts")
     }
 
-    func testBeforeTheBaseRestarts() {
-        XCTAssertEqual(action(100, base: 500, frontier: 900), .restart)
-        XCTAssertEqual(action(100, base: 500, frontier: 900, complete: true), .restart)
-    }
 
     func testFooterLookIsEndOfStreamOnlyDuringTheProbe() {
         XCTAssertEqual(action(9872, probing: true), .endOfStream)

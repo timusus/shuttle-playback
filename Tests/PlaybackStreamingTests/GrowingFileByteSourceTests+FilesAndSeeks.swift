@@ -99,9 +99,9 @@ extension GrowingFileByteSourceTests {
         XCTAssertEqual(source.totalLength, 100_000)
 
         try source.seek(to: 0)
-        XCTAssertEqual(try readToEnd(source), second, "a new transaction is a new file, never a splice")
+        XCTAssertEqual(try readToEnd(source), second, "a changed total discards the file, never a splice")
         XCTAssertEqual(source.totalLength, 120_000)
-        XCTAssertEqual(source.snapshot.transactionGeneration, 2)
+        XCTAssertEqual(source.snapshot.transactionGeneration, 3, "the hole's bounded request, then the whole file again")
     }
 
     func testASpliceWithNoLengthIsReadPastTheEarlierSplicesLength() throws {

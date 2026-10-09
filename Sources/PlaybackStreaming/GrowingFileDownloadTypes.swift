@@ -5,12 +5,15 @@ extension GrowingFileDownload {
 
     // MARK: - Effects and events
 
-    /// A request for the current transaction: `Range: bytes=<from>-`, to `url`.
+    /// A request for the current transaction: `Range: bytes=<from>-`, or `bytes=<from>-<end - 1>`
+    /// when `end` is given, to `url`.
     struct Request: Equatable {
         /// Names this request; a timer or a callback for an earlier one changes nothing.
         let attempt: Int
         let url: URL
         let from: Int64
+        /// Exclusive: where the next covered range of the session's file starts (ADR-0014).
+        var end: Int64? = nil
         /// The resume's validator: the first response's strong ETag.
         let ifRange: String?
     }
@@ -28,11 +31,11 @@ extension GrowingFileDownload {
 
     /// What the adapter does, in order, under its lock unless said otherwise.
     enum Effect: Equatable {
-        /// Cancel the current transaction's task and, when `discardFile`, delete its file.
+        /// Cancel the current transaction's task and, when `discardFile`, delete the session's file.
         case retire(discardFile: Bool)
         /// Drop the current transaction: there is none until the next open.
         case release
-        /// Make a new partial for the next transaction and report it with ``opened(fileReady:now:)``.
+        /// Make the session's partial unless it has one, and report it with ``opened(fileReady:now:)``.
         case openFile
         /// Cancel the current task.
         case cancelTask
@@ -64,7 +67,7 @@ extension GrowingFileDownload {
     /// A read's next step: carry out `effects`, then do `action`.
     struct ReadStep: Equatable {
         enum Action: Equatable {
-            /// Copy `count` bytes at `fileOffset` of the current file, then ``advance(by:)``.
+            /// Copy `count` bytes at `fileOffset` of the session's file, then ``advance(by:)``.
             /// `landed`: report that seek's landing first.
             case serve(fileOffset: Int64, count: Int, landed: Int?)
             /// Answer 0, after reporting `landed`.
@@ -82,13 +85,12 @@ extension GrowingFileDownload {
 
     // MARK: - One transaction
 
-    /// One transaction's state: one file, one base, one or more requests (a resume is another).
+    /// One transaction's state: one base, written into the session's file at its resource offsets,
+    /// and one or more requests (a resume is another).
     struct Transaction: Equatable {
         let id: Int
         var generation: Int
         var seekGeneration: Int?
-        /// False once the partial is deleted: nothing of it is readable any more.
-        var hasFile = true
         /// The current request went to the redirect chain's remembered end, not the requested URL.
         var remembered: Bool
         /// The current request's ``Request/attempt``.
@@ -98,6 +100,8 @@ extension GrowingFileDownload {
         /// The first response's strong ETag, the resume's `If-Range`.
         var entityTag: String?
         var base: Int64
+        /// Exclusive: where the request stops, at the next covered range; nil asks to the end.
+        var end: Int64?
         /// This transaction's own, from its response; never inherited from an earlier transaction's body.
         var totalLength: Int64?
         /// Bytes in the file.
@@ -111,7 +115,6 @@ extension GrowingFileDownload {
         /// Done with the network: complete, failed, or handed to a retry.
         var ended = false
         var isComplete = false
-        var isCached = false
         /// The time of the response or the last body chunk, whichever came later.
         var lastByteAt: TimeInterval = 0
         /// An idle check is scheduled; one at a time.
@@ -123,6 +126,6 @@ extension GrowingFileDownload {
         var rateAtPause: Double?
         /// The host answered this transaction's range with a `206` from its base.
         var rangeHonoured = false
-        var frontier: Int64 { base + (sniffPending || !hasFile ? 0 : written) }
+        var frontier: Int64 { base + (sniffPending ? 0 : written) }
     }
 }

@@ -94,15 +94,12 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         return URLSession(configuration: configuration, delegate: nil, delegateQueue: delegateQueue)
     }
 
-    /// The current transaction's file and task, which the machine knows only by its effects.
-    /// Mutable state is behind the source's `condition`.
-    private final class Transaction {
+    /// The session's file, which the machine knows only by its effects. Mutable state is behind the
+    /// source's `condition`.
+    private final class SessionFile {
         let descriptor: Int32
-        /// Nil once the partial is deleted.
-        var fileURL: URL?
-        var task: URLSessionDataTask?
-        /// The machine's name for `task`'s request.
-        var attempt = 0
+        /// Moves when the file is promoted into the cache.
+        var fileURL: URL
 
         init(descriptor: Int32, fileURL: URL) {
             self.descriptor = descriptor
@@ -135,8 +132,12 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     // Behind `condition`.
     private let condition = NSCondition()
     private var machine: GrowingFileDownload
-    /// The machine's current transaction's file and task.
-    private var current: Transaction?
+    /// The session's file; nil before the first transaction and once deleted.
+    private var file: SessionFile?
+    /// The current transaction's task.
+    private var task: URLSessionDataTask?
+    /// The machine's name for `task`'s request.
+    private var attempt = 0
     private var requestsSent = 0
 
     /// Requests issued so far: a test asserts "nothing was sent" on this, at once, instead of
@@ -209,7 +210,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     // MARK: - Published state
 
     public var snapshot: GrowingFileSnapshot {
-        locked { machine.snapshot(fileURL: current?.fileURL, now: clock.now) }
+        locked { machine.snapshot(fileURL: file?.fileURL, now: clock.now) }
     }
 
     /// Set around the decoder's `open()`; see ``GrowingFileDownload/ReadRule``.
@@ -265,11 +266,11 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
             performUnlocked(runLocked(step.effects))
             switch step.action {
             case .serve(let fileOffset, let count, let landed):
-                guard let tx = current else { throw StreamByteReaderError.transport("no transaction") }
+                guard let file else { throw StreamByteReaderError.transport("no file") }
                 condition.unlock()
                 if let landed { onEvent?(.seekLanded(seekGeneration: landed)) }
                 var got: Int
-                repeat { got = pread(tx.descriptor, buffer, count, off_t(fileOffset)) } while got < 0 && errno == EINTR
+                repeat { got = pread(file.descriptor, buffer, count, off_t(fileOffset)) } while got < 0 && errno == EINTR
                 condition.lock()
                 guard got > 0 else { throw StreamByteReaderError.transport("pread failed at \(fileOffset)") }
                 machine.advance(by: got)
@@ -308,9 +309,9 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     public func cancelDiscardingCache() {
         cancel()
         locked {
-            guard let tx = current, let file = tx.fileURL, machine.dropCachedFile() else { return }
-            store.discard(file)
-            tx.fileURL = nil
+            guard let cached = file, machine.dropCachedFile() else { return }
+            store.discard(cached.fileURL)
+            file = nil
         }
     }
 
@@ -318,7 +319,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     /// as its delegate, so what is left is the file.
     deinit {
         if let pathObserver { pathMonitor.removeObserver(pathObserver) }
-        if let tx = current, machine.current?.isCached == false, let file = tx.fileURL { store.discard(file) }
+        if let file, !machine.file.isCached { store.discard(file.fileURL) }
     }
 
     public func interrupt() {
@@ -337,24 +338,24 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         for effect in effects {
             switch effect {
             case .retire(let discardFile):
-                current?.task?.cancel()
-                if discardFile, let file = current?.fileURL {
-                    store.discard(file)
-                    current?.fileURL = nil
+                task?.cancel()
+                if discardFile, let discarded = file {
+                    store.discard(discarded.fileURL)
+                    file = nil
                 }
             case .release:
-                current = nil
+                task = nil
             case .openFile:
-                current = makeTransaction()
-                deferred += runLocked(machine.opened(fileReady: current != nil, now: clock.now))
+                if file == nil { file = makeFile() }
+                deferred += runLocked(machine.opened(fileReady: file != nil, now: clock.now))
             case .cancelTask:
-                current?.task?.cancel()
+                task?.cancel()
             case .send(let send):
-                var request = request(for: send.url, from: send.from)
+                var request = request(for: send.url, from: send.from, end: send.end)
                 if let entityTag = send.ifRange { request.setValue(entityTag, forHTTPHeaderField: "If-Range") }
                 let task = session.dataTask(with: request)
-                current?.task = task
-                current?.attempt = send.attempt
+                self.task = task
+                attempt = send.attempt
                 task.delegate = self
                 requestsSent += 1
                 task.resume()
@@ -366,8 +367,8 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
             case .wake:
                 condition.broadcast()
             case .promote:
-                if let tx = current, let file = tx.fileURL, let cached = store.promote(file, for: cacheKey) {
-                    tx.fileURL = cached
+                if let file, let cached = store.promote(file.fileURL, for: cacheKey) {
+                    file.fileURL = cached
                     machine.promoted()
                     deferred.append(.evict)
                 }
@@ -381,14 +382,14 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     }
 
     /// A new partial and its descriptor; nil when none can be opened.
-    private func makeTransaction() -> Transaction? {
+    private func makeFile() -> SessionFile? {
         let file = try? store.makePartial()
         let fd = file?.withUnsafeFileSystemRepresentation { $0.map { Foundation.open($0, O_RDWR) } ?? -1 } ?? -1
         guard let file, fd >= 0 else {
             if let file { store.discard(file) }
             return nil
         }
-        return Transaction(descriptor: fd, fileURL: file)
+        return SessionFile(descriptor: fd, fileURL: file)
     }
 
     /// Outside `condition`.
@@ -426,9 +427,9 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         path.isExpensive || path.isConstrained
     }
 
-    private func request(for target: URL, from base: Int64) -> URLRequest {
+    private func request(for target: URL, from base: Int64, end: Int64?) -> URLRequest {
         var request = URLRequest(url: target)
-        request.setValue("bytes=\(base)-", forHTTPHeaderField: "Range")
+        request.setValue("bytes=\(base)-\(end.map { String($0 - 1) } ?? "")", forHTTPHeaderField: "Range")
         if target.hasSameOrigin(as: url) { applyServerHeaders(to: &request) }
         return request
     }
@@ -446,12 +447,12 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     }
 
     /// The current transaction's task: what a test hands ``certificateRejected(task:)``.
-    var currentTask: URLSessionTask? { locked { current?.task } }
+    var currentTask: URLSessionTask? { locked { task } }
 
     /// The machine's name for `task`'s request, when it is the current one's.
     private func attemptLocked(_ task: URLSessionTask) -> Int? {
-        guard let tx = current, tx.task === task else { return nil }
-        return tx.attempt
+        guard self.task === task else { return nil }
+        return attempt
     }
 
     // MARK: - URLSessionDataDelegate (the session's serial delegate queue)
@@ -548,18 +549,18 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     }
 
     public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        let claim = locked { () -> (tx: Transaction, attempt: Int, fileOffset: Int64)? in
-            guard let attempt = attemptLocked(dataTask), let tx = current,
+        let claim = locked { () -> (file: SessionFile, attempt: Int, fileOffset: Int64)? in
+            guard let attempt = attemptLocked(dataTask), let file,
                   let fileOffset = machine.chunkOffset(attempt: attempt) else { return nil }
-            return (tx, attempt, fileOffset)
+            return (file, attempt, fileOffset)
         }
         guard let claim else { return }
-        let writeError = writeAll(data, to: claim.tx.descriptor, at: claim.fileOffset)
+        let writeError = writeAll(data, to: claim.file.descriptor, at: claim.fileOffset)
         perform(locked { () -> [Deferred] in
-            guard current === claim.tx else { return [] }
+            guard file === claim.file else { return [] }
             let effects = machine.chunkWritten(data.count, attempt: claim.attempt, writeError: writeError, now: clock.now) {
                 var head = [UInt8](repeating: 0, count: Self.sniffBytes)
-                return pread(claim.tx.descriptor, &head, head.count, 0) == head.count ? head : nil
+                return pread(claim.file.descriptor, &head, head.count, 0) == head.count ? head : nil
             }
             return runLocked(effects)
         })
