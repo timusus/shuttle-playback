@@ -46,7 +46,7 @@ cp -R scripts/ffmpeg-patches "$root/scripts/ffmpeg-patches"
 cp scripts/build-ffmpeg.sh scripts/ffmpeg-exports.txt "$root/scripts/"
 cp Frameworks/FFmpeg.xcframework/VERSION.txt "$root/"
 cat > "$root/README.txt" <<README
-FFmpeg $ffmpeg_tag source, local patches and build recipe for shuttle-playback $version.
+FFmpeg $ffmpeg_tag source, local patches and build recipe for AudioPlaybackKit $version.
 
 Rebuild the dynamic framework (macOS, Xcode with the iOS SDKs):
 

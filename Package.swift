@@ -5,7 +5,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "shuttle-playback",
+    name: "AudioPlaybackKit",
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
         // The pull decoder: a `StreamByteReader` in, interleaved Float32 PCM at the source's own

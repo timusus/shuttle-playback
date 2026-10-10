@@ -35,7 +35,7 @@ patches and linkage. The headers sit in `Sources/CFFmpeg/include`, also generate
 swift test                                          # macOS slice, no simulator; the gate
 swift test --filter PlaybackDecodeConformance       # about 30 s
 GOLDEN_UPDATE=1 swift test --filter PlaybackDecodeConformance   # after an intended change; review the JSON diff
-xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreamingTests \
+xcodebuild test -scheme AudioPlaybackKit-Package -only-testing:PlaybackStreamingTests \
   -destination 'platform=iOS Simulator,id=<UDID>'   # UDID from `xcrun simctl list devices available`
 land <branch>                                       # from the landing worktree: cherry-pick, verify, push
 scripts/release.sh 0.1.1 notes.md                   # landing worktree: tests, FFmpeg source, tag, push, publish the release

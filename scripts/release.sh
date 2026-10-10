@@ -87,7 +87,7 @@ if [[ -z "$udid" ]]; then
     exit 1
 fi
 echo "release.sh: PlaybackStreamingTests on iOS simulator $udid"
-xcodebuild test -scheme shuttle-playback-Package -only-testing:PlaybackStreamingTests \
+xcodebuild test -scheme AudioPlaybackKit-Package -only-testing:PlaybackStreamingTests \
     -destination "platform=iOS Simulator,id=$udid" -quiet
 
 # Built before tagging, so a tag never lacks its source (LGPL-2.1 section 6); a failed or
@@ -98,7 +98,7 @@ trap '[[ "$packaged" == 1 ]] || rm -f "dist/$source_name.tar.xz"' EXIT
 scripts/package-ffmpeg-source.sh "$version"
 packaged=1
 
-git tag -a "$version" -m "shuttle-playback $version"
+git tag -a "$version" -m "AudioPlaybackKit $version"
 if ! git push origin "$version"; then
     git tag -d "$version" >/dev/null
     echo "release.sh: pushing tag $version failed; local tag removed, rerun to retry" >&2

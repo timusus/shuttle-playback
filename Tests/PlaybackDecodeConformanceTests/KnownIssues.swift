@@ -3,7 +3,7 @@
 /// landing, byte count or frame count is in the message). A matching finding runs inside
 /// `XCTExpectFailure`. Anything else fails: a finding with another value, under another
 /// combination, or a pinned finding that stops happening (remove its rule when its issue is fixed).
-/// The issue number is on timusus/shuttle-playback.
+/// The issue number is on timusus/AudioPlaybackKit.
 ///
 /// Seeks are sample-accurate: the decoder starts a pre-roll before the target and drops what
 /// comes before it, so `alignFrames` is 0 in every seek of every golden (a seek to the end lands
