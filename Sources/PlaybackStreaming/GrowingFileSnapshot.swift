@@ -77,4 +77,9 @@ public enum GrowingFileEvent: Equatable, Sendable {
     /// The seek of `seekGeneration` was answered from the file already there: no transaction
     /// carries it, so a target waiting for one is done with.
     case seekLanded(seekGeneration: Int)
+    /// The decoder's read parked for bytes, `since` on the source clock (``GrowingFileSnapshot/readWaitingSince``).
+    /// Once per stall: retries and rechecks inside it do not repeat it.
+    case readWaiting(since: TimeInterval)
+    /// That read ended: served, failed, cancelled or interrupted. Always follows a ``readWaiting(since:)``.
+    case readResumed
 }

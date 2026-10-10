@@ -73,6 +73,81 @@ extension GrowingFileByteSourceTests {
         XCTAssertNil(parked.source.snapshot.readWaitingSince)
     }
 
+    private var readEvents: [GrowingFileEvent] {
+        events.events.filter {
+            switch $0 {
+            case .readWaiting, .readResumed: return true
+            default: return false
+            }
+        }
+    }
+
+    /// The stall after `parkAtAHeldFrontier`'s opening read, whose own wait (the first byte) is the first pair.
+    private var heldStallEvents: [GrowingFileEvent] { Array(readEvents.dropFirst(2)) }
+
+    func testAStallReportsWaitingOnceThroughRechecksAndResumedOnceWhenBytesArrive() throws {
+        let parked = try parkAtAHeldFrontier()
+        let parkedAt = parked.clock.now
+        XCTAssertTrue(waitUntil { self.heldStallEvents.count == 1 }, "reported when the read parked")
+        XCTAssertEqual(heldStallEvents, [.readWaiting(since: parkedAt)])
+
+        let parks = parked.source.parkCount
+        parked.clock.advance(by: GrowingFileByteSource.recheckSeconds)
+        XCTAssertTrue(waitUntil { parked.source.parkCount > parks }, "the recheck parked it again")
+        XCTAssertEqual(heldStallEvents, [.readWaiting(since: parkedAt)], "a recheck is the same stall")
+
+        parked.server.releaseHeldBody(forRangeStartingAt: 0)
+        XCTAssertTrue(parked.read.finished(within: 20))
+        XCTAssertEqual(heldStallEvents, [.readWaiting(since: parkedAt), .readResumed])
+    }
+
+    func testAReadServedFromTheFileReportsNoWait() throws {
+        let body = makeBody(64 * 1024)
+        let source = makeSource(try startServer(body: body).url, clock: ManualGrowingFileClock())
+        XCTAssertEqual(try read(source, 1000), body.prefix(1000))
+        let opening = readEvents
+        try source.seek(to: 0)
+        XCTAssertEqual(try read(source, 10), body.prefix(10), "served from the file on disk")
+        XCTAssertEqual(readEvents, opening)
+    }
+
+    func testACancelledStallStillReportsResumed() throws {
+        let parked = try parkAtAHeldFrontier()
+        XCTAssertTrue(waitUntil { self.heldStallEvents.count == 1 })
+        parked.source.cancel()
+        XCTAssertTrue(parked.read.finished(within: 20))
+        XCTAssertEqual(heldStallEvents.last, .readResumed)
+        XCTAssertEqual(heldStallEvents.count, 2)
+    }
+
+    func testAHandlerMayReadTheSnapshotFromTheReadingThread() throws {
+        let body = makeBody(64 * 1024)
+        let server = try startServer(body: body)
+        server.heldBodyAfterBytesForRangeStartingAt = [0: 1000]
+        let seen = EventRecorder()
+        let box = SourceBox()
+        let source = GrowingFileByteSource(
+            url: server.url, authHeaders: [:], cacheKey: nil, connectionPolicy: nil, readAhead: nil,
+            store: makeStore(), session: GrowingFileByteSourceTests.testSession, clock: ManualGrowingFileClock(),
+            pathMonitor: GrowingFilePathMonitor(), unknownLengthWindow: GrowingFileDownload.unknownLengthWindowBytes,
+            onEvent: { event in
+                _ = box.source?.snapshot
+                seen.append(event)
+            }
+        )
+        box.source = source
+        sources.append(source)
+        XCTAssertEqual(try read(source, 1000), body.prefix(1000))
+        let pending = readAsync(source, 1)
+        XCTAssertTrue(waitUntil { seen.events.filter { $0 == .readWaiting(since: 1000) }.count == 2 }, "the handler returned after reading the snapshot")
+        server.releaseHeldBody(forRangeStartingAt: 0)
+        XCTAssertTrue(pending.finished(within: 20))
+    }
+
+    private final class SourceBox: @unchecked Sendable {
+        var source: GrowingFileByteSource?
+    }
+
     struct ParkedRead {
         let body: Data
         let server: LoopbackMediaServer

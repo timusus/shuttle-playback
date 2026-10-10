@@ -40,7 +40,9 @@ import PlaybackDecode
 ///   `bytes */N`, or a range clamped to the last byte) is a zero-length open, as in media3: the
 ///   length is learned and the read is at its end (``GrowingFileDownload/totalEndingAt(_:status:contentRange:)``).
 /// - ``snapshot`` is the only read surface for anyone but the decoder; ``GrowingFileEvent``s
-///   go to `onEvent`, on the session's delegate queue or the decoder's thread.
+///   go to `onEvent`, on the session's delegate queue or the decoder's thread. A read that
+///   parks for bytes reports ``GrowingFileEvent/readWaiting(since:)`` and, when it ends,
+///   ``GrowingFileEvent/readResumed``, both on the decoder's thread outside the lock.
 ///
 /// Every rule above is ``GrowingFileDownload``'s, a state machine with no lock, task, file or
 /// clock. This class is its adapter: it feeds the machine the decoder's calls, the session's
@@ -265,6 +267,13 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
 
     public func read(into buffer: UnsafeMutableRawPointer, maxLength: Int) throws -> Int {
         guard maxLength > 0 else { return 0 }
+        var announcedWait = false
+        // After the lock is released, so a handler may read the snapshot or call back in.
+        defer { if announcedWait { onEvent?(.readResumed) } }
+        return try readLocked(into: buffer, maxLength: maxLength, announcedWait: &announcedWait)
+    }
+
+    private func readLocked(into buffer: UnsafeMutableRawPointer, maxLength: Int, announcedWait: inout Bool) throws -> Int {
         condition.lock()
         defer { condition.unlock() }
         defer { machine.endRead() }
@@ -288,6 +297,12 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
                 if let landed { performUnlocked([Deferred.emit(.seekLanded(seekGeneration: landed))]) }
                 return 0
             case .park:
+                if !announcedWait, let since = machine.readWaitingSince {
+                    announcedWait = true
+                    performUnlocked([Deferred.emit(.readWaiting(since: since))])
+                    // Bytes may have landed while the lock was down, and their wake with it.
+                    continue
+                }
                 condition.wait()
             case .again:
                 continue
