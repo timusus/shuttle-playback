@@ -23,7 +23,8 @@ is never capped. Nil (the default) and cheap paths download whole.
 - **Hysteresis**, as in media3's `DefaultLoadControl`: pause at the read-ahead, resume at half of it.
 - **The resume is a fresh attempt**: the retry's short response wait, and a link window that starts
   when it goes out, not at the last byte before the pause. A paused source's seek-wait rule keeps
-  the download rate measured before the pause until the resumed request delivers.
+  the download rate measured before the pause until the resumed request delivers. The join starts
+  64 KiB back and is overlap-checked (ADR-0016).
 - **Cost, not change.** The path's `isExpensive` and `isConstrained` set the cap; a change in cost
   alone reopens nothing, and a move to a cheap path lifts a pause at once.
 - **Only a host that answered `206` is capped**: a `200`, even to `bytes=0-`, would answer a resume

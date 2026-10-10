@@ -33,9 +33,12 @@ restart a live body learns it through one optional requirement, `streamIsLive()`
 or follows a path change opens a new request with no `Range` and no `If-Range`, spends the same retry
 budget, and keeps ADR-0004's single recovery layer. The new body's first byte takes the offset after
 the last byte received (`base = frontier`), so the reader's position stays monotonic and nothing is
-discarded. The decoder resyncs on the frame boundary (ADR-0011's junk resync); a format that cannot
-resync mid-stream (Ogg without its headers) fails at the join and the host sees a decode error.
+discarded. The decoder resyncs on the next MP3 frame (ADR-0011's bounded MP3 resync); ADTS/AAC and Ogg do not
+resync mid-stream and fail at the join, and the host sees a decode error.
 There is no overlap check (ADR-0016): live bytes at the join do not exist twice.
+
+**Never capped.** A live request has no `Range`, so it is answered `200`; ADR-0013's read-ahead cap
+applies only after a `206` and never reaches a live stream.
 
 **Bounded session file.** Live bytes are never promoted to the cache. The window of ADR-0014 applies
 but is lowered for live to `GrowingFileDownload.liveWindowBytes` (4 MiB, about 4 minutes of 128 kbps), since there

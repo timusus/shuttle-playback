@@ -1,6 +1,6 @@
 # ADR-0004: One recovery layer, in the byte source
 
-Status: Accepted; a join is checked by a 64 KiB overlap per 0016; a live stream restarts, not resumes, per 0017
+Status: Accepted, amended by 0016, 0017
 Date: 2026-10-07
 
 ## Context
@@ -27,7 +27,7 @@ frontier as after any drop. The signal is one `NWPathMonitor` shared by every so
 - Keep a second recovery rule in the host: it raced the source's retry.
 - Restart on every drop: refetches the unplayed remainder.
 - Compare a 64 KiB overlap of the old and new bytes: more code than the restart path it would
-  replace.
+  replace. ADR-0016 adopts the 64 KiB overlap for joins.
 
 ## Consequences
 

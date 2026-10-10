@@ -1,6 +1,6 @@
 # ADR-0014: One sparse file per source session
 
-Status: Accepted, amends ADR-0003; joins are overlap-checked per 0016; the unknown-length window is lower for a live stream per 0017
+Status: Accepted, amends ADR-0003; amended by 0016, 0017
 Date: 2026-10-10
 
 ## Context
