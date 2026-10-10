@@ -40,7 +40,9 @@ issue number under `XCTExpectFailure`: a different value, or a finding that stop
 A resumed decode must match the clean one per second outside the warm-ups. Bytes before the first audio
 are budgeted under every fault combination. A seek to the end lands where the clean decode ends, with an
 empty window. VBR MP3 seeks are covered by `testXingVBRMP3SeeksExactlyNearAndCheaplyFar`, and a seek into
-the `stitch_*_64k.mp3` resampled half by `testSeekIntoTheResampledHalfLandsWhereItSays`. Fixture licences
+the `stitch_*_64k.mp3` resampled half by `testSeekIntoTheResampledHalfLandsWhereItSays`. `ChirpPrimingTests` checks
+priming, end padding and seeks sample-exactly on AAC, MP3 and Opus by cross-correlating the decode with
+the formula of a 2 s chirp (`SeekFixtures/chirp-*`), with no reference decoder. Fixture licences
 are in `Tests/PlaybackDecodeConformanceTests/Fixtures/NOTICE`.
 `CONFORMANCE_FIXTURE=<file name>` runs one fixture; `CONFORMANCE_PLANT_DEFECT=1` drops a frame from
 the clean decode to prove the suite fails.

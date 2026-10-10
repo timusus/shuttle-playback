@@ -227,3 +227,12 @@ $FF -f lavfi -i "aevalsrc=0.15*sin(2*PI*220*t)|0.15*sin(2*PI*330*t)|0.15*sin(2*P
 # 192 kHz / 24-bit stereo FLAC, 0.5 s (a sine does not compress, so longer would pass 300 KB).
 $FF -f lavfi -i "aevalsrc=0.7*sin(2*PI*440*t)|0.7*sin(2*PI*660*t):s=192000:d=0.5" \
     -c:a flac -sample_fmt s32 -bits_per_raw_sample 24 -map_metadata -1 "$OUT/flac_192k_24bit.flac"
+
+# ChirpPrimingTests only: 2 s of a linear chirp, 300 Hz rising 1350 Hz/s, mono,
+# x(n) = 0.5*sin(2*pi*(300t + 675t^2)). Its phase differs at every sample, so cross-correlation
+# with the formula finds the source frame a decoded window starts at, whatever the codec did to
+# the waveform. Opus is not byte-reproducible (random stream serial).
+chirp() { echo "aevalsrc=0.5*sin(2*PI*(300*t+675*t*t)):s=$1:d=2"; }
+$FF -f lavfi -i "$(chirp 44100)" -c:a aac -b:a 128k -map_metadata -1 ../SeekFixtures/chirp-44k-aac.m4a
+$FF -f lavfi -i "$(chirp 44100)" -c:a libmp3lame -b:a 128k -id3v2_version 0 -write_id3v1 0 ../SeekFixtures/chirp-44k.mp3
+$FF -f lavfi -i "$(chirp 48000)" -c:a libopus -b:a 64k -map_metadata -1 ../SeekFixtures/chirp-48k.opus
