@@ -26,6 +26,8 @@ compile_failures() {
 test_failures() {
     {
         plain "$1" | sed -nE "s|^Test Case '-\[([^ ]+) ([^]]+)\]' failed.*|\1/\2|p"
+        # --parallel prints no per-case verdict, only each assertion as `error: -[Module.Class test] : message`.
+        plain "$1" | sed -nE 's|^.*: error: -\[([^ ]+) ([^]]+)\] : .*|\1/\2|p'
         # Drop the run summary and the per-case count of a parameterized test: both vary between trees.
         plain "$1" | sed -E -e '/✘ Test run with /d' -e 's|^.*✘ Test (.+) failed after .*|\1|p' -e 'd' \
             | sed -E 's/ with [0-9]+ test cases?$//'
@@ -55,8 +57,8 @@ run_phase() {
     tail -n 15 "$log" | sed 's/^/  | /' >&2
 }
 
-run_phase build compile_failures swift build --build-tests
-run_phase test test_failures swift test --skip-build
+run_phase build compile_failures swift build --build-tests -j 5
+run_phase test test_failures swift test --skip-build --parallel --num-workers 4
 
 echo "verify: == end"
 exit "$failed"
