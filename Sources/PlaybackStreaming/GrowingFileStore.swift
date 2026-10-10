@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import OSLog
 
-private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback", category: "download")
+private let downloadLog = Logger(subsystem: "com.simplecityapps.AudioPlaybackKit", category: "download")
 
 /// **Where the growing files live.**
 ///

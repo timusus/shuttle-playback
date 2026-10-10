@@ -155,7 +155,7 @@ final class LargeMetadataTests: XCTestCase {
         guard !switches.contains(.ioErrorOncePerPosition) else { return }
         // A seek of the 2 MB-PICTURE FLAC with no length fails; the open and decode above do not.
         if seekFailsWithUnknownLength, switches.contains(.unknownLength) {
-            XCTExpectFailure("\(label): known decoder bug, https://github.com/timusus/shuttle-playback/issues/55") {
+            XCTExpectFailure("\(label): known decoder bug, https://github.com/timusus/AudioPlaybackKit/issues/55") {
                 seekToTheMiddle(large: large, reference: reference, label: label, switches: switches)
             }
         } else {

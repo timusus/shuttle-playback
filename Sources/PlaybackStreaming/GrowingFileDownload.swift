@@ -2,7 +2,7 @@ import Foundation
 import OSLog
 import PlaybackDecode
 
-private let downloadLog = Logger(subsystem: "com.simplecityapps.shuttle-playback", category: "download")
+private let downloadLog = Logger(subsystem: "com.simplecityapps.AudioPlaybackKit", category: "download")
 
 /// **The growing-file source's transaction lifecycle, as one state machine**: ADR-0004's single
 /// recovery layer as one module.

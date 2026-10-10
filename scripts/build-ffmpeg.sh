@@ -39,7 +39,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="${OUT_DIR:-$REPO_DIR/Frameworks}"
 HEADERS_DIR="$REPO_DIR/Sources/CFFmpeg/include"
 
-BUILD_ROOT="${BUILD_ROOT:-${TMPDIR:-/tmp}/shuttle-playback-ffmpeg}"
+BUILD_ROOT="${BUILD_ROOT:-${TMPDIR:-/tmp}/AudioPlaybackKit-ffmpeg}"
 FFMPEG_TAG="${FFMPEG_TAG:-n7.1}"
 DEPLOYMENT_TARGET="${DEPLOYMENT_TARGET:-17.0}"
 MACOS_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET:-14.0}"
