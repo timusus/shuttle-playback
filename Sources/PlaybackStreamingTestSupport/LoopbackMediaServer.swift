@@ -143,6 +143,8 @@ public final class LoopbackMediaServer: @unchecked Sendable {
         lock.lock()
         let open = connections
         connections = []
+        // Held sends capture self; dropping them here lets the server deallocate.
+        _heldOffsetZeroSends = []
         lock.unlock()
         for connection in open { connection.cancel() }
     }

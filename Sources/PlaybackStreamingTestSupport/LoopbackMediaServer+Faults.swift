@@ -202,7 +202,8 @@ extension LoopbackMediaServer {
     /// Answer every request `200` with the whole body, no `Content-Length` and no range support
     /// (any `Range` is ignored, no `Accept-Ranges`), ending when the connection closes: a
     /// transcoding origin, whose length nobody knows. Composes with ``stallsAfterBodyBytes``
-    /// for one that goes quiet before it ends.
+    /// for one that goes quiet before it ends; ``usesChunkedEncoding``, ``gzipsBody`` and
+    /// ``answers416AtOrAfterEnd`` still apply on top, the 416 answering a range past the end.
     public var streamsWithoutLength: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _streamsWithoutLength }
         set { lock.lock(); _streamsWithoutLength = newValue; lock.unlock() }

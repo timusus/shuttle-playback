@@ -15,6 +15,16 @@ final class LoopbackFaultKnobTests: XCTestCase {
         super.tearDown()
     }
 
+    /// Generous by default: a condition that holds returns at once, and the machine may be loaded.
+    private func waitUntil(_ timeout: TimeInterval = 20, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return condition()
+    }
+
     private func start(bodyBytes: Int) throws -> (LoopbackMediaServer, Data) {
         let body = Data((0..<bodyBytes).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) })
         let started = try LoopbackMediaServer(body: body, mimeType: "audio/mpeg")
@@ -236,7 +246,7 @@ final class LoopbackFaultKnobTests: XCTestCase {
         origin.holdsOffsetZero = true
         let held = Task { await fetch(origin.url, range: "bytes=0-") }
         // The request is logged on arrival, before the response is held back.
-        while origin.requestedRanges.isEmpty { await Task.yield() }
+        XCTAssertTrue(waitUntil { !origin.requestedRanges.isEmpty }, "the held request never reached the origin")
 
         let other = await fetch(origin.url, range: "bytes=4096-")
         XCTAssertEqual(other.data, body.suffix(from: 4096), "another offset waited behind the held one")

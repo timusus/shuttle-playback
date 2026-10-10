@@ -219,7 +219,7 @@ extension GrowingFileByteSourceTests {
 
         // The source accepts the seek and the read later fails with a transport idle error, so
         // the player sees a failure where it should see an unsupported seek.
-        try XCTExpectFailure("a seek past the frontier of a range-ignoring transcode is accepted, not refused as unseekable") {
+        try XCTExpectFailure("#95: a seek past the frontier of a range-ignoring transcode is accepted, not refused as unseekable") {
             XCTAssertThrowsError(try source.seek(to: 150_000)) {
                 guard case .unseekable? = $0 as? StreamByteReaderError else { return XCTFail("\($0)") }
             }
