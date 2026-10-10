@@ -6,15 +6,16 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)
 
 Decode and stream the audio AVPlayer won't, as PCM you control. A Swift package over FFmpeg for iOS and macOS.
+Used in production by Shuttle Podcasts and Shuttle2.
 
 ## Why
 
 AVPlayer is the right choice for most audio. It falls short in four places:
 
-- **Formats.** No Ogg Vorbis, Opus or FLAC-in-Ogg, and no Matroska/WebM audio.
-- **Awkward files.** An MP4 or M4A with its `moov` index at the end cannot start until fully downloaded. Here it plays from range requests.
+- **Formats.** No Ogg Vorbis, Ogg Opus or FLAC-in-Ogg, and no Matroska/WebM audio (such as Opus in WebM).
+- **Files whose index is stored at the end.** An MP4 or M4A like this cannot start until fully downloaded. Here it plays from range requests.
 - **PCM access.** Silence trimming, EQ or loudness need the decoded samples; AVPlayer does not hand them over.
-- **Flaky networks.** HTTP loading stalls and recovers poorly after a dropped connection or a network change.
+- **Flaky networks (PlaybackStreaming).** Range-request resume, stall detection and retry after a dropped connection.
 
 ## What's inside
 
@@ -29,10 +30,9 @@ Link only the products you import.
 
 ## Capabilities
 
-- **Formats:** MP3, AAC (ADTS and LATM), MP4/M4A (AAC, ALAC), Ogg and Matroska/WebM (Opus, Vorbis), FLAC, PCM WAV/AIFF.
+- **Formats:** MP3, AAC, M4A/ALAC, Ogg, Matroska/WebM, FLAC, WAV/AIFF. [Full list](docs/usage.md#supported-formats).
 - **Sample-accurate seek**, and cancellation of a blocked open, read or seek.
 - **Range requests and a sparse on-disk cache** so bytes already fetched are not downloaded again after a seek or restart.
-- **Stall detection with retry and resume** after a dropped connection.
 - **Fault-injecting loopback server** (drops, stalls, redirects, ignored `Range`) for deterministic tests.
 
 ## Install
@@ -44,8 +44,11 @@ Link only the products you import.
 ```swift
 .target(name: "MyApp", dependencies: [
     .product(name: "PlaybackDecode", package: "AudioPlaybackKit"),
+    .product(name: "PlaybackStreaming", package: "AudioPlaybackKit"),   // only to play URLs
 ])
 ```
+
+Requires iOS 17 or macOS 14, Apple silicon. The API may change before 1.0; a public API change is a minor version bump until then.
 
 ## Example
 
@@ -73,19 +76,9 @@ Roadmap: a render layer that feeds the PCM to `AVAudioEngine`.
 - [Usage](docs/usage.md): decode a file, stream a URL, seek, cancel, show buffering state.
 - [Architecture](docs/architecture.md): how the decoder and the download source work.
 - [Decisions](docs/decisions/README.md): why it is built this way.
-- [Contributing](docs/contributing.md): tests, rebuilding FFmpeg, releasing.
-
-Requires iOS 17 or macOS 14, Apple silicon. The API may change before 1.0; a public API change is a minor version bump until then.
-Used in production by Shuttle Podcasts and Shuttle2.
+- [Contributing](CONTRIBUTING.md) and [docs/contributing.md](docs/contributing.md): tests, rebuilding FFmpeg, releasing.
 
 ## Licence
 
-The package is [MIT](LICENSE).
-
-FFmpeg is LGPL-2.1 and ships as its own dynamic `FFmpeg.framework`, which Xcode embeds in your app, so a
-user can replace it with a modified build (LGPL-2.1 section 6; [ffmpeg.org/legal.html](https://ffmpeg.org/legal.html)).
-Its licence text ships inside the framework. `scripts/release.sh` writes the exact FFmpeg source,
-patches and configure line for each release to `dist/ffmpeg-X.Y.Z-source.tar.xz`, attached to the GitHub
-release. A closed-source app shipping it also owes an FFmpeg notice in its About screen and an EULA
-that allows reverse engineering to debug such modifications (not Apple's standard EULA); both are the
-app's work ([ADR-0001](docs/decisions/0001-ffmpeg-for-demux-and-decode.md)).
+The package is [MIT](LICENSE). FFmpeg is LGPL-2.1, shipped as a dynamic framework; what an app must do is in
+[ADR-0001](docs/decisions/0001-ffmpeg-for-demux-and-decode.md).

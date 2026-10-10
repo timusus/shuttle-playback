@@ -25,6 +25,12 @@ own C code against libavformat (`#include <libavformat/avformat.h>` or `import C
 must link exactly one FFmpeg. An app that reaches PlaybackDecode only through its own framework or
 extension target must still embed and sign `FFmpeg.framework` in the app itself.
 
+## Supported formats
+
+MP3, AAC (ADTS and LATM), MP4/M4A (AAC, ALAC), Ogg (Vorbis, Opus, FLAC), Matroska/WebM (Opus, Vorbis), FLAC, PCM WAV/AIFF.
+
+Sample-accurate seek can land early on files of unknown length (known-issue fixtures #61 and #62).
+
 ## Decode a file
 
 ```swift
