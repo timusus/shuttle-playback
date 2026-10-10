@@ -26,10 +26,17 @@ extension GrowingFileByteSourceTests {
         XCTAssertTrue(waitUntil { source.snapshot.isComplete })
         XCTAssertEqual(source.snapshot.transactionGeneration, 1)
         XCTAssertNotNil(source.snapshot.downloadBytesPerSecond)
-        XCTAssertTrue(events.events.contains { if case .download(_, _, false) = $0 { return true } else { return false } })
+        // The read events come on the decoder's thread and the download's on the delegate queue,
+        // unordered between the two: the last read's `.readResumed` may follow the completion.
+        let downloads = { self.events.events.filter { if case .download = $0 { return true } else { return false } } }
+        XCTAssertTrue(downloads().contains { if case .download(_, _, false) = $0 { return true } else { return false } })
         XCTAssertTrue(waitUntil {
-            if case .download(Int64(body.count), _, true) = self.events.events.last { return true } else { return false }
-        }, "the last event is the completion")
+            if case .download(Int64(body.count), _, true) = downloads().last { return true } else { return false }
+        }, "the last download event is the completion")
+        let reads = events.events.filter {
+            switch $0 { case .readWaiting, .readResumed: return true; default: return false }
+        }
+        XCTAssertEqual(reads.last, .readResumed, "every wait the read announced ended")
     }
 
     /// A drop mid-body keeps the file: the retry asks for the frontier and appends to it, so

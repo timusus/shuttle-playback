@@ -81,5 +81,6 @@ public enum GrowingFileEvent: Equatable, Sendable {
     /// Once per stall: retries and rechecks inside it do not repeat it.
     case readWaiting(since: TimeInterval)
     /// That read ended: served, failed, cancelled or interrupted. Always follows a ``readWaiting(since:)``.
+    /// Sent on the decoder's thread, so it may arrive after a `download` event sent later on the delegate queue.
     case readResumed
 }
