@@ -1,6 +1,6 @@
 # ADR-0004: One recovery layer, in the byte source
 
-Status: Accepted
+Status: Accepted; a join is checked by a 64 KiB overlap per 0016; a live stream restarts, not resumes, per 0017
 Date: 2026-10-07
 
 ## Context
