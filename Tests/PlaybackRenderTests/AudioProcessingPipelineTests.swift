@@ -79,7 +79,7 @@ final class AudioProcessingPipelineTests: XCTestCase {
     }
 
     func testInactiveProcessorInTheMiddleIsSkipped() throws {
-        let middle = DuplicatingProcessor()
+        let middle = DropRangesProcessor([0..<2])
         middle.enabled = false
         let pipeline = try started([TestProcessor(), middle, MonoProcessor()])
         pipeline.queueInput(chunk([1, 3, 5, 7], tags: [tag(0, 0, 2)]))
@@ -124,10 +124,10 @@ final class AudioProcessingPipelineTests: XCTestCase {
     }
 
     func testStagesWithSmallOutputLimitsDrainAndFeedCorrectly() throws {
-        let first = DuplicatingProcessor()
+        let first = GainProcessor()
         first.maxOutputSamples = 8
         let second = TestProcessor()
-        let third = DuplicatingProcessor()
+        let third = GainProcessor()
         third.maxOutputSamples = 12
         let fourth = TestProcessor()
         fourth.maxOutputSamples = 160
@@ -147,9 +147,9 @@ final class AudioProcessingPipelineTests: XCTestCase {
                 XCTAssertEqual(out.tags.reduce(0) { $0 + $1.frameCount }, out.frameCount)
             }
         }
-        XCTAssertEqual(output.count, 4 * samples.count)
-        XCTAssertEqual(Array(output[0..<13]), [24, 24, 24, 24, 36, 36, 36, 36, 6, 6, 6, 6, 0])
-        XCTAssertEqual(tagged, Int64(output.count / 2))
+        XCTAssertEqual(output.count, 2000)
+        XCTAssertEqual(Array(output[0..<4]), [96, 144, 24, 0])
+        XCTAssertEqual(tagged, 1000)
     }
 
     func testResetMakesPipelineNotOperational() throws {
@@ -225,12 +225,89 @@ final class AudioProcessingPipelineTests: XCTestCase {
         XCTAssertEqual(pipeline.getOutput()?.tags, [tag(0, 5, 2)])
     }
 
-    func testAddedFramesAreCreditedToWhereTheInputEnded() throws {
-        let pipeline = try started([DuplicatingProcessor()], format: mono)
-        pipeline.queueInput(chunk([1, 2], format: mono, tags: [tag(0, 10, 2)]))
+    func testDroppedTagLeavesNoZeroFrameTagWhenItsItemPlaysLaterInTheChunk() throws {
+        let pipeline = try started([DropRangesProcessor([0..<2])], format: mono)
+        pipeline.queueInput(chunk([0, 1, 2, 3], format: mono, tags: [tag(1, 0, 2), tag(1, 10, 2)]))
+        XCTAssertEqual(pipeline.getOutput()?.tags, [tag(1, 10, 2)])
+    }
+
+    func testDroppedTagLeavesNoZeroFrameTagWhenItsItemPlayedEarlierInTheChunk() throws {
+        let pipeline = try started([DropRangesProcessor([2..<4])], format: mono)
+        pipeline.queueInput(chunk((0..<6).map(Float.init), format: mono, tags: [tag(0, 0, 2), tag(0, 10, 2), tag(0, 20, 2)]))
+        XCTAssertEqual(pipeline.getOutput()?.tags, [tag(0, 0, 2), tag(0, 20, 2)])
+    }
+
+    func testDropStartingInOneChunkEndsInTheNext() throws {
+        let pipeline = try started([DropRangesProcessor([2..<5])], format: mono)
+        pipeline.queueInput(chunk([0, 1, 2, 3], format: mono, tags: [tag(0, 0, 4)]))
+        let first = try XCTUnwrap(pipeline.getOutput())
+        XCTAssertEqual(first.samples, [0, 1])
+        XCTAssertEqual(first.tags, [tag(0, 0, 2)])
+        pipeline.queueInput(chunk([4, 5, 6], format: mono, tags: [tag(1, 0, 3)]))
+        let second = try XCTUnwrap(pipeline.getOutput())
+        XCTAssertEqual(second.samples, [5, 6])
+        XCTAssertEqual(second.tags, [tag(1, 1, 2)])
+    }
+
+    func testDelayedStageMapsItsTailAtDrain() throws {
+        let pipeline = try started([DelayProcessor(frames: 2), DropRangesProcessor([3..<4])], format: mono)
+        var played: [[Int64]] = []
+        func pull() throws {
+            let output = try XCTUnwrap(pipeline.getOutput())
+            var frame = 0
+            for tag in output.tags {
+                for offset in 0..<tag.frameCount {
+                    played.append([Int64(output.samples[frame]), Int64(tag.item), tag.mediaStartFrame + offset])
+                    frame += 1
+                }
+            }
+            XCTAssertEqual(frame, output.samples.count)
+        }
+        pipeline.queueInput(chunk([10, 11, 12], format: mono, tags: [tag(0, 100, 3)]))
+        try pull()
+        pipeline.queueInput(chunk([13, 14], format: mono, tags: [tag(1, 0, 2)]))
+        try pull()
+        XCTAssertEqual(played, [[10, 0, 100], [11, 0, 101], [12, 0, 102]])
+        pipeline.queueEndOfStream()
+        try pull()
+        XCTAssertTrue(pipeline.isEnded)
+        // Sample, item, media frame: 13 was dropped after the delay.
+        XCTAssertEqual(played, [[10, 0, 100], [11, 0, 101], [12, 0, 102], [14, 1, 1]])
+    }
+
+    func testEndOfStreamWithNoActiveStageEndsOnceInputIsReadOut() throws {
+        let pipeline = try started([], format: mono)
+        let input = chunk([1, 2], format: mono, tags: [tag(0, 0, 2)])
+        pipeline.queueInput(input)
+        pipeline.queueEndOfStream()
+        XCTAssertFalse(pipeline.isEnded)
         let output = try XCTUnwrap(pipeline.getOutput())
-        XCTAssertEqual(output.samples.count, 4)
-        XCTAssertEqual(output.tags, [tag(0, 10, 4)])
+        XCTAssertEqual(output.samples, [1, 2])
+        XCTAssertEqual(output.tags, [tag(0, 0, 2)])
+        XCTAssertTrue(pipeline.isEnded)
+    }
+
+    func testFailedConfigureLeavesEveryStageOnItsOldConfiguration() throws {
+        let first = TestProcessor()
+        let pipeline = try started([first, FixedRateProcessor(sampleRate: 1000)], format: mono)
+        let higher = PCMFormat(sampleRate: 2000, channelCount: 1)
+        XCTAssertThrowsError(try pipeline.configure(higher)) { XCTAssertTrue($0 is UnsupportedRate) }
+        XCTAssertEqual(first.stagedInput, mono)
+        pipeline.flush()
+        XCTAssertEqual(first.appliedInput, mono)
+        pipeline.queueInput(chunk([1, 2], format: mono, tags: [tag(0, 0, 2)]))
+        XCTAssertEqual(pipeline.getOutput()?.tags, [tag(0, 0, 2)])
+    }
+
+    func testResamplingStageLeavesEveryStageOnItsOldConfiguration() throws {
+        let first = TestProcessor()
+        let resampler = RateDoublingProcessor()
+        resampler.enabled = false
+        let pipeline = try started([first, resampler], format: mono)
+        resampler.enabled = true
+        XCTAssertThrowsError(try pipeline.configure(PCMFormat(sampleRate: 2000, channelCount: 1)))
+        XCTAssertEqual(first.stagedInput, mono)
+        XCTAssertEqual(resampler.stagedInput, mono)
     }
 
     func testChannelMappingChangesFormatAndKeepsMediaFrames() throws {

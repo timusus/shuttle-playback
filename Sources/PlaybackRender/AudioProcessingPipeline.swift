@@ -9,8 +9,6 @@ final class AudioProcessingPipeline {
         let outputFormat: PCMFormat
         /// Input tags not yet matched to output, with whether any of their frames came out.
         var pending: [(tag: SegmentTag, emitted: Bool)] = []
-        /// Where the last consumed tag ended, for frames a stage adds beyond its input.
-        var lastEnd: SegmentTag?
         var endQueued = false
 
         init(_ processor: AudioProcessor, outputFormat: PCMFormat) {
@@ -20,30 +18,51 @@ final class AudioProcessingPipeline {
     }
 
     private let processors: [AudioProcessor]
+    /// The input each processor last accepted, to stage it again when a later one rejects a format.
+    private var stagedInputs: [PCMFormat?]
     private var pendingActive: [(processor: AudioProcessor, output: PCMFormat)] = []
     private var pendingInput: PCMFormat?
     private var inputFormat: PCMFormat?
     private var stages: [Stage] = []
+    /// Input held with no active stage, handed over unchanged.
+    private var passThrough: [TaggedChunk] = []
+    private var inputEnded = false
 
     init(_ processors: [AudioProcessor]) {
         self.processors = processors
+        stagedInputs = Array(repeating: nil, count: processors.count)
     }
 
     /// Stages every processor for `input` and returns the chain's output format. Nothing changes
-    /// until `flush`, so audio already queued keeps its old format.
+    /// until `flush`, so audio already queued keeps its old format. On a throw nothing is staged.
     @discardableResult
     func configure(_ input: PCMFormat) throws -> PCMFormat {
         var active: [(AudioProcessor, PCMFormat)] = []
+        var inputs: [PCMFormat] = []
         var format = input
-        for processor in processors {
-            let output = try processor.configure(format)
-            guard processor.isActive else { continue }
-            guard output.sampleRate == format.sampleRate else {
-                throw AudioProcessingError.sampleRateChanged(from: format, to: output)
+        do {
+            for processor in processors {
+                inputs.append(format)
+                let output = try processor.configure(format)
+                guard processor.isActive else { continue }
+                guard output.sampleRate == format.sampleRate else {
+                    throw AudioProcessingError.sampleRateChanged(from: format, to: output)
+                }
+                active.append((processor, output))
+                format = output
             }
-            active.append((processor, output))
-            format = output
+        } catch {
+            // Processors only stage a format, so staging the old one again undoes it.
+            for (processor, old) in zip(processors, stagedInputs).prefix(inputs.count) {
+                if let old {
+                    _ = try? processor.configure(old)
+                } else {
+                    processor.reset()
+                }
+            }
+            throw error
         }
+        stagedInputs = inputs
         pendingActive = active
         pendingInput = input
         return format
@@ -54,19 +73,27 @@ final class AudioProcessingPipeline {
         inputFormat = pendingInput
         stages = pendingActive.map { Stage($0.processor, outputFormat: $0.output) }
         stages.forEach { $0.processor.flush() }
+        passThrough = []
+        inputEnded = false
     }
 
-    /// False with no active stage: the caller then writes input straight to the output.
+    /// False with no active stage: input then comes out of `getOutput` unchanged.
     var isOperational: Bool { !stages.isEmpty }
 
     func queueInput(_ chunk: TaggedChunk) {
-        guard let first = stages.first else { return }
         precondition(chunk.format == inputFormat, "input format changed without configure and flush")
+        guard let first = stages.first else {
+            passThrough.append(chunk)
+            return
+        }
         accept(chunk, into: first)
     }
 
     /// Runs every stage over what the one before produced; nil when nothing came out, not even a tag.
     func getOutput() -> TaggedChunk? {
+        guard !stages.isEmpty else {
+            return passThrough.isEmpty ? nil : passThrough.removeFirst()
+        }
         var carried: TaggedChunk?
         for (index, stage) in stages.enumerated() {
             if let carried, index > 0 { accept(carried, into: stage) }
@@ -81,19 +108,26 @@ final class AudioProcessingPipeline {
     }
 
     func queueEndOfStream() {
+        inputEnded = true
         guard let first = stages.first, !first.endQueued else { return }
         first.endQueued = true
         first.processor.queueEndOfStream()
     }
 
-    var isEnded: Bool { stages.last?.processor.isEnded ?? false }
+    var isEnded: Bool {
+        guard let last = stages.last else { return inputEnded && passThrough.isEmpty }
+        return last.processor.isEnded
+    }
 
     func reset() {
         processors.forEach { $0.reset() }
+        stagedInputs = Array(repeating: nil, count: processors.count)
         pendingActive = []
         pendingInput = nil
         inputFormat = nil
         stages = []
+        passThrough = []
+        inputEnded = false
     }
 
     private func accept(_ chunk: TaggedChunk, into stage: Stage) {
@@ -105,14 +139,18 @@ final class AudioProcessingPipeline {
         let output = stage.processor.getOutput()
         let frames = Int64(output.samples.count / stage.outputFormat.channelCount)
         let tags = rewrite(stage, outputFrames: frames, dropped: output.dropped)
+        if stage.processor.isEnded {
+            precondition(stage.pending.isEmpty, "\(stage.processor) ended without handing over all its input")
+        }
         return TaggedChunk(samples: output.samples, format: stage.outputFormat, tags: tags)
     }
 
     /// Output frames map one to one, in order, onto the stage's input minus the dropped runs. A
     /// zero-frame tag passes through where it falls, and a tag dropped whole leaves one at its end
-    /// so its item is still reported crossed.
+    /// when its item has no frames in this output, so the item is still reported crossed.
     private func rewrite(_ stage: Stage, outputFrames: Int64, dropped: [DroppedFrames]) -> [SegmentTag] {
         var out: [SegmentTag] = []
+        var droppedWhole: Set<Int> = []
 
         func consume(_ count: Int64, keep: Bool) {
             var remaining = count
@@ -134,32 +172,30 @@ final class AudioProcessingPipeline {
                     stage.pending[0].tag = tag
                     return
                 }
-                let emitted = stage.pending[0].emitted
                 stage.pending.removeFirst()
-                stage.lastEnd = tag
-                if !emitted {
+                if !head.emitted, !(keep && taken > 0) {
+                    if head.tag.frameCount > 0 { droppedWhole.insert(out.count) }
                     out.append(SegmentTag(item: tag.item, mediaStartFrame: tag.mediaStartFrame, frameCount: 0))
                 }
             }
-            // Frames the stage added: credited to where the last input ended.
-            if keep, remaining > 0, stage.pending.isEmpty, let end = stage.lastEnd {
-                if let last = out.last, last.item == end.item, last.mediaStartFrame + last.frameCount == end.mediaStartFrame {
-                    out[out.count - 1].frameCount += remaining
-                } else {
-                    out.append(SegmentTag(item: end.item, mediaStartFrame: end.mediaStartFrame, frameCount: remaining))
-                }
-                stage.lastEnd?.mediaStartFrame += remaining
-            }
+            precondition(remaining == 0, "\(stage.processor) output or dropped more frames than its input")
         }
 
         var cursor: Int64 = 0
-        for drop in dropped.sorted(by: { $0.atOutputFrame < $1.atOutputFrame }) {
+        for drop in dropped {
             let at = Int64(drop.atOutputFrame)
+            precondition(at >= cursor && at <= outputFrames && drop.inputFrames >= 0,
+                         "\(stage.processor) reported a drop out of order or outside its output: \(drop)")
             consume(at - cursor, keep: true)
             cursor = at
             consume(drop.inputFrames, keep: false)
         }
         consume(outputFrames - cursor, keep: true)
-        return out
+
+        // An item with frames here is reported by them; one zero-frame tag per item otherwise.
+        var reported = Set(out.filter { $0.frameCount > 0 }.map(\.item))
+        return out.enumerated().compactMap { index, tag in
+            droppedWhole.contains(index) && !reported.insert(tag.item).inserted ? nil : tag
+        }
     }
 }

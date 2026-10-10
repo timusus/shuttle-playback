@@ -8,7 +8,7 @@ class TestProcessor: AudioProcessor {
     /// Samples handed over per `getOutput`, the rest stays held (media3's small-limit processors).
     var maxOutputSamples = Int.max
     private(set) var appliedInput: PCMFormat?
-    private var stagedInput: PCMFormat?
+    private(set) var stagedInput: PCMFormat?
     private var held: [Float] = []
     private var ended = false
     private var endQueued = false
@@ -46,7 +46,13 @@ class TestProcessor: AudioProcessor {
         return ProcessorOutput(samples: Array(held.prefix(count)), dropped: dropped)
     }
 
-    func queueEndOfStream() { endQueued = true; if held.isEmpty { ended = true } }
+    func queueEndOfStream() {
+        held += endOfStreamOutput()
+        endQueued = true
+        if held.isEmpty { ended = true }
+    }
+
+    func endOfStreamOutput() -> [Float] { [] }
     var isEnded: Bool { ended }
 
     func flush() {
@@ -67,9 +73,50 @@ class TestProcessor: AudioProcessor {
     func onFlush() {}
 }
 
-final class DuplicatingProcessor: TestProcessor {
+/// One to one, like ReplayGain.
+final class GainProcessor: TestProcessor {
     override func process(_ samples: [Float], format: PCMFormat) -> ProcessorOutput {
-        ProcessorOutput(samples: samples.flatMap { [$0, $0] })
+        ProcessorOutput(samples: samples.map { $0 * 2 })
+    }
+}
+
+/// Holds back the last `frames` input frames, like a lookahead limiter, and hands them over at end of stream.
+final class DelayProcessor: TestProcessor {
+    let frames: Int
+    private var line: [Float] = []
+
+    init(frames: Int) {
+        self.frames = frames
+    }
+
+    override func onFlush() { line = [] }
+
+    override func process(_ samples: [Float], format: PCMFormat) -> ProcessorOutput {
+        line += samples
+        let out = max(0, line.count - frames * format.channelCount)
+        defer { line.removeFirst(out) }
+        return ProcessorOutput(samples: Array(line.prefix(out)))
+    }
+
+    override func endOfStreamOutput() -> [Float] {
+        defer { line = [] }
+        return line
+    }
+}
+
+struct UnsupportedRate: Error {}
+
+/// Accepts only `sampleRate`, like a stage whose filter is designed for one rate.
+final class FixedRateProcessor: TestProcessor {
+    let sampleRate: Double
+
+    init(sampleRate: Double) {
+        self.sampleRate = sampleRate
+    }
+
+    override func configure(_ input: PCMFormat) throws -> PCMFormat {
+        guard input.sampleRate == sampleRate else { throw UnsupportedRate() }
+        return try super.configure(input)
     }
 }
 

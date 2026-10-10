@@ -10,6 +10,7 @@ struct DroppedFrames: Equatable, Sendable {
 
 struct ProcessorOutput: Sendable {
     var samples: [Float]
+    /// In output order.
     var dropped: [DroppedFrames]
 
     init(samples: [Float] = [], dropped: [DroppedFrames] = []) {
@@ -27,6 +28,9 @@ enum AudioProcessingError: Error, Equatable {
 /// modelled on media3 `AudioProcessor`. `configure` only stages a format; `flush` applies it, so a
 /// format change lands at a point the caller chooses, never mid-stream. Input is taken whole; a
 /// stage that holds audio back keeps it until a later `getOutput`, or `queueEndOfStream`.
+///
+/// Output is the input minus the dropped frames, in order, possibly delayed: a stage never adds
+/// frames. Between flushes, output plus dropped never exceeds input, and equals it once ended.
 protocol AudioProcessor: AnyObject {
     /// Stages `input` and returns the output format; with `isActive` false the stage is left out.
     func configure(_ input: PCMFormat) throws -> PCMFormat
