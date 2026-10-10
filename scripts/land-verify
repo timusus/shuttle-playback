@@ -57,8 +57,35 @@ run_phase() {
     tail -n 15 "$log" | sed 's/^/  | /' >&2
 }
 
-run_phase build compile_failures swift build --build-tests -j 5
-run_phase test test_failures swift test --skip-build --parallel --num-workers 4
+# base, bisect and confirm runs name the phases that failed; an empty list means all.
+phase_wanted() { [[ -z "${LAND_PHASES:-}" || " $LAND_PHASES " == *" $1 "* ]]; }
+
+# Fails the confirm run when a name matches no test, which would otherwise pass and clear a real failure.
+# shellcheck disable=SC2329 # called by name from run_phase
+run_confirm_tests() {
+    local filters=() name escaped
+    for name in $LAND_ONLY; do
+        escaped="$(sed -E 's/[][\.*^$+?(){}|]/\\&/g' <<<"$name")"
+        filters+=(--filter "^${escaped}\$")
+    done
+    local out
+    out="$(swift test --skip-build --parallel --num-workers 4 "${filters[@]}" 2>&1)" || { echo "$out"; return 1; }
+    echo "$out"
+    # --parallel prints no totals; an unmatched filter only warns.
+    if grep -q "No matching test cases were run" <<<"$out"; then
+        echo "no test matched: $LAND_ONLY"
+        return 1
+    fi
+}
+
+if [[ "${LAND_MODE:-}" == confirm ]]; then
+    [[ -n "${LAND_ONLY:-}" ]] || { echo "verify: -- LAND_ONLY is empty" >&2; exit 2; }
+    phase_wanted test && run_phase test test_failures run_confirm_tests
+else
+    echo "verify: confirm"
+    phase_wanted build && run_phase build compile_failures swift build --build-tests -j 5
+    phase_wanted test && run_phase test test_failures swift test --skip-build --parallel --num-workers 4
+fi
 
 echo "verify: == end"
 exit "$failed"
