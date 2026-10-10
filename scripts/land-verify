@@ -60,22 +60,33 @@ run_phase() {
 # base, bisect and confirm runs name the phases that failed; an empty list means all.
 phase_wanted() { [[ -z "${LAND_PHASES:-}" || " $LAND_PHASES " == *" $1 "* ]]; }
 
-# Fails the confirm run when a name matches no test, which would otherwise pass and clear a real failure.
+# Fails the confirm run unless every named test ran: a name that matches nothing only warns, so the others
+# would pass and clear a real failure.
 # shellcheck disable=SC2329 # called by name from run_phase
 run_confirm_tests() {
-    local filters=() name escaped
+    local filters=() names=() name escaped
     for name in $LAND_ONLY; do
+        names+=("$name")
         escaped="$(sed -E 's/[][\.*^$+?(){}|]/\\&/g' <<<"$name")"
         filters+=(--filter "^${escaped}\$")
     done
+    if [[ "${#names[@]}" -eq 0 ]]; then
+        echo "LAND_ONLY names no test"
+        return 1
+    fi
     local out
     out="$(swift test --skip-build --parallel --num-workers 4 "${filters[@]}" 2>&1)" || { echo "$out"; return 1; }
     echo "$out"
-    # --parallel prints no totals; an unmatched filter only warns.
-    if grep -q "No matching test cases were run" <<<"$out"; then
-        echo "no test matched: $LAND_ONLY"
-        return 1
-    fi
+    # --parallel prints no totals, only `[n/m] Testing Module.Class/test` as each test starts.
+    local ran missing=0
+    ran="$(plain <(echo "$out") | sed -nE 's|^\[[0-9]+/[0-9]+\] Testing (.+)$|\1|p')"
+    for name in "${names[@]}"; do
+        if ! grep -qxF -- "$name" <<<"$ran"; then
+            echo "test did not run: $name"
+            missing=1
+        fi
+    done
+    return "$missing"
 }
 
 if [[ "${LAND_MODE:-}" == confirm ]]; then
