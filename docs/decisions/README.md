@@ -20,5 +20,6 @@ and is kept as history. The overview is in [architecture](../architecture.md).
 | [0012](0012-one-seek-strategy-per-format.md) | Each format's seek rules are one module behind `SeekFormat`; `seek.c` owns the ladder. | Accepted |
 | [0013](0013-read-ahead-on-expensive-paths.md) | On an expensive path a source given a read-ahead pauses that far ahead of the decoder. | Accepted |
 | [0014](0014-one-sparse-file-per-session.md) | Every transaction of a session writes into one sparse file; a restart keeps its bytes. | Accepted |
+| [0015](0015-not-built-on-audiostreaming.md) | Not built on AudioStreaming: no Opus, no Ogg seek, filters cannot drop frames. | Accepted |
 
 These decisions were first made in the Shuttle Podcasts app and moved here with the code.
