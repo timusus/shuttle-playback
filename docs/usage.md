@@ -9,12 +9,12 @@ behaviour you must know. Threading and blocking apply throughout: `open()`, `nex
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/timusus/shuttle-playback.git", from: "0.3.0"),
+    .package(url: "https://github.com/timusus/AudioPlaybackKit.git", from: "0.7.1"),
 ],
 targets: [
     .target(name: "MyApp", dependencies: [
-        .product(name: "PlaybackDecode", package: "shuttle-playback"),
-        .product(name: "PlaybackStreaming", package: "shuttle-playback"),   // only to play URLs
+        .product(name: "PlaybackDecode", package: "AudioPlaybackKit"),
+        .product(name: "PlaybackStreaming", package: "AudioPlaybackKit"),   // only to play URLs
     ]),
 ]
 ```
@@ -138,7 +138,7 @@ terminal: a later seek reads again, so a player resumes the same decoder once th
 
 Chained Ogg (streams concatenated byte for byte) decodes sequentially across its links, including a
 change of channel count or sample rate, which is converted to the open format. Seeking into a later
-link is unsupported ([#48](https://github.com/timusus/shuttle-playback/issues/48)), as in FFmpeg and
+link is unsupported ([#48](https://github.com/timusus/AudioPlaybackKit/issues/48)), as in FFmpeg and
 media3: the seek lands in the first link.
 
 With a growing-file source, a seek to bytes already on disk is served from the file; a seek into a
