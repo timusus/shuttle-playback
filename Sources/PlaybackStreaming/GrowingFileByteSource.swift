@@ -277,8 +277,10 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
         condition.lock()
         defer { condition.unlock() }
         defer { machine.endRead() }
+        var isRecheck = false
         while true {
-            let step = machine.read(maxLength: maxLength, now: clock.now)
+            let step = machine.read(maxLength: maxLength, now: clock.now, isRecheck: isRecheck)
+            isRecheck = false
             // A read step's effects never defer work today. If one did, performUnlocked would drop
             // the lock between this decision and condition.wait(), and a .park could miss its wake.
             performUnlocked(runLocked(step.effects))
@@ -301,6 +303,7 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
                     announcedWait = true
                     performUnlocked([Deferred.emit(.readWaiting(since: since))])
                     // Bytes may have landed while the lock was down, and their wake with it.
+                    isRecheck = true
                     continue
                 }
                 condition.wait()

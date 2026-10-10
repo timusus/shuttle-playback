@@ -151,8 +151,9 @@ struct GrowingFileDownload {
         interrupted = false
     }
 
-    /// A read of up to `maxLength` bytes at the decoder's position.
-    mutating func read(maxLength: Int, now: TimeInterval) -> ReadStep {
+    /// A read of up to `maxLength` bytes at the decoder's position. `isRecheck` re-runs the
+    /// decision of a read that just parked, so it is not a new park.
+    mutating func read(maxLength: Int, now: TimeInterval, isRecheck: Bool = false) -> ReadStep {
         let opened = readOpened
         readOpened = false
         if cancelled { return step(.fail(.cancelled)) }
@@ -199,7 +200,7 @@ struct GrowingFileDownload {
             return step(.again)
         case .wait:
             if let reason = failure { return reportFailure(reason) }
-            parks += 1
+            if !isRecheck { parks += 1 }
             readWaitingSince = readWaitingSince ?? now
             if !recheckPending {
                 recheckPending = true
