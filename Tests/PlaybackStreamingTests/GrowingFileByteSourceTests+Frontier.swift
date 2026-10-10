@@ -157,31 +157,6 @@ extension GrowingFileByteSourceTests {
         XCTAssertEqual(server.requestedRanges, [0, 400_000])
     }
 
-    /// Issue #68: a far seek the download would close in a couple of seconds is still a new
-    /// request when a request answers sooner, as media3's `seekToUs` resets the loader at the target.
-    /// On a throttled link with a 0.3 s response latency, the first byte at the target arrives
-    /// well before the 2.5 s the running download would take (the rule itself is pinned with a
-    /// manual clock in `GrowingFileDownloadTests`; this bound is coarse on purpose).
-    func testAFarSeekThatARequestAnswersSoonerThanTheDownloadIsANewRequest() throws {
-        let rate = 128 * 1024
-        let latency = 0.3
-        let body = makeBody(2 * 1024 * 1024)
-        let server = try startServer(body: body)
-        server.bytesPerSecond = rate
-        server.delayForEveryRange = latency
-        let source = makeSource(server.url)
-
-        _ = try read(source, 1)
-        XCTAssertTrue(waitUntil { source.snapshot.frontier >= 128 * 1024 })
-        let target = source.snapshot.frontier + Int64(rate) * 5 / 2
-        try source.seek(to: target)
-        let started = Date()
-        XCTAssertEqual(try read(source, 1000), body.subdata(in: Int(target)..<Int(target) + 1000))
-        let waited = Date().timeIntervalSince(started)
-        XCTAssertLessThan(waited, 2, "the seek waited for the running download, which needs 2.5 s")
-        XCTAssertEqual(server.requestedRanges, [0, target])
-    }
-
     func testTheProbesFooterLookIsEndOfStreamAndLeavesTheHeadDownloading() throws {
         let body = makeBody(256 * 1024)
         let server = try startServer(body: body)
