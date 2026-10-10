@@ -113,10 +113,13 @@ class GrowingFileContractCase: XCTestCase {
         return (server, makeSource(resource.url(server), authHeaders: authHeaders))
     }
 
-    func makeSource(_ url: URL, authHeaders: [String: String] = [:]) -> GrowingFileByteSource {
+    /// `clock` is the system's unless a test passes a ``ManualGrowingFileClock`` to step through retries.
+    func makeSource(
+        _ url: URL, authHeaders: [String: String] = [:], clock: GrowingFileClock = SystemGrowingFileClock.shared
+    ) -> GrowingFileByteSource {
         let source = GrowingFileByteSource(
             url: url, authHeaders: authHeaders, store: GrowingFileStore(directory: directory),
-            session: Self.session
+            session: Self.session, clock: clock
         )
         sources.append(source)
         return source
@@ -178,6 +181,16 @@ class GrowingFileContractCase: XCTestCase {
     ) -> Result<Data, Error> {
         XCTAssertTrue(pending.finished(within: timeout), "\(context): the read hung", file: file, line: line)
         return pending.result
+    }
+
+    /// Like ``finish(_:within:_:file:line:)``, but steps `clock` through the retry backoff and link
+    /// window while the real sockets answer; `timeout` is real seconds.
+    func finish(
+        _ pending: PendingRead, on clock: ManualGrowingFileClock, within timeout: TimeInterval = 20, _ context: String,
+        file: StaticString = #filePath, line: UInt = #line
+    ) -> Result<Data, Error> {
+        _ = clock.drive(step: 1, timeout: timeout) { pending.finished(within: 0) }
+        return finish(pending, within: 1, context, file: file, line: line)
     }
 
     func readerError(_ result: Result<Data, Error>) -> StreamByteReaderError? {

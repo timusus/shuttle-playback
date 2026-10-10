@@ -182,7 +182,9 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         let server = try startServer(body: makeBody())
         let url = server.url
         server.stop()
-        assertTransport(finish(readAsync(makeSource(url), 1), within: 30, "connection refused"), "connection refused")
+        let clock = ManualGrowingFileClock()
+        let pending = readAsync(makeSource(url, clock: clock), 1)
+        assertTransport(finish(pending, on: clock, "connection refused"), "connection refused")
         XCTAssertEqual(partials(), [])
     }
 
@@ -197,13 +199,17 @@ final class GrowingFileContractTests: GrowingFileContractCase {
                 server.htmlErrorBodies = html
                 server.reject(host: "127.0.0.1:\(server.port)", status: status)
                 let context = "status=\(status) html=\(html)"
-                assertTransport(finish(readAsync(makeSource(server.url), 1), within: 30, context), context)
+                let clock = ManualGrowingFileClock()
+                let pending = readAsync(makeSource(server.url, clock: clock), 1)
+                assertTransport(finish(pending, on: clock, context), context)
                 XCTAssertEqual(server.requestHeads.count, 1 + GrowingFileDownload.Retry.maxAttempts, context)
             }
             let server = try startServer(body: body)
             server.htmlErrorBodies = html
             let context = "missing path html=\(html)"
-            assertTransport(finish(readAsync(makeSource(server.missingURL), 1), within: 30, context), context)
+            let clock = ManualGrowingFileClock()
+            let pending = readAsync(makeSource(server.missingURL, clock: clock), 1)
+            assertTransport(finish(pending, on: clock, context), context)
             XCTAssertEqual(server.requestHeads.count, 1 + GrowingFileDownload.Retry.maxAttempts, context)
         }
         XCTAssertEqual(partials(), [])
