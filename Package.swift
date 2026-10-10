@@ -18,6 +18,9 @@ let package = Package(
         // A loopback `Range`-aware HTTP server with fault knobs, for a consumer's own tests of
         // anything built on `PlaybackStreaming`. No fixtures in it.
         .library(name: "PlaybackStreamingTestSupport", targets: ["PlaybackStreamingTestSupport"]),
+        // Output over AVSampleBufferAudioRenderer: decoded PCM to the speaker, with an exact
+        // position map, gapless joins and app-supplied processors (ADR-0018).
+        .library(name: "PlaybackRender", targets: ["PlaybackRender"]),
         // FFmpeg itself, for a consumer with its own C against libavformat. One FFmpeg per app:
         // a second copy would clash with this framework's symbols, or silently shadow them.
         .library(name: "FFmpeg", targets: ["CFFmpeg"]),
@@ -34,6 +37,10 @@ let package = Package(
         .target(name: "PlaybackDecode", dependencies: ["CStreamDecode"]),
         .target(name: "PlaybackStreaming", dependencies: ["PlaybackDecode"]),
         .target(name: "PlaybackStreamingTestSupport"),
+        // Every rule lives in this Apple-free core, tested against a manual-clock fake output;
+        // only the renderer adapter imports AVFoundation (ADR-0018).
+        .target(name: "PlaybackRender", dependencies: ["PlaybackDecode"]),
+        .testTarget(name: "PlaybackRenderTests", dependencies: ["PlaybackRender"]),
         // Two 20-45 s tone fixtures (under 250 KB each), served over the loopback server.
         .testTarget(
             name: "PlaybackStreamingTests",
