@@ -115,10 +115,11 @@ final class GrowingFileContractTests: GrowingFileContractCase {
                 let server = try startServer(body: body)
                 server.answers416AtOrAfterEnd = strict
                 server.htmlErrorBodies = html
-                let source = makeSource(server.url)
+                let clock = ManualGrowingFileClock()
+                let source = makeSource(server.url, clock: clock)
                 try source.seek(to: Int64(body.count) + 10)
                 let context = "strict416=\(strict) html=\(html)"
-                assertTransport(finish(readAsync(source, 1), within: 30, context), context)
+                assertTransport(finish(readAsync(source, 1), of: source, on: clock, context), context)
                 XCTAssertEqual(server.requestedRanges.count, 1 + GrowingFileDownload.Retry.maxAttempts, context)
             }
         }

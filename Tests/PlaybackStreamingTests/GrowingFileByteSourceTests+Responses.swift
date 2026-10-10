@@ -39,10 +39,11 @@ extension GrowingFileByteSourceTests {
         server.bodies = [first, second]
         server.answers416AtOrAfterEnd = true
         server.closesAfterBodyBytes = 100_000
-        let source = makeSource(server.url)
+        let clock = ManualGrowingFileClock()
+        let source = makeSource(server.url, clock: clock)
 
         let pending = readAsync(source, Int.max)
-        XCTAssertTrue(pending.finished(within: 30), "the read hung after a 416")
+        XCTAssertTrue(clock.drive(source) { pending.finished(within: 0) }, "the read hung after a 416")
         assertTransport(pending.result)
         XCTAssertEqual(server.requestedRanges.prefix(3), [0, 100_000, 100_000])
     }

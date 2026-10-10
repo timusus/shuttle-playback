@@ -225,11 +225,12 @@ extension GrowingFileByteSourceTests {
         let server = try startServer(body: body)
         server.respondsWholeBodyIgnoringRange = true
         server.contentLengthLie = 50_000
-        let source = makeSource(server.url)
+        let clock = ManualGrowingFileClock()
+        let source = makeSource(server.url, clock: clock)
 
         try source.seek(to: 100_000)
         let pending = readAsync(source, 100)
-        XCTAssertTrue(pending.finished(within: 20), "every restart is from byte 0 and ends before 100 000")
+        XCTAssertTrue(clock.drive(source) { pending.finished(within: 0) }, "every restart is from byte 0 and ends before 100 000")
         assertTransport(pending.result)
         XCTAssertEqual(server.requestedRanges.count, 1 + GrowingFileDownload.Retry.maxAttempts)
     }

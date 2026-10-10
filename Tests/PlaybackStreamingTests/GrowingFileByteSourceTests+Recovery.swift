@@ -155,18 +155,21 @@ extension GrowingFileByteSourceTests {
         let body = makeBody(32 * 1024)
         // Past the end, the loopback answers the last byte: a 206 that does not start where asked.
         let mismatched = try startServer(body: body)
-        let source = makeSource(mismatched.url)
+        let clock = ManualGrowingFileClock()
+        let source = makeSource(mismatched.url, clock: clock)
         try source.seek(to: Int64(body.count) + 10)
         let pending = readAsync(source, 1)
-        XCTAssertTrue(pending.finished(within: 20))
+        XCTAssertTrue(clock.drive(source) { pending.finished(within: 0) })
         assertTransport(pending.result)
         XCTAssertEqual(mismatched.requestedRanges.count, 1 + GrowingFileDownload.Retry.maxAttempts)
 
         for status in [404, 416] {
             let server = try startServer(body: body)
             server.reject(host: "127.0.0.1:\(server.port)", status: status)
-            let pending = readAsync(makeSource(server.url), 1)
-            XCTAssertTrue(pending.finished(within: 20), "\(status)")
+            let clock = ManualGrowingFileClock()
+            let source = makeSource(server.url, clock: clock)
+            let pending = readAsync(source, 1)
+            XCTAssertTrue(clock.drive(source) { pending.finished(within: 0) }, "\(status)")
             assertTransport(pending.result)
             XCTAssertEqual(server.requestHeads.count, 1 + GrowingFileDownload.Retry.maxAttempts, "\(status)")
         }

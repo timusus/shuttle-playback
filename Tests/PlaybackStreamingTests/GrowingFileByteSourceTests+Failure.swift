@@ -38,20 +38,26 @@ extension GrowingFileByteSourceTests {
         let body = makeBody(64 * 1024)
         let server = try startServer(body: body)
         server.contentLengthLie = 1000
-        let source = makeSource(server.url)
+        let clock = ManualGrowingFileClock()
+        let source = makeSource(server.url, clock: clock)
 
-        var got = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        do {
-            while true {
-                let n = try buffer.withUnsafeMutableBytes { try source.read(into: $0.baseAddress!, maxLength: $0.count) }
-                XCTAssertGreaterThan(n, 0, "a short body is never the end of the stream")
-                if n == 0 { break }
-                got.append(contentsOf: buffer[0..<n])
+        let pending = PendingRead {
+            var got = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            do {
+                while true {
+                    let n = try buffer.withUnsafeMutableBytes { try source.read(into: $0.baseAddress!, maxLength: $0.count) }
+                    XCTAssertGreaterThan(n, 0, "a short body is never the end of the stream")
+                    if n == 0 { break }
+                    got.append(contentsOf: buffer[0..<n])
+                }
+            } catch StreamByteReaderError.transport {
+                // The retries are spent.
             }
-        } catch StreamByteReaderError.transport {
-            // The retries are spent.
+            return got
         }
+        XCTAssertTrue(clock.drive(source) { pending.finished(within: 0) }, "the read hung")
+        let got = try pending.result.get()
         XCTAssertEqual(got, body.prefix(got.count))
         XCTAssertEqual(got.count, body.count - 1000)
         XCTAssertGreaterThan(server.requestedRanges.count, 1, "it retried")
