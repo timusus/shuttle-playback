@@ -23,5 +23,6 @@ and is kept as history. The overview is in [architecture](../architecture.md).
 | [0015](0015-not-built-on-audiostreaming.md) | Not built on AudioStreaming: no Opus, no Ogg seek, filters cannot drop frames. | Accepted |
 | [0016](0016-overlap-check-at-every-join.md) | Every join (resume, session-file restart) is checked by a 64 KiB overlap with the bytes on disk. | Accepted |
 | [0017](0017-live-streams.md) | A stream with no length and no duration is live: unseekable, restarted not resumed, a small window. | Accepted |
+| [0018](0018-render-layer.md) | A `PlaybackRender` product: processor pipeline, position map and gapless scheduler over ASBAR + synchronizer. | Proposed |
 
 These decisions were first made in the Shuttle Podcasts app and moved here with the code.
