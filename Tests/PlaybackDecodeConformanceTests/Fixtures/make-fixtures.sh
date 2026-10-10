@@ -115,6 +115,39 @@ while j < len(out) - 6:
         j += 1
 open(sys.argv[2], 'wb').write(out)
 PY
+# Also MP3SeekTests only: 128 kbps CBR at 44.1 kHz whose frames are all 417 bytes, the padding bit
+# never set, as some podcast hosts encode, behind a 522-byte ID3v2 tag and an Info frame whose
+# frame and byte counts are right. LAME always pads, so this re-headers a 112 kbps encode with no
+# bit reservoir as 128 kbps and fills each frame out with ancillary zeros; LAME's delay and
+# padding are cleared so the duration is the frame count.
+noise 12 pink 0.3 71 72 anull "$TMP/unpadded.wav"
+lame --quiet --nores --cbr -b 112 "$TMP/unpadded.wav" "$TMP/unpadded.mp3"
+python3 -I - "$TMP/unpadded.mp3" ../SeekFixtures/cbr_128k_unpadded_info.mp3 <<'PY'
+import struct, sys
+b = open(sys.argv[1], 'rb').read()
+frames, i = [], 0
+while i + 4 <= len(b):
+    assert b[i] == 0xFF and b[i+1] & 0xE0 == 0xE0
+    size = 144 * 112000 // 44100 + ((b[i+2] >> 1) & 1)
+    f = bytearray(b[i:i+size])
+    f[2] = (f[2] & 0x0D) | 0x90
+    frames.append(f + bytes(417 - size))
+    i += size
+info = frames[0]
+x = info.index(b'Info')
+info[x+12:x+16] = struct.pack('>I', 417 * len(frames))
+lame = info.index(b'LAME')
+info[lame+20] = 128
+info[lame+21:lame+24] = bytes(3)
+crc = 0
+for c in info[:lame+34]:
+    crc ^= c
+    for _ in range(8):
+        crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+info[lame+34:lame+36] = struct.pack('>H', crc)
+id3 = b'ID3\x04\x00\x00' + bytes([0, 0, 4, 0]) + bytes(512)
+open(sys.argv[2], 'wb').write(id3 + b''.join(frames))
+PY
 
 # --- AAC / MP4 ---------------------------------------------------------------------------------
 # ffmpeg's AAC-in-MP4 carries an edit list for the encoder priming.

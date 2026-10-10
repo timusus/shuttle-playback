@@ -84,6 +84,8 @@ typedef struct {
     int      spf;                /* samples per frame */
     int      tag;                /* MP3_TAG_*: what the frame before the first audio says */
     int      untagged_cbr;       /* no tag frame, and the frames in `prologue` all share a bitrate */
+    double   frame_bytes;        /* a CBR Layer III stream's bytes per frame after the first, as
+                                    measured (`mp3_measure_frame_bytes`); 0 when not CBR */
     int      vbri_toc;           /* the VBRI table: its offset in `prologue`, and its shape */
     int      vbri_entries;       /* 0: no usable table */
     int      vbri_entry_size;

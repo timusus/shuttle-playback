@@ -89,8 +89,9 @@ static int mp3_vbri_anchor(const StreamDecoder *d, int64_t ts, int64_t *pos, int
 }
 
 /* What the frame before the first audio frame declares: LAME's "Info" is a CBR stream, "Xing" and
- * "VBRI" a VBR one. Read from the prologue, which holds those bytes already. */
-static int mp3_find_tag(StreamDecoder *d) {
+ * "VBRI" a VBR one. Read from the prologue, which holds those bytes already. An Info frame's
+ * frame count and the AVIO offset its byte count ends at go in `*frames` and `*end`, when it has both. */
+static int mp3_find_tag(StreamDecoder *d, int64_t *frames, int64_t *end) {
     int64_t limit = d->first_pkt_pos < d->prologue_len ? d->first_pkt_pos : d->prologue_len;
     for (int64_t p = 0; p + 4 <= limit; p++) {
         int spf, br, sr, side;
@@ -98,7 +99,13 @@ static int mp3_find_tag(StreamDecoder *d) {
         const uint8_t *xing = d->prologue + p + 4 + side;
         const uint8_t *vbri = d->prologue + p + 36;
         if (xing + 4 <= d->prologue + limit) {
-            if (!memcmp(xing, "Info", 4)) return MP3_TAG_INFO;
+            if (!memcmp(xing, "Info", 4)) {
+                if (xing + 16 <= d->prologue + limit && (sd_read_be(xing + 4, 4) & 3) == 3) {
+                    *frames = sd_read_be(xing + 8, 4);
+                    *end = p + sd_read_be(xing + 12, 4);
+                }
+                return MP3_TAG_INFO;
+            }
             if (!memcmp(xing, "Xing", 4)) return MP3_TAG_VBR;
         }
         if (vbri + 26 <= d->prologue + limit && !memcmp(vbri, "VBRI", 4)) {
@@ -110,10 +117,12 @@ static int mp3_find_tag(StreamDecoder *d) {
 }
 
 static int mp3_prologue_is_cbr(const StreamDecoder *d);
+static double mp3_measure_frame_bytes(const StreamDecoder *d, int64_t info_frames, int64_t info_end);
 
 /* The first audio packet is held: note what frame counting needs. */
 static void mp3_first_packet(StreamDecoder *d) {
     d->mp3.first_pkt_size = d->held->size;
+    d->mp3.frame_bytes = 0;
     int spf, br, sr, side;
     if (d->has_first_pkt && d->held->size >= 4
         && sd_mp3_parse_header(d->held->data, &spf, &br, &sr, &side)) {
@@ -121,8 +130,10 @@ static void mp3_first_packet(StreamDecoder *d) {
         d->mp3.header = ((uint32_t)d->held->data[0] << 24) | ((uint32_t)d->held->data[1] << 16)
                       | ((uint32_t)d->held->data[2] << 8) | d->held->data[3];
         d->mp3.spf = spf;
-        d->mp3.tag = mp3_find_tag(d);
+        int64_t info_frames = 0, info_end = 0;
+        d->mp3.tag = mp3_find_tag(d, &info_frames, &info_end);
         d->mp3.untagged_cbr = d->mp3.tag == MP3_TAG_NONE && mp3_prologue_is_cbr(d);
+        d->mp3.frame_bytes = mp3_measure_frame_bytes(d, info_frames, info_end);
     }
 }
 
@@ -138,8 +149,9 @@ static const uint32_t kMP3SameStreamMask = 0xFFFEFCC0u;
  * syncs to the next frame after that byte and labels the frame with the time it was ASKED for
  * (or, with an Info frame count, a rounded share of it), not the time of the frame it found.
  * In a constant-bitrate stream the frame's index follows from its byte offset: frames
- * after the first are spf * bitrate / (8 * rate) bytes long on average and padding keeps each
- * within one byte of that, so the offset from the end of the first frame, divided and rounded, counts them exactly
+ * after the first are `frame_bytes` long on average (measured, not spf * bitrate / (8 * rate): an
+ * encoder that never pads writes them shorter) and each is within one byte of that, so the offset
+ * from the end of the first frame, divided and rounded, counts them exactly
  * (the first frame is measured, not assumed, because it is the one an encoder cuts short). A
  * stream is constant-bitrate when its Info frame says so, or when it has no tag frame, the frames
  * in the prologue (at least three) are all the first one's twins (`untagged_cbr`) and the
@@ -163,7 +175,8 @@ static int64_t mp3_exact_dts(const StreamDecoder *d, const AVPacket *pkt) {
     if (pkt->pos != d->first_pkt_pos) {
         int64_t second = d->first_pkt_pos + d->mp3.first_pkt_size;
         if (pkt->pos < second) return AV_NOPTS_VALUE;
-        index = 1 + llround((double)(pkt->pos - second) * 8.0 * sr / ((double)spf * br));
+        double frame_bytes = d->mp3.frame_bytes > 0 ? d->mp3.frame_bytes : (double)spf * br / (8.0 * sr);
+        index = 1 + llround((double)(pkt->pos - second) / frame_bytes);
     }
     return d->first_pkt_dts + av_rescale_q(index * d->mp3.spf,
                                            (AVRational){ 1, d->sample_rate }, d->time_base);
@@ -286,17 +299,45 @@ static uint32_t mp3_cbr_header(const StreamDecoder *d) {
 }
 
 /*
+ * The bytes per frame after the first in a constant-bitrate Layer III stream, 0 when it is not one.
+ * Some encoders never set the padding bit, so the nominal spf * bitrate / (8 * rate) is up to a
+ * byte a frame too long, and a seek counted by it lands later the further it goes. An Info frame
+ * whose byte count ends where the audio does gives the true average with its frame count (which
+ * excludes the Info frame). Otherwise the prologue's frames say: enough of them that padding would
+ * have shown, none padded, and the frames are the nominal size rounded down.
+ */
+static double mp3_measure_frame_bytes(const StreamDecoder *d, int64_t info_frames, int64_t info_end) {
+    MP3Frame f;
+    uint32_t h = mp3_cbr_header(d);
+    if (!h || !mp3_frame_of(h, &f)) return 0;
+    int64_t second = d->first_pkt_pos + d->mp3.first_pkt_size;
+    if (info_frames > 1 && info_end > second && info_end == sd_avio_size_seen(d)) {
+        return (double)(info_end - second) / (double)(info_frames - 1);
+    }
+    double nominal = (double)f.spf * f.bitrate / (8.0 * f.sample_rate);
+    int frames = 0;
+    for (int64_t pos = second; pos + 4 <= d->prologue_len; frames++) {
+        MP3Frame g;
+        uint32_t here = sd_read_be(d->prologue + pos, 4);
+        if ((here & kMP3SameStreamMask) != (h & kMP3SameStreamMask) || !mp3_frame_of(here, &g)) break;
+        if (here & 0x200) return nominal;
+        pos += g.bytes;
+    }
+    return frames * (nominal - floor(nominal)) >= 1 ? floor(nominal) : nominal;
+}
+
+/*
  * The frame `ts` (stream time base) falls in, in a constant-bitrate Layer III stream, found by
  * reading the few bytes where it has to be: `*pos` and `*dts` are its byte position and exact time,
  * or `*pos` is -1 when this cannot say (the caller seeks by estimate instead). Returns
  * STREAM_DECODE_OK, or the status of a cancel or an interruption.
  *
- * Frame k starts within a byte or two of `second + (k - 1) * spf * bitrate / (8 * rate)`, which is
- * the relation `mp3_exact_dts` counts frames by. mp3_seek finds a frame near a byte estimate too,
+ * Frame k starts within a byte or two of `second + (k - 1) * frame_bytes`, which is the relation
+ * `mp3_exact_dts` counts frames by. mp3_seek finds a frame near a byte estimate too,
  * but first rewinds 4096 bytes before it (mp3_sync's SEEK_WINDOW) and reads them: on a stream still
  * downloading, a far seek restarts the download there and waits for all of them, a quarter of a
  * second at twice a 64 kbps bitrate, before the first byte it needs. This reads from the frame. A
- * header there, the next frame's header after it, and the count agreeing is the frame. media3's
+ * header there, the next frame's header after it, and its size agreeing with `frame_bytes` is the frame. media3's
  * ConstantBitrateSeeker places a CBR seek by the same arithmetic.
  */
 static int mp3_cbr_frame(StreamDecoder *d, int64_t ts, int64_t *pos, int64_t *dts) {
@@ -315,7 +356,7 @@ static int mp3_cbr_frame(StreamDecoder *d, int64_t ts, int64_t *pos, int64_t *dt
     int need = 2 * kSlack + f.bytes + 1 + 4;
     if (need > (int)sizeof(buf)) return STREAM_DECODE_OK;
     int64_t second = d->first_pkt_pos + d->mp3.first_pkt_size;
-    double frame_bytes = (double)f.spf * f.bitrate / (8.0 * f.sample_rate);
+    double frame_bytes = d->mp3.frame_bytes;
     int64_t lo = second + llround((double)(index - 1) * frame_bytes) - kSlack;
     if (lo < second) lo = second;
 
@@ -327,7 +368,8 @@ static int mp3_cbr_frame(StreamDecoder *d, int64_t ts, int64_t *pos, int64_t *dt
         if ((here & kMP3SameStreamMask) != (h & kMP3SameStreamMask) || !mp3_frame_of(here, &g)) continue;
         if (off + g.bytes + 4 > got) continue;
         if ((sd_read_be(buf + off + g.bytes, 4) & kMP3SameStreamMask) != (h & kMP3SameStreamMask)) continue;
-        if (1 + llround((double)(lo + off - second) / frame_bytes) != index) continue;
+        /* A frame a byte or more off the measured size says the measure is wrong, and so is the place. */
+        if (fabs(g.bytes - frame_bytes) >= 1) continue;
         *pos = lo + off;
         *dts = d->first_pkt_dts + av_rescale_q(index * d->mp3.spf, (AVRational){ 1, d->sample_rate },
                                                d->time_base);

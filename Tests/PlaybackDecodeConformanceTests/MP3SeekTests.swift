@@ -166,6 +166,54 @@ final class MP3SeekTests: XCTestCase {
         }
     }
 
+    /// **A seek into a CBR MP3 whose frames are never padded plays from the sample it reports.**
+    ///
+    /// At 128 kbps and 44.1 kHz a frame averages 417.96 bytes, but an encoder that never sets the
+    /// padding bit writes every frame at 417, and a seek that counts frames by the average lands
+    /// 0.23% late: some 8 s an hour. The fixture's Info frame counts its 461 frames and their bytes;
+    /// without it, the frames themselves have to say they are never padded.
+    func testASeekIntoACBRMP3WithUnpaddedFramesPlaysFromItsTarget() throws {
+        let url = GoldenStore.root.appendingPathComponent("SeekFixtures/cbr_128k_unpadded_info.mp3")
+        let (format, _) = try decodeAll(url)
+        XCTAssertEqual(try XCTUnwrap(format.duration), 461.0 * 1152 / 44100, accuracy: 1e-6)
+        try assertSeeksPlayFromTheirTarget(url)
+
+        var untagged = try Data(contentsOf: url)
+        let id3 = 10 + 512
+        untagged.removeSubrange(id3..<(id3 + 417))
+        let untaggedURL = FileManager.default.temporaryDirectory.appendingPathComponent("cbr-unpadded-no-info-\(UUID().uuidString).mp3")
+        try untagged.write(to: untaggedURL)
+        defer { try? FileManager.default.removeItem(at: untaggedURL) }
+        try assertSeeksPlayFromTheirTarget(untaggedURL)
+    }
+
+    private func assertSeeksPlayFromTheirTarget(_ url: URL, file: StaticString = #filePath, line: UInt = #line) throws {
+        let (format, clean) = try decodeAll(url)
+        let duration = try XCTUnwrap(format.duration)
+        let channels = format.channelCount
+        let window = 2048 * channels
+        for fraction in [0.5, 0.75, 0.95] {
+            let target = duration * fraction
+            let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: url))
+            _ = try decoder.open()
+            let landed = try decoder.seek(toSeconds: target)
+            let label = "\(url.lastPathComponent) to \(target)s"
+            XCTAssertEqual(landed, target, accuracy: 0.5 / format.sampleRate, label, file: file, line: line)
+            var got: [Float] = []
+            while got.count < window, let chunk = decoder.nextChunk() { got += chunk }
+            XCTAssertGreaterThanOrEqual(got.count, window, "\(label): only \(got.count / channels) frames after it",
+                                        file: file, line: line)
+            guard got.count >= window else { continue }
+            let found = stride(from: 0, through: clean.count - window, by: channels).first { start in
+                clean[start] == got[0] && (0..<window).allSatisfy { clean[start + $0] == got[$0] }
+            }
+            let played = try XCTUnwrap(found, "\(label): the audio after it is nowhere in the clean decode",
+                                       file: file, line: line) / channels
+            XCTAssertEqual(played, Int((landed * format.sampleRate).rounded()),
+                           "\(label): played from \(Double(played) / format.sampleRate)s", file: file, line: line)
+        }
+    }
+
     /// The frames of an MPEG-2 Layer III 22.05 kHz stream (the VBR fixture's), as byte ranges.
     private func mp3Frames(_ data: Data) -> [Range<Int>] {
         let kbps = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0]
