@@ -133,13 +133,15 @@ struct GrowingFileDownloadSessionFileTests {
         #expect(h.log.filter { $0 == .promote }.count == 1)
     }
 
-    @Test("with no known total and nothing dropped, the body's end makes the file whole and promotes it")
-    func anUnknownLengthWithinTheWindowPromotes() {
+    @Test("a body of unknown length that ends cleanly plays to its end but is never cached")
+    func anUnknownLengthIsNeverPromoted() {
         let h = Harness(unknownLengthWindow: 1000)
         h.read()
         h.respond(200)
         h.body(3000)
         h.end()
-        #expect(h.machine.file.isCached)
+        #expect(h.machine.totalLength == 3000, "the reader still sees the end")
+        #expect(!h.machine.file.isCached)
+        #expect(!h.log.contains(.promote))
     }
 }

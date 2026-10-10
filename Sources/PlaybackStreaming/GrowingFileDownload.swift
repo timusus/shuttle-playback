@@ -765,7 +765,8 @@ struct GrowingFileDownload {
         let total = tx.totalLength ?? (tx.end == nil ? tx.frontier : nil)
         current?.totalLength = total
         if let total { lastKnownTotalLength = total }
-        promoteIfWhole()
+        // A body that never stated its length may have been cut short, so it is never cached.
+        if tx.totalLength != nil { promoteIfWhole() }
         downloadLog.info("download: complete gen=\(tx.generation) base=\(tx.base) frontier=\(tx.frontier)")
         let complete = total.map { tx.frontier >= $0 } ?? false
         effects.append(.emit(.download(frontier: tx.frontier, downloadBytesPerSecond: downloadBytesPerSecond(now: now), complete: complete)))

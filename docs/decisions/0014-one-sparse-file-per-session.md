@@ -28,11 +28,12 @@ its bytes.
   changed. A failure no retry fixes (a page, a full disk) deletes the file, as before.
 - With no known total the file is bounded: once the reader is more than
   `GrowingFileDownload.unknownLengthWindowBytes` (64 MiB) past a range, the range is dropped and its
-  blocks punched out of the file (`F_PUNCHHOLE`). 64 MiB keeps an hour at 128 kbps whole, so a
-  typical episode from a host that sends no length still promotes, and it stays under the 200 MiB
-  of headroom the store keeps free. A live stream (Icecast) or a transcode of unknown length stays
-  within it and never promotes. A host that ignores ranges but gives a total is bounded by that
-  total, like any file, and still promotes.
+  blocks punched out of the file (`F_PUNCHHOLE`). 64 MiB keeps an hour at 128 kbps whole for
+  playback, and it stays under the 200 MiB of headroom the store keeps free. A response that gave
+  no length never promotes, however it ends: a clean end may be a cut-short transcode or a live
+  stream (Icecast), and caching it would replay the truncation. media3 does the same
+  (`CacheDataSource` does not cache a response of unknown length). A host that ignores ranges but
+  gives a total is bounded by that total, like any file, and still promotes.
 
 ## Alternatives rejected
 
