@@ -55,7 +55,8 @@ extension GrowingFileDownload {
             ("aac", { head in head[0] == 0xFF && head[1] & 0xF6 == 0xF0 }),
             // LOAS AudioSyncStream: an 11-bit 0x2B7 sync.
             ("loas", { head in head[0] == 0x56 && head[1] & 0xE0 == 0xE0 }),
-            ("mov", { head in ascii(head, 4..<8) == "ftyp" }),
+            // The first atom's type at offset 4; mov_probe takes these as well as ftyp.
+            ("mov", { head in ["ftyp", "moov", "mdat", "wide", "free", "skip", "pnot"].contains(ascii(head, 4..<8)) }),
             ("ogg", { head in ascii(head, 0..<4) == "OggS" }),
             ("flac", { head in ascii(head, 0..<4) == "fLaC" }),
             ("wav", { head in ["RIFF", "RF64", "BW64"].contains(ascii(head, 0..<4)) }),

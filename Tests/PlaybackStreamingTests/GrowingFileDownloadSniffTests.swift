@@ -13,6 +13,8 @@ extension GrowingFileDownloadTests {
         ("ADTS", [0xFF, 0xF1, 0x50, 0x80] + [UInt8](repeating: 0, count: 8)),
         ("LOAS", [0x56, 0xE0, 0x20, 0x00] + [UInt8](repeating: 0, count: 8)),
         ("MP4", [0, 0, 0, 0x20] + Array("ftypM4A ".utf8)),
+        ("QuickTime moov-first", [0, 0, 0, 0x08] + Array("moov".utf8) + [UInt8](repeating: 0, count: 4)),
+        ("QuickTime mdat-first", [0, 0, 0, 0x08] + Array("mdat".utf8) + [UInt8](repeating: 0, count: 4)),
         ("Ogg", Array("OggS".utf8) + [UInt8](repeating: 0, count: 8)),
         ("FLAC", Array("fLaC".utf8) + [UInt8](repeating: 0, count: 8)),
         ("WAV", Array("RIFF".utf8) + [0, 0, 0, 0] + Array("WAVE".utf8)),
