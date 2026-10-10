@@ -1,6 +1,6 @@
 # ADR-0018: A render layer over AVSampleBufferAudioRenderer
 
-Status: Proposed (pending the iPhone checks below)
+Status: Accepted
 Date: 2026-10-11
 
 ## Context
@@ -24,6 +24,19 @@ It also measured three gaps:
 - the clock runs on through an underrun with no notification;
 - PTS holes and overlaps are accepted silently;
 - the renderer pulls once a second with near-zero headroom.
+
+An iPhone probe (iOS 26.6, speaker, measured by microphone) confirmed the choice and added:
+- `currentTime()` runs 11 ms ahead of what is heard, about `outputLatency` (9.7 ms). Unlike macOS,
+  output latency is not included, so the adapter reports it and the timeline adds it.
+- Each rate change drops out: 97 ms to 2x and 140 ms back with `.timeDomain`, 186 and 327 ms with
+  `.spectral`.
+- A format change at a join dips 8-11 ms, while the hardware rate stays 48 kHz (the renderer resamples).
+  No dip at 96k → 192k.
+- An output-port override or a category change auto-flushes within 10 ms. A `setActive` cycle and
+  `setPreferredSampleRate` do not.
+- A PTS hole plays as silence. An overlap trims the later audio to the timeline.
+- The default pull cadence gave no glitches in 40 s, so depth is about latency, not dropouts.
+- `flush()` blocks 74-80 ms and a rate change 41-49 ms, on any thread.
 
 ## Decision
 
@@ -70,16 +83,13 @@ How features fit:
 
 - There is no offline render mode, so every rule lives in the Apple-free core. The core is tested against a fake output with a manual clock that can inject an auto-flush, a configuration change or a stall. The ASBAR adapter stays thin and is checked on device.
 - A route change may auto-flush. The core must re-feed from the flush time, which the sample-accurate seek ([ADR-0009](0009-seeks-are-sample-accurate.md)) allows.
-- `audioTimePitchAlgorithm` must be set explicitly, because the iOS default (`lowQualityZeroLatency`) is wrong for speech.
+- `audioTimePitchAlgorithm` must be set explicitly, because the iOS default (`lowQualityZeroLatency`) is wrong for speech. The default is `.timeDomain`, for the shorter dropout on a speed change.
+- `flush()` and rate changes run off the main thread.
+- A format change at a join is audible, which is acceptable because it falls between unrelated tracks. If a gapless album mixes formats, the fix is to keep the earlier format through the join, not to add a mechanism in the feeder.
 - Tests to port from media3 and the fixtures are listed in [#93](https://github.com/timusus/AudioPlaybackKit/issues/93#issuecomment-6100145321).
-- Before Accepted, an iPhone must answer:
-  1. Does a mid-stream rate change, including 96/192 kHz, switch hardware rate or glitch?
-  2. How deep is the AirPlay 2 buffer, and does the clock still match what is heard?
-  3. Which route changes auto-flush?
-  4. Does a rate change auto-flush on iOS, and is it audible?
-  5. Is the one-second pull cadence audible?
-  6. Are PTS holes heard as silence or butt-joined?
-  7. What do `flush()` and `setRate` cost on device?
+- The probe app and its results are on the `worktree-render-spike` branch (`Spikes/RenderProbeApp`).
+  The ASBAR adapter's device checklist still has to cover AirPlay 2 buffer depth and clock
+  alignment, Bluetooth, wired headphones, a call and Siri. None of them changes the backend choice.
 
 Links: [#93](https://github.com/timusus/AudioPlaybackKit/issues/93), [ADR-0005](0005-shared-engine-repo.md),
 [ADR-0010](0010-the-decoder-owns-output-format-conversion.md).
