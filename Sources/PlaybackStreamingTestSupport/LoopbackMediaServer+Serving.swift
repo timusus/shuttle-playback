@@ -66,10 +66,11 @@ extension LoopbackMediaServer {
         var delay = range.lowerBound == 0 ? _delayForOffsetZero : 0
         if let held = _delayForRangeStartingAt, held.offset == range.lowerBound { delay = held.seconds }
         delay = max(delay, _delayForEveryRange)
-        let wholeBody = _respondsWholeBodyIgnoringRange || staleValidator
-        let omitsLength = _omitsContentLength
-        let shouldFail = _failNextRequest
-        if shouldFail { _failNextRequest = false }
+        let streams = _streamsWithoutLength
+        let wholeBody = _respondsWholeBodyIgnoringRange || staleValidator || streams
+        let omitsLength = _omitsContentLength || streams
+        let shouldFail = _failingRequests > 0
+        if shouldFail { _failingRequests -= 1 }
         var rejectedRange = false
         if _rejectNextRangeStartingAt == range.lowerBound {
             _rejectNextRangeStartingAt = nil
@@ -110,7 +111,7 @@ extension LoopbackMediaServer {
         if wholeBody {
             header = "HTTP/1.1 200 OK\r\n"
             header += "Content-Type: \(mimeType)\r\n"
-            header += "Accept-Ranges: bytes\r\n"
+            if !streams { header += "Accept-Ranges: bytes\r\n" }
         } else {
             header = "HTTP/1.1 206 Partial Content\r\n"
             header += "Content-Type: \(mimeType)\r\n"
@@ -130,11 +131,18 @@ extension LoopbackMediaServer {
         }
         header += "Connection: close\r\n\r\n"
         if lower { header = Self.lowercasingNames(header) }
-        if let heldAfter, heldAfter < slice.count {
-            sendHeldBody(header: header, slice: slice, heldAfter: heldAfter, rangeStart: range.lowerBound, on: connection)
-            return
+        let write = { [self] in
+            if let heldAfter, heldAfter < slice.count {
+                sendHeldBody(header: header, slice: slice, heldAfter: heldAfter, rangeStart: range.lowerBound, on: connection)
+                return
+            }
+            sendBody(header: header, slice: slice, chunks: chunks, stallAfter: stallAfter, delay: delay, on: connection)
         }
-        sendBody(header: header, slice: slice, chunks: chunks, stallAfter: stallAfter, delay: delay, on: connection)
+        lock.lock()
+        let holds = _holdsOffsetZero && range.lowerBound == 0
+        if holds { _heldOffsetZeroSends.append(write) }
+        lock.unlock()
+        if !holds { write() }
     }
 
     private func answerRedirectHop(_ hop: Int, head: String, on connection: NWConnection) {

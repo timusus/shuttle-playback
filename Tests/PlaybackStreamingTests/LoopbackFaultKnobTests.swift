@@ -211,4 +211,55 @@ final class LoopbackFaultKnobTests: XCTestCase {
         }
         XCTAssertEqual(seen, ["\"a\"", "\"b\"", "\"b\""])
     }
+
+    func testFailNextRequestsDropsThatManyConnectionsThenServes() throws {
+        let (origin, _) = try start(bodyBytes: 1024)
+        origin.failNextRequests(2)
+        // A dropped connection reads as an empty head on a raw socket; `URLSession` would retry it.
+        XCTAssertEqual(try rawHead(of: origin.url), "")
+        XCTAssertEqual(try rawHead(of: origin.url), "")
+        XCTAssertTrue(try rawHead(of: origin.url).hasPrefix("HTTP/1.1 206"))
+        XCTAssertFalse(origin.failNextRequest)
+    }
+
+    func testFailNextRequestStillDropsExactlyOne() throws {
+        let (origin, _) = try start(bodyBytes: 1024)
+        origin.failNextRequest = true
+        XCTAssertTrue(origin.failNextRequest)
+        XCTAssertEqual(try rawHead(of: origin.url), "")
+        XCTAssertFalse(origin.failNextRequest)
+        XCTAssertTrue(try rawHead(of: origin.url).hasPrefix("HTTP/1.1 206"))
+    }
+
+    func testHoldsOffsetZeroWithholdsOnlyOffsetZeroUntilReleased() async throws {
+        let (origin, body) = try start(bodyBytes: 8 * 1024)
+        origin.holdsOffsetZero = true
+        let held = Task { await fetch(origin.url, range: "bytes=0-") }
+        // The request is logged on arrival, before the response is held back.
+        while origin.requestedRanges.isEmpty { await Task.yield() }
+
+        let other = await fetch(origin.url, range: "bytes=4096-")
+        XCTAssertEqual(other.data, body.suffix(from: 4096), "another offset waited behind the held one")
+        XCTAssertEqual(origin.servedBytes, Int64(body.count - 4096), "the held response was written")
+
+        origin.releaseOffsetZero()
+        let released = await held.value
+        XCTAssertEqual(released.data, body)
+
+        let after = await fetch(origin.url, range: "bytes=0-")
+        XCTAssertEqual(after.data, body, "a release must stop the hold, not only flush it")
+        XCTAssertFalse(origin.holdsOffsetZero)
+    }
+
+    func testStreamsWithoutLengthAnswers200WithNoLengthAndIgnoresRange() async throws {
+        let (origin, body) = try start(bodyBytes: 8 * 1024)
+        origin.streamsWithoutLength = true
+        let (data, response) = try await respond(origin.url, headers: ["Range": "bytes=1000-"])
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(data, body, "the range was honoured")
+        XCTAssertNil(response.value(forHTTPHeaderField: "Content-Range"))
+        XCTAssertNil(response.value(forHTTPHeaderField: "Accept-Ranges"))
+        XCTAssertNil(response.value(forHTTPHeaderField: "Content-Length"))
+        XCTAssertEqual(response.expectedContentLength, -1)
+    }
 }

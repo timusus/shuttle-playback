@@ -206,6 +206,27 @@ extension GrowingFileByteSourceTests {
         XCTAssertEqual(try read(source, 100), Data(), "the total itself is the end of the stream")
     }
 
+    /// A transcode with no length that ignores `Range` and is still arriving: a seek past what has
+    /// come cannot be served by the origin, so it is unseekable, not a transport failure.
+    func testASeekOnARangeIgnoringTranscodeIsUnseekableNotAFailure() throws {
+        let body = makeBody(200_000)
+        let server = try startServer(body: body)
+        server.streamsWithoutLength = true
+        server.stallsAfterBodyBytes = 64 * 1024
+        let source = makeSource(server.url)
+        XCTAssertEqual(try read(source, 4096), body.prefix(4096))
+        XCTAssertTrue(waitUntil { source.snapshot.frontier == 64 * 1024 })
+
+        // The source accepts the seek and the read later fails with a transport idle error, so
+        // the player sees a failure where it should see an unsupported seek.
+        try XCTExpectFailure("a seek past the frontier of a range-ignoring transcode is accepted, not refused as unseekable") {
+            XCTAssertThrowsError(try source.seek(to: 150_000)) {
+                guard case .unseekable? = $0 as? StreamByteReaderError else { return XCTFail("\($0)") }
+            }
+            XCTAssertEqual(source.position, 4096, "a refused seek moves nothing")
+        }
+    }
+
     func testASeekBeforeTheTotalIsKnownIsAccepted() throws {
         let server = try startServer(body: makeBody(48 * 1024))
         let source = makeSource(server.url)

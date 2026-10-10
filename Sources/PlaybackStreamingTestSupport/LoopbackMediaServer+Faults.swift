@@ -170,8 +170,42 @@ extension LoopbackMediaServer {
     /// Drop the next request's connection without a response, once. The transport failure a retry
     /// has to survive.
     public var failNextRequest: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return _failNextRequest }
-        set { lock.lock(); _failNextRequest = newValue; lock.unlock() }
+        get { lock.lock(); defer { lock.unlock() }; return _failingRequests > 0 }
+        set { lock.lock(); _failingRequests = newValue ? 1 : 0; lock.unlock() }
+    }
+
+    /// Drop the connections of the next `count` requests without a response: a run of transport
+    /// failures, for a retry budget that one failure cannot exhaust.
+    public func failNextRequests(_ count: Int) {
+        lock.lock(); _failingRequests = max(count, 0); lock.unlock()
+    }
+
+    /// Hold the response to every request whose range starts at byte 0 until
+    /// ``releaseOffsetZero()``, so a test decides whether the restart's response or another
+    /// request's lands first. Requests for other offsets are served at once.
+    public var holdsOffsetZero: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _holdsOffsetZero }
+        set { lock.lock(); _holdsOffsetZero = newValue; lock.unlock() }
+    }
+
+    /// Write the offset-0 responses held by ``holdsOffsetZero`` and stop holding: later requests
+    /// for byte 0 are served at once.
+    public func releaseOffsetZero() {
+        lock.lock()
+        _holdsOffsetZero = false
+        let held = _heldOffsetZeroSends
+        _heldOffsetZeroSends = []
+        lock.unlock()
+        for send in held { queue.async(execute: send) }
+    }
+
+    /// Answer every request `200` with the whole body, no `Content-Length` and no range support
+    /// (any `Range` is ignored, no `Accept-Ranges`), ending when the connection closes: a
+    /// transcoding origin, whose length nobody knows. Composes with ``stallsAfterBodyBytes``
+    /// for one that goes quiet before it ends.
+    public var streamsWithoutLength: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _streamsWithoutLength }
+        set { lock.lock(); _streamsWithoutLength = newValue; lock.unlock() }
     }
 
     /// Hold the response to every request whose `Range` starts at `offset` for `seconds`, and let

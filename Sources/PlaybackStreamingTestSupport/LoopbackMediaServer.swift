@@ -23,7 +23,10 @@ public final class LoopbackMediaServer: @unchecked Sendable {
     var _servedBytes: Int64 = 0
     var _respondsWholeBodyIgnoringRange = false
     var _omitsContentLength = false
-    var _failNextRequest = false
+    var _failingRequests = 0
+    var _holdsOffsetZero = false
+    var _heldOffsetZeroSends: [() -> Void] = []
+    var _streamsWithoutLength = false
     var _rejectNextRangeStartingAt: Int64?
     var _rejectedHostStatus: (host: String, status: Int)?
     var _pageForHost: (host: String, contentType: String, body: Data, firstChunkBytes: Int?)?
