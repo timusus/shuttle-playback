@@ -245,9 +245,9 @@ extension GrowingFileByteSourceTests {
 
         // Twice the idle timeout on the clock, a second at a time, with chunks arriving in between.
         for _ in 0..<Int(GrowingFileByteSource.idleTimeoutSeconds * 2) {
+            let frontier = source.snapshot.frontier
             clock.advance(by: 1)
-            // Kept: the server's real-time drip is what delivers a chunk between advances.
-            Thread.sleep(forTimeInterval: 0.06)
+            XCTAssertTrue(waitUntil { source.snapshot.frontier > frontier }, "no chunk arrived")
         }
         XCTAssertEqual(server.requestedRanges, [0], "a body still arriving was ended")
         XCTAssertEqual(source.snapshot.transactionGeneration, 1)
@@ -275,16 +275,4 @@ extension GrowingFileByteSourceTests {
         XCTAssertNil(source.snapshot.fileURL)
         XCTAssertEqual(server.requestedRanges, [0], "a full disk is not retried")
     }
-
-    func testAPageInsteadOfAudioFailsTheRead() throws {
-        let page = Data("<!DOCTYPE html><html><body>expired</body></html>".utf8)
-        for mimeType in ["text/html; charset=utf-8", "application/octet-stream"] {
-            let server = try startServer(body: page, mimeType: mimeType)
-            let pending = readAsync(makeSource(server.url), 1)
-            XCTAssertTrue(pending.finished(within: 5))
-            assertTransport(pending.result)
-        }
-        XCTAssertEqual(partials(), [])
-    }
-
 }

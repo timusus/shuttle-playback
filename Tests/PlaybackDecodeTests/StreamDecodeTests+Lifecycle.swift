@@ -12,7 +12,7 @@ extension StreamDecodeTests {
 
     func testCancelUnblocksAStalledRead() throws {
         try skipUnlessAvailable()
-        let reader = BlockingByteReader()
+        let reader = try StallingFileByteReader(url: try Fixture.url(Fixture.mp3), stallAfterBytes: 0)
         let decoder = FFmpegStreamDecoder(reader: reader)
         let finished = expectation(description: "the decoder returned")
 
@@ -27,7 +27,8 @@ extension StreamDecodeTests {
             }
             finished.fulfill()
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { decoder.cancel() }
+        XCTAssertTrue(reader.waitUntilStalled(timeout: 5), "open() never reached the stall")
+        decoder.cancel()
         wait(for: [finished], timeout: 2.0)
         XCTAssertEqual(decoder.endReason, .cancelled)
     }

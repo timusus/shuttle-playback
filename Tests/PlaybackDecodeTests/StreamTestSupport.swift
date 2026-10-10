@@ -58,40 +58,6 @@ final class CountingByteReader: StreamByteReader {
     func clearInterrupt() { inner.clearInterrupt() }
 }
 
-/// A reader whose `read` never returns until `cancel()` — a network transaction that has stalled.
-/// The decoder must come back through it, not sit in it forever.
-final class BlockingByteReader: StreamByteReader {
-    private let gate = DispatchSemaphore(value: 0)
-    private let cancelled = NSLock()
-    private var isCancelled = false
-
-    var totalLength: Int64? { nil }
-    var position: Int64 { 0 }
-
-    func read(into buffer: UnsafeMutableRawPointer, maxLength: Int) throws -> Int {
-        gate.wait()
-        throw StreamByteReaderError.cancelled
-    }
-
-    func seek(to offset: Int64) throws {
-        gate.wait()
-        throw StreamByteReaderError.cancelled
-    }
-
-    func cancel() {
-        cancelled.lock()
-        defer { cancelled.unlock() }
-        guard !isCancelled else { return }
-        isCancelled = true
-        /* Enough signals that any callback already waiting, and the next few, come straight back. */
-        for _ in 0..<8 { gate.signal() }
-    }
-
-    func interrupt() {}
-
-    func clearInterrupt() {}
-}
-
 /// A file reader that stops delivering after `stallAfterBytes` and blocks there until it is
 /// interrupted or cancelled — a bounded response body whose host went quiet mid-stream.
 ///

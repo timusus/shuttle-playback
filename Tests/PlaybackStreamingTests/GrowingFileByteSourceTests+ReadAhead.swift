@@ -36,8 +36,8 @@ extension GrowingFileByteSourceTests {
         let server = try startServer(body: body)
         server.bytesPerSecond = 512 * 1024
         let (source, _) = try pausedSource(server, path: Self.expensiveCellular)
-        // Uncapped, another half second would be 256 kB more. Kept: the server's real-time drip is the behaviour measured.
-        Thread.sleep(forTimeInterval: 0.5)
+        // Waits for the request to end: paused at the read-ahead, or, uncapped, only once the whole body is served.
+        XCTAssertTrue(waitUntil { !source.awaitsNetworkForTest }, "the request never ended")
         source.cancel()
         XCTAssertEqual(server.requestedRanges, [0])
         XCTAssertLessThanOrEqual(server.servedBytes, Int64(Self.probe) + Self.readAhead + Int64(Self.onTheWire))
