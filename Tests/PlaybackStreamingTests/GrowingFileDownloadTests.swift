@@ -193,6 +193,27 @@ struct GrowingFileDownloadTests {
         #expect(h.log.contains(.schedule(.response(attempt: 2), after: 8)))
     }
 
+    /// A cold origin or a long redirect chain: slower to its first byte than the body's idle timeout.
+    @Test("a first response slower than the idle timeout is waited for: the idle check starts with the response")
+    func aSlowFirstResponseIsWaitedFor() {
+        let h = Harness()
+        h.read()
+        #expect(h.log.contains(.schedule(.response(attempt: 1), after: 20)))
+        let idleChecks = { h.log.filter { if case .schedule(.idle, _) = $0 { true } else { false } }.count }
+        h.clock.advance(by: 19.9)
+        #expect(idleChecks() == 0, "no idle check before the response")
+        #expect(!h.log.contains(.cancelTask))
+
+        #expect(h.respond(206, range: "bytes 0-9999/10000"))
+        #expect(h.log.contains(.schedule(.idle(transaction: 1), after: 6)))
+        h.body(1000)
+        #expect(h.read(1000) == .serve(fileOffset: 0, count: 1000, landed: nil))
+        #expect(h.requests.count == 1)
+        #expect(h.machine.generation == 1)
+        // The session's own header wait, on real time, is no shorter than the machine's.
+        #expect(GrowingFileByteSource.makeSession(configuration: .ephemeral).configuration.timeoutIntervalForRequest == 20)
+    }
+
     @Test("a new network path ends a body at once and resumes from the frontier, from the same budget")
     func aPathChangeMidBodyResumes() {
         let h = Harness()

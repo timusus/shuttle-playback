@@ -253,21 +253,6 @@ extension GrowingFileByteSourceTests {
         XCTAssertEqual(source.snapshot.transactionGeneration, 1)
     }
 
-    /// A host slower to its first byte than the body's idle timeout (a cold origin, a chain of
-    /// a long redirect chain) is waited for: the idle check starts with the response, and the
-    /// session gives the headers ``GrowingFileByteSource/requestTimeoutSeconds``. Real time, on the
-    /// system clock, because the session's timeout is real time.
-    func testAResponseSlowerThanTheIdleTimeoutIsWaitedFor() throws {
-        let body = makeBody(32 * 1024)
-        let server = try startServer(body: body)
-        server.delayForEveryRange = GrowingFileByteSource.idleTimeoutSeconds + 1
-        let source = makeSource(server.redirectingURL(hops: 1))
-
-        XCTAssertEqual(try read(source, 1000), body.prefix(1000))
-        XCTAssertEqual(server.requestedRanges, [0], "the slow response was given up on")
-        XCTAssertEqual(source.snapshot.transactionGeneration, 1)
-    }
-
     func testAFullDiskFailsTheReadAndDeletesThePartial() throws {
         let body = makeBody(256 * 1024)
         let server = try startServer(body: body)
