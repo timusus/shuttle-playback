@@ -114,7 +114,7 @@ extension GrowingFileByteSourceTests {
         XCTAssertTrue(waitUntil { source.snapshot.frontier == 20_000 })
 
         // The drop's close lands a moment after its last byte: step until the restart goes out.
-        XCTAssertTrue(clock.drive(step: 0.01) { server.requestedRanges.count == 3 }, "no restart after the refused resume")
+        XCTAssertTrue(clock.drive(source, step: 0.01) { server.requestedRanges.count == 3 }, "no restart after the refused resume")
         XCTAssertEqual(server.requestedRanges, [0, 20_000, 10_000])
         clock.advance(by: GrowingFileByteSource.retryRequestTimeoutSeconds - 0.5)
         XCTAssertEqual(source.requestsSentForTest, 3, "the restart was given up on before a retry's wait")

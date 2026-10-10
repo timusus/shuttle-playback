@@ -183,13 +183,13 @@ class GrowingFileContractCase: XCTestCase {
         return pending.result
     }
 
-    /// Like ``finish(_:within:_:file:line:)``, but steps `clock` through the retry backoff and link
-    /// window while the real sockets answer; `timeout` is real seconds.
+    /// Like ``finish(_:within:_:file:line:)``, but steps `clock` through `source`'s retry backoff and
+    /// link window between its requests; `timeout` is real seconds.
     func finish(
-        _ pending: PendingRead, on clock: ManualGrowingFileClock, within timeout: TimeInterval = 20, _ context: String,
-        file: StaticString = #filePath, line: UInt = #line
+        _ pending: PendingRead, of source: GrowingFileByteSource, on clock: ManualGrowingFileClock,
+        within timeout: TimeInterval = 20, _ context: String, file: StaticString = #filePath, line: UInt = #line
     ) -> Result<Data, Error> {
-        _ = clock.drive(step: 1, timeout: timeout) { pending.finished(within: 0) }
+        _ = clock.drive(source, step: 1, timeout: timeout) { pending.finished(within: 0) }
         return finish(pending, within: 1, context, file: file, line: line)
     }
 

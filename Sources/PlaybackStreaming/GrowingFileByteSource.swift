@@ -153,6 +153,10 @@ public final class GrowingFileByteSource: NSObject, StreamByteReader, GrowingFil
     /// waiting to see whether the server hears one.
     var requestsSentForTest: Int { locked { requestsSent } }
 
+    /// A request is out and its transaction not done with the network: a test's manual clock holds
+    /// still meanwhile, so no response or idle timer fires while loopback is still answering.
+    var awaitsNetworkForTest: Bool { locked { machine.current.map { !$0.ended } ?? false } }
+
     /// - Parameters:
     ///   - authHeaders: resolved by the caller before construction; values are never logged.
     ///   - cacheKey: names the resource in the store's completed-file cache, for a `url` that carries a

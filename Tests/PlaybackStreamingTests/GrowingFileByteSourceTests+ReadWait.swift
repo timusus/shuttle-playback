@@ -54,7 +54,7 @@ extension GrowingFileByteSourceTests {
         let parkedAt = parked.clock.now
         parked.server.refuseRequests(for: 3600)
         XCTAssertTrue(parked.server.dropHeldBody(forRangeStartingAt: 0))
-        XCTAssertTrue(parked.clock.drive {
+        XCTAssertTrue(parked.clock.drive(parked.source) {
             if let since = parked.source.snapshot.readWaitingSince { XCTAssertEqual(since, parkedAt, "a retry restarted the wait") }
             return parked.read.finished(within: 0)
         }, "the link window never closed")

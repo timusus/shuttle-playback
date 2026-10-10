@@ -183,8 +183,9 @@ final class GrowingFileContractTests: GrowingFileContractCase {
         let url = server.url
         server.stop()
         let clock = ManualGrowingFileClock()
-        let pending = readAsync(makeSource(url, clock: clock), 1)
-        assertTransport(finish(pending, on: clock, "connection refused"), "connection refused")
+        let source = makeSource(url, clock: clock)
+        let pending = readAsync(source, 1)
+        assertTransport(finish(pending, of: source, on: clock, "connection refused"), "connection refused")
         XCTAssertEqual(partials(), [])
     }
 
@@ -200,16 +201,18 @@ final class GrowingFileContractTests: GrowingFileContractCase {
                 server.reject(host: "127.0.0.1:\(server.port)", status: status)
                 let context = "status=\(status) html=\(html)"
                 let clock = ManualGrowingFileClock()
-                let pending = readAsync(makeSource(server.url, clock: clock), 1)
-                assertTransport(finish(pending, on: clock, context), context)
+                let source = makeSource(server.url, clock: clock)
+                let pending = readAsync(source, 1)
+                assertTransport(finish(pending, of: source, on: clock, context), context)
                 XCTAssertEqual(server.requestHeads.count, 1 + GrowingFileDownload.Retry.maxAttempts, context)
             }
             let server = try startServer(body: body)
             server.htmlErrorBodies = html
             let context = "missing path html=\(html)"
             let clock = ManualGrowingFileClock()
-            let pending = readAsync(makeSource(server.missingURL, clock: clock), 1)
-            assertTransport(finish(pending, on: clock, context), context)
+            let source = makeSource(server.missingURL, clock: clock)
+            let pending = readAsync(source, 1)
+            assertTransport(finish(pending, of: source, on: clock, context), context)
             XCTAssertEqual(server.requestHeads.count, 1 + GrowingFileDownload.Retry.maxAttempts, context)
         }
         XCTAssertEqual(partials(), [])

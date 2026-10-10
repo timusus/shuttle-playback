@@ -22,7 +22,7 @@ extension GrowingFileByteSourceTests {
         source.willSeek(generation: 5)
         source.willSeek(generation: nil)
         let failed = readAsync(source, Int.max)
-        XCTAssertTrue(clock.drive(timeout: 60) { failed.finished(within: 0) }, "the window never closed")
+        XCTAssertTrue(clock.drive(source, timeout: 60) { failed.finished(within: 0) }, "the window never closed")
         assertTransport(failed.result)
         XCTAssertEqual(source.totalLength, Int64(body.count), "the failure forgot the length")
         XCTAssertEqual(source.snapshot.totalLength, source.totalLength, "the snapshot and the reader disagree")
@@ -37,7 +37,7 @@ extension GrowingFileByteSourceTests {
         source.willSeek(generation: nil)
         try source.seek(to: Int64(at))
         let rest = readAsync(source, Int.max)
-        XCTAssertTrue(clock.drive { rest.finished(within: 0) }, "the read after the failure never came back")
+        XCTAssertTrue(clock.drive(source) { rest.finished(within: 0) }, "the read after the failure never came back")
         XCTAssertEqual(try rest.result.get(), body.suffix(from: at))
         XCTAssertEqual(server.requestedRanges.last, Int64(at), "the next read did not ask at its position")
         XCTAssertNil(events.transactions.last?.seekGenerationForTest)
@@ -77,7 +77,7 @@ extension GrowingFileByteSourceTests {
         try source.seek(to: 74 * 1024)
         let pending = readAsync(source, 100)
         XCTAssertTrue(waitUntil { source.parkCount > 0 }, "the gap was not waited for")
-        XCTAssertTrue(clock.drive { pending.finished(within: 0) }, "the wait never looked again")
+        XCTAssertTrue(clock.drive(nil) { pending.finished(within: 0) }, "the wait never looked again")
         XCTAssertEqual(try pending.result.get(), body.subdata(in: 74 * 1024..<74 * 1024 + 100))
         XCTAssertEqual(source.snapshot.base, 74 * 1024)
     }
@@ -115,7 +115,7 @@ extension GrowingFileByteSourceTests {
         server.delayForRedirectHops = 60
 
         let rest = readAsync(source, Int.max)
-        XCTAssertTrue(clock.drive { rest.finished(within: 0) }, "the read never came back")
+        XCTAssertTrue(clock.drive(source) { rest.finished(within: 0) }, "the read never came back")
         XCTAssertEqual(try rest.result.get(), body.suffix(from: 10_000))
         XCTAssertEqual(server.requestedRanges, [0, 20_000], "the retry did not resume from the frontier")
         XCTAssertEqual(server.requestHeads.filter { $0.hasPrefix("GET /redirect/") }.count, 2, "the resume walked the chain again")
@@ -140,7 +140,7 @@ extension GrowingFileByteSourceTests {
 
         let rest = readAsync(source, Int.max)
         let chainWalks = { server.requestHeads.filter { $0.hasPrefix("GET /redirect/1/") }.count }
-        XCTAssertTrue(clock.drive(step: 0.05) { chainWalks() == 2 }, "the refused end never fell back to the chain")
+        XCTAssertTrue(clock.drive(source, step: 0.05) { chainWalks() == 2 }, "the refused end never fell back to the chain")
         XCTAssertEqual(server.requestedRanges, [0, 20_000], "the resume went to the end first")
         // Longer than a retry's wait, shorter than the generous one: the slow hop is waited for.
         clock.advance(by: GrowingFileByteSource.retryRequestTimeoutSeconds + 2)
@@ -226,7 +226,7 @@ extension GrowingFileByteSourceTests {
         monitor.update(Self.wifi)
         monitor.update(Self.cellular)
         // The backoffs only: a body silent past the idle timeout would be ended by the idle check.
-        XCTAssertTrue(clock.drive(step: 0.1) { rest.finished(within: 0) }, "the read never failed")
+        XCTAssertTrue(clock.drive(source, step: 0.1) { rest.finished(within: 0) }, "the read never failed")
         assertTransport(rest.result)
         XCTAssertEqual(
             server.requestedRanges, [0] + Array(repeating: 20_000, count: GrowingFileDownload.Retry.maxAttempts),

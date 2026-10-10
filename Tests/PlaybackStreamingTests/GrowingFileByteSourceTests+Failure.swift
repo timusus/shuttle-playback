@@ -66,8 +66,9 @@ extension GrowingFileByteSourceTests {
         let longer = try startServer(body: body)
         longer.refuseRequests(for: 3600)
         let clock = ManualGrowingFileClock()
-        let pending = readAsync(makeSource(longer.url, clock: clock), 1)
-        XCTAssertTrue(clock.drive { pending.finished(within: 0) }, "the window never closed")
+        let source = makeSource(longer.url, clock: clock)
+        let pending = readAsync(source, 1)
+        XCTAssertTrue(clock.drive(source) { pending.finished(within: 0) }, "the window never closed")
         assertTransport(pending.result)
         // It stops asking once the next attempt would start past the window: at most one backoff early.
         XCTAssertGreaterThanOrEqual(
@@ -123,7 +124,7 @@ extension GrowingFileByteSourceTests {
             server.delayForEveryRange = 3600
 
             let rest = readAsync(source, Int.max)
-            XCTAssertTrue(clock.drive(timeout: 30) { rest.finished(within: 0) }, "the read never failed")
+            XCTAssertTrue(clock.drive(nil, timeout: 30) { rest.finished(within: 0) }, "the read never failed")
             assertTransport(rest.result)
             let quietFor = clock.now - 1_000
             XCTAssertGreaterThanOrEqual(quietFor, GrowingFileDownload.Retry.linkWindowSeconds - GrowingFileDownload.Retry.maxBackoffSeconds, "\(redirected)")
@@ -149,7 +150,7 @@ extension GrowingFileByteSourceTests {
         let rest = readAsync(source, Int.max)
         // Twenty seconds of outage on the source's clock: well past the attempts a host's refusal
         // gets, well inside the link window.
-        _ = clock.drive { clock.now - 1_000 >= 20 }
+        _ = clock.drive(source) { clock.now - 1_000 >= 20 }
         XCTAssertFalse(rest.finished(within: 0), "the outage failed the read")
         XCTAssertGreaterThan(
             server.requestHeads.count - server.requestedRanges.count, GrowingFileDownload.Retry.maxAttempts,
@@ -157,7 +158,7 @@ extension GrowingFileByteSourceTests {
         )
 
         server.refuseRequests(for: 0)
-        XCTAssertTrue(clock.drive { rest.finished(within: 0) }, "the read never came back")
+        XCTAssertTrue(clock.drive(source) { rest.finished(within: 0) }, "the read never came back")
         XCTAssertEqual(try rest.result.get(), body.suffix(from: 10_000), "the outage failed the read")
         XCTAssertEqual(server.requestedRanges, [0, 20_000], "the retry did not resume from the frontier")
         XCTAssertEqual(source.snapshot.transactionGeneration, 1)

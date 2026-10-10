@@ -72,7 +72,7 @@ extension GrowingFileByteSourceTests {
         XCTAssertTrue(waitUntil { source.parkCount > 0 })
         monitor.update(Self.wifi)
         monitor.update(Self.cellular)
-        XCTAssertTrue(clock.drive(step: 0.1) { rest.finished(within: 0) }, "the read hung after a 416 at the frontier")
+        XCTAssertTrue(clock.drive(source, step: 0.1) { rest.finished(within: 0) }, "the read hung after a 416 at the frontier")
         XCTAssertEqual(try rest.result.get(), body[4096..<100_000])
         XCTAssertEqual(server.requestedRanges, [0, 100_000], "the end was taken for a refused resume")
         XCTAssertEqual(source.totalLength, 100_000)
@@ -142,7 +142,7 @@ extension GrowingFileByteSourceTests {
         let clock = ManualGrowingFileClock()
         let source = makeSource(server.url, clock: clock)
         let pending = readAsync(source, 1)
-        XCTAssertTrue(clock.drive(step: 0.05) { server.requestHeads.count >= 2 })
+        XCTAssertTrue(clock.drive(source, step: 0.05) { server.requestHeads.count >= 2 })
         XCTAssertTrue(waitUntil { clock.pendingCount > 0 }, "the next retry is waiting out its backoff")
 
         source.cancel()
