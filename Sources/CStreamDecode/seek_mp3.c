@@ -311,10 +311,12 @@ static double mp3_measure_frame_bytes(const StreamDecoder *d, int64_t info_frame
     uint32_t h = mp3_cbr_header(d);
     if (!h || !mp3_frame_of(h, &f)) return 0;
     int64_t second = d->first_pkt_pos + d->mp3.first_pkt_size;
-    if (info_frames > 1 && info_end > second && info_end == sd_avio_size_seen(d)) {
-        return (double)(info_end - second) / (double)(info_frames - 1);
-    }
     double nominal = (double)f.spf * f.bitrate / (8.0 * f.sample_rate);
+    if (info_frames > 1 && info_end > second && info_end == sd_avio_size_seen(d)) {
+        double measured = (double)(info_end - second) / (double)(info_frames - 1);
+        /* CBR frames are floor(nominal) or one byte more, so any other average means a miscount. */
+        if (measured >= floor(nominal) && measured <= floor(nominal) + 1) return measured;
+    }
     int frames = 0;
     for (int64_t pos = second; pos + 4 <= d->prologue_len; frames++) {
         MP3Frame g;

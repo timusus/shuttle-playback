@@ -187,6 +187,20 @@ final class MP3SeekTests: XCTestCase {
         try assertSeeksPlayFromTheirTarget(untaggedURL)
     }
 
+    /// An Info frame count that is off by a few (an encoder that counts the Info frame, say) while its
+    /// byte count still ends at the audio's end gives a bytes-per-frame no CBR stream has; it is ignored.
+    func testASeekIntoACBRMP3WithAMiscountedInfoFramePlaysFromItsTarget() throws {
+        let url = GoldenStore.root.appendingPathComponent("SeekFixtures/cbr_128k_unpadded_info.mp3")
+        var miscounted = try Data(contentsOf: url)
+        let frameCount = 10 + 512 + 4 + 32 + 8
+        XCTAssertEqual(miscounted[(frameCount - 8)..<(frameCount - 4)], Data("Info".utf8))
+        miscounted.replaceSubrange(frameCount..<(frameCount + 4), with: [0, 0, 0x01, 0xD0])
+        let miscountedURL = FileManager.default.temporaryDirectory.appendingPathComponent("cbr-unpadded-miscounted-\(UUID().uuidString).mp3")
+        try miscounted.write(to: miscountedURL)
+        defer { try? FileManager.default.removeItem(at: miscountedURL) }
+        try assertSeeksPlayFromTheirTarget(miscountedURL)
+    }
+
     private func assertSeeksPlayFromTheirTarget(_ url: URL, file: StaticString = #filePath, line: UInt = #line) throws {
         let (format, clean) = try decodeAll(url)
         let duration = try XCTUnwrap(format.duration)
