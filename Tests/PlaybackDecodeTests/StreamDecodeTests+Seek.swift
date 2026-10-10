@@ -132,6 +132,34 @@ extension StreamDecodeTests {
         XCTAssertGreaterThan(peak, 0.1, "the post-seek audio is silence, not the tone")
     }
 
+    /// A far seek in a VBR MP3 lands by its Xing TOC, so it is the one seek that reports inexact;
+    /// the same distance in a headerless CBR file is counted by byte offset and stays exact.
+    func testLastSeekWasExactIsFalseOnlyForAFarVBRSeek() throws {
+        try skipUnlessAvailable()
+        let vbr = FFmpegStreamDecoder(reader: try FileByteReader(url: try GeneratedFixture.xingVBRMP3()))
+        _ = try vbr.open()
+        _ = try vbr.seek(toSeconds: 150)
+        XCTAssertFalse(vbr.lastSeekWasExact, "a far VBR seek lands by the TOC")
+        _ = try vbr.seek(toSeconds: 0)
+        XCTAssertTrue(vbr.lastSeekWasExact, "a later exact seek reports exact again")
+
+        let cbr = FFmpegStreamDecoder(reader: try FileByteReader(url: try GeneratedFixture.largeCBRMP3()))
+        _ = try cbr.open()
+        _ = try cbr.seek(toSeconds: 900)
+        XCTAssertTrue(cbr.lastSeekWasExact, "a far CBR seek is counted by frames")
+    }
+
+    func testLastSeekWasExactForEveryFixtureFormat() throws {
+        try skipUnlessAvailable()
+        for name in Fixture.all {
+            let decoder = FFmpegStreamDecoder(reader: try FileByteReader(url: try Fixture.url(name)))
+            _ = try decoder.open()
+            XCTAssertTrue(decoder.lastSeekWasExact, "\(name): before any seek")
+            _ = try decoder.seek(toSeconds: 10)
+            XCTAssertTrue(decoder.lastSeekWasExact, "\(name): seek")
+        }
+    }
+
     /// **A seek past the end of an edit-listed file lands on the clipped end, not beyond it.**
     ///
     /// The frames wholly before a far seek's target are skipped, and the final ones overhang the

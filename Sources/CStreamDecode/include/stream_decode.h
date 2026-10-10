@@ -137,6 +137,10 @@ StreamDecoder *stream_decoder_open_with(const StreamDecodeCallbacks *callbacks,
  */
 int stream_decoder_seek(StreamDecoder *decoder, double seconds, double *landed_seconds);
 
+/** Whether the last seek that placed the demuxer landed sample-exact; 0 for a VBR MP3 placed by
+ * its Xing TOC or bitrate estimate. Meaningful only after a seek returned OK or EOF. */
+int stream_decoder_last_seek_exact(const StreamDecoder *decoder);
+
 /**
  * Fill `out` with up to `max_frames` frames of interleaved float32 in [-1, 1] at the output rate
  * and channel count: the source's (`info`), unless `stream_decoder_set_output` fixed another. `out`

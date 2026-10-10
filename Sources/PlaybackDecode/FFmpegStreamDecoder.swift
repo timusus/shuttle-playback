@@ -132,6 +132,10 @@ public final class FFmpegStreamDecoder {
     /// sets no failure here: the source may come back, and a seek is how a player resumes the same
     /// decoder once it has.
     private var failure: StreamDecoderError?
+    /// Whether the most recent seek landed sample-exact. False only after a VBR MP3 seek placed by
+    /// Xing TOC or bitrate estimate, whose end-of-file time can then be skewed; true before any
+    /// seek and for every other format. A new decoder starts true.
+    public private(set) var lastSeekWasExact = true
     private var framesRead: Int64 = 0
     private var chunk: [Float] = []
     /// What ``nextChunk()`` and ``read(into:maxFrames:)`` hand out: the source's rate and channels
@@ -269,10 +273,12 @@ public final class FFmpegStreamDecoder {
             switch status {
             case Int32(STREAM_DECODE_OK.rawValue):
                 reason = .running
+                lastSeekWasExact = stream_decoder_last_seek_exact(handle) != 0
                 framesRead = Int64((landed * outputRate).rounded())
                 return landed
             case Int32(STREAM_DECODE_EOF.rawValue):
                 reason = .eof
+                lastSeekWasExact = stream_decoder_last_seek_exact(handle) != 0
                 framesRead = Int64((landed * outputRate).rounded())
                 return landed
             case Int32(STREAM_DECODE_ERR_CANCELLED.rawValue):

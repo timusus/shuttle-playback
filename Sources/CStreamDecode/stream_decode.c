@@ -210,6 +210,10 @@ int64_t stream_decoder_position_bytes(const StreamDecoder *decoder) {
     return decoder ? decoder->bytes_read : 0;
 }
 
+int stream_decoder_last_seek_exact(const StreamDecoder *decoder) {
+    return decoder ? decoder->landing_exact : 1;
+}
+
 void stream_decoder_set_seek_budget_bytes(StreamDecoder *decoder, int64_t bytes) {
     if (!decoder) return;
     decoder->seek_budget_override = bytes;
