@@ -17,7 +17,7 @@ in and PCM out, with no coupling to the decoder, and each app's needs differ. Bo
 FFmpeg build ([ADR-0006](0006-one-superset-ffmpeg.md)), which replaced per-app build profiles.
 
 The repository has no hosted CI. It is built, tested and released with version tags locally.
-It is public under GPL-3.0, with a commercial licence on request, so SwiftPM resolves it over HTTPS
+It is public under the MIT licence, so SwiftPM resolves it over HTTPS
 with no token.
 
 ## Alternatives rejected

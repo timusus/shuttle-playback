@@ -1,6 +1,6 @@
 # Contributing: tests, FFmpeg and releases
 
-For the pull-request process (CLA, discuss first) see [CONTRIBUTING.md](../CONTRIBUTING.md). The
+For the pull-request process (discuss first) see [CONTRIBUTING.md](../CONTRIBUTING.md). The
 commands to build, test and release, the FFmpeg licence rules, the layout and the engineering
 principles are in [CLAUDE.md](../CLAUDE.md). This page holds what those do not say. The repository has no hosted CI:
 `swift test` locally plus `scripts/release.sh` is the gate.

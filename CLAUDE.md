@@ -1,7 +1,7 @@
 # CLAUDE.md
 
-Public (GPL-3.0) Swift package holding the iOS decode layer shared by **Shuttle Podcasts**
-(`timusus/podcasts`) and **Shuttle2** (`timusus/shuttle2`, pins `exact: "0.4.0"`). It holds only decode,
+Public (MIT) Swift package, **AudioPlaybackKit** (`timusus/AudioPlaybackKit`), holding the iOS decode
+layer used by **Shuttle Podcasts** (`timusus/podcasts`) and **Shuttle2** (`timusus/shuttle2`). It holds only decode,
 byte-source and FFmpeg code; effects (skip-silence, Voice Boost) and anything about podcasts, ads,
 queues, players or UI stay in the apps. Docs are in `docs/`; start at `README.md`.
 
