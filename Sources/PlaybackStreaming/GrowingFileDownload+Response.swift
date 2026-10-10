@@ -43,9 +43,25 @@ extension GrowingFileDownload {
         if type.hasPrefix("audio/") || type.hasPrefix("video/") || type == "application/ogg" { return true }
         guard let head else { return nil }
         guard head.count >= GrowingFileByteSource.sniffBytes else { return false }
-        if head[0] == 0xFF, head[1] & 0xE0 == 0xE0 { return true }
-        let magic = String(decoding: head[0..<4], as: UTF8.self)
-        return magic.hasPrefix("ID3") || ["OggS", "fLaC", "RIFF"].contains(magic)
-            || String(decoding: head[4..<8], as: UTF8.self) == "ftyp"
+        return sniffers.contains { $0.matches(head) }
     }
+
+    /// One entry per demuxer in `DEMUXERS` of `scripts/build-ffmpeg.sh` (a test keeps the two equal),
+    /// each with the magic that demuxer's probe keys on. `head` holds at least `sniffBytes` bytes.
+    static let sniffers: [(demuxer: String, matches: (_ head: [UInt8]) -> Bool)] = {
+        func ascii(_ head: [UInt8], _ range: Range<Int>) -> String { String(decoding: head[range], as: UTF8.self) }
+        return [
+            ("mp3", { head in (head[0] == 0xFF && head[1] & 0xE0 == 0xE0) || ascii(head, 0..<3) == "ID3" }),
+            ("aac", { head in head[0] == 0xFF && head[1] & 0xF6 == 0xF0 }),
+            // LOAS AudioSyncStream: an 11-bit 0x2B7 sync.
+            ("loas", { head in head[0] == 0x56 && head[1] & 0xE0 == 0xE0 }),
+            ("mov", { head in ascii(head, 4..<8) == "ftyp" }),
+            ("ogg", { head in ascii(head, 0..<4) == "OggS" }),
+            ("flac", { head in ascii(head, 0..<4) == "fLaC" }),
+            ("wav", { head in ["RIFF", "RF64", "BW64"].contains(ascii(head, 0..<4)) }),
+            ("aiff", { head in ascii(head, 0..<4) == "FORM" && ["AIFF", "AIFC"].contains(ascii(head, 8..<12)) }),
+            // EBML header: Matroska and WebM.
+            ("matroska", { head in Array(head[0..<4]) == [0x1A, 0x45, 0xDF, 0xA3] }),
+        ]
+    }()
 }

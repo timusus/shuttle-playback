@@ -405,11 +405,12 @@ final class Harness {
     /// The latest request's response: whether its body is taken.
     @discardableResult
     func respond(
-        _ status: Int, range: String? = nil, length: Int64 = -1, etag: String? = nil, url: URL? = nil
+        _ status: Int, range: String? = nil, length: Int64 = -1, etag: String? = nil, url: URL? = nil,
+        mimeType: String = "audio/mpeg"
     ) -> Bool {
         let request = requests.last!
         let response = GrowingFileDownload.Response(
-            status: status, contentRange: range, mimeType: "audio/mpeg", expectedContentLength: length,
+            status: status, contentRange: range, mimeType: mimeType, expectedContentLength: length,
             entityTag: etag, url: url ?? request.url
         )
         let answer = machine.received(response, attempt: request.attempt, now: now)
@@ -417,10 +418,10 @@ final class Harness {
         return answer.allow
     }
 
-    func body(_ count: Int) {
+    func body(_ count: Int, head: [UInt8] = Array("ID3".utf8) + Array(repeating: 0, count: 9)) {
         let attempt = requests.last!.attempt
         guard machine.chunkOffset(attempt: attempt) != nil else { return }
-        run(machine.chunkWritten(count, attempt: attempt, now: now) { Array("ID3".utf8) + Array(repeating: 0, count: 9) })
+        run(machine.chunkWritten(count, attempt: attempt, now: now) { head })
     }
 
     /// The latest request's task ends: whole, or with a URL error code.
