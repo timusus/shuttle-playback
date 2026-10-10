@@ -52,6 +52,8 @@ final class FakeItemSource: ItemSource, @unchecked Sendable {
         return (from * channels..<to * channels).map { base + Float($0) }
     }
 
+    func begin(epoch: UInt64) {}
+
     func open() throws -> PCMFormat { format }
 
     func seek(toFrame frame: Int64) throws -> Int64 {
@@ -70,7 +72,7 @@ final class FakeItemSource: ItemSource, @unchecked Sendable {
         return samples(from: position, to: end)
     }
 
-    func interrupt() {
+    func interrupt(through epoch: UInt64) {
         lock.withLock { _interrupts += 1 }
     }
 }

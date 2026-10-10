@@ -137,6 +137,80 @@ final class SequencerTests: XCTestCase {
         XCTAssertEqual(drained.samples, a.samples(from: 120, to: 150) + b.samples(from: 0, to: 250))
     }
 
+    func testASeekBackAcrossAJoinReplaysEveryItemAfterIt() {
+        let a = FakeItemSource(format: mono44, frames: 150)
+        let b = FakeItemSource(format: stereo48, frames: 250, base: 7000)
+        let c = FakeItemSource(format: mono44, frames: 120, base: 20000)
+        sequencer.setCurrent(item: 1, source: a)
+        sequencer.setNext(item: 2, source: b)
+        let head = drain(sequencer, executor, limit: 3)
+        XCTAssertEqual(head.tags.last, tag(2, 0, 100))
+        sequencer.setNext(item: 3, source: c)
+
+        sequencer.seek(item: 1, mediaFrame: 120)
+        let drained = drain(sequencer, executor)
+
+        XCTAssertTrue(drained.ended)
+        XCTAssertEqual(drained.tags, [tag(1, 120, 30), tag(2, 0, 100), tag(2, 100, 100), tag(2, 200, 50),
+                                      tag(3, 0, 100), tag(3, 100, 20)])
+        XCTAssertEqual(drained.samples, a.samples(from: 120, to: 150) + b.samples(from: 0, to: 250) + c.samples(from: 0, to: 120))
+    }
+
+    /// The decode-ahead crosses several short items while the feeder still holds the first's audio,
+    /// so its resupply lands two joins back.
+    func testASeekIntoTheFirstOfThreeShortItemsReplaysAllThree() {
+        let a = FakeItemSource(format: mono44, frames: 30)
+        let c = FakeItemSource(format: stereo48, frames: 20, base: 3000)
+        sequencer.setCurrent(item: 1, source: a)
+        sequencer.setNext(item: 2, source: FakeItemSource(format: mono44, frames: 0))
+        executor.runUntilIdle()
+        sequencer.setNext(item: 3, source: c)
+        let head = drain(sequencer, executor)
+        XCTAssertEqual(head.tags, [tag(1, 0, 30), tag(2, 0, 0), tag(3, 0, 20)])
+
+        sequencer.seek(item: 1, mediaFrame: 10)
+        let drained = drain(sequencer, executor)
+
+        XCTAssertTrue(drained.ended)
+        XCTAssertEqual(drained.tags, [tag(1, 10, 20), tag(2, 0, 0), tag(3, 0, 20)])
+        XCTAssertEqual(drained.samples, a.samples(from: 10, to: 30) + c.samples(from: 0, to: 20))
+    }
+
+    func testAnEndedItemIsNotTaggedAgainWhenItsNextIsClearedBeforeTheJobRuns() {
+        sequencer.setCurrent(item: 1, source: FakeItemSource(format: mono44, frames: 0))
+        XCTAssertEqual(drain(sequencer, executor).tags, [tag(1, 0, 0)])
+
+        sequencer.setNext(item: 2, source: FakeItemSource(format: mono44, frames: 100))
+        sequencer.clearNext()
+        XCTAssertEqual(executor.queued, 1)
+        executor.runUntilIdle()
+        let drained = drain(sequencer, executor)
+
+        XCTAssertTrue(drained.ended)
+        XCTAssertEqual(drained.tags, [])
+    }
+
+    func testReleaseDropsTheItemsBeforeAndSeeksStillLandInTheRest() {
+        weak var released: FakeItemSource?
+        let b = FakeItemSource(format: stereo48, frames: 250, base: 7000)
+        do {
+            let a = FakeItemSource(format: mono44, frames: 150)
+            released = a
+            sequencer.setCurrent(item: 1, source: a)
+        }
+        sequencer.setNext(item: 2, source: b)
+        XCTAssertEqual(drain(sequencer, executor, limit: 3).tags.last, tag(2, 0, 100))
+
+        sequencer.release(before: 2)
+        XCTAssertNil(released)
+        sequencer.seek(item: 2, mediaFrame: 50)
+        let drained = drain(sequencer, executor)
+
+        XCTAssertTrue(drained.ended)
+        XCTAssertEqual(drained.tags, [tag(2, 50, 100), tag(2, 150, 100)])
+        XCTAssertEqual(drained.samples, b.samples(from: 50, to: 250))
+    }
+
     func testAFailedSourceIsReportedNotEnded() {
         sequencer.setCurrent(item: 1, source: FailingItemSource())
         sequencer.setNext(item: 2, source: FakeItemSource(format: mono44, frames: 100))
@@ -152,7 +226,8 @@ private final class FailingItemSource: ItemSource, @unchecked Sendable {
     func open() throws -> PCMFormat { throw Failure() }
     func seek(toFrame frame: Int64) throws -> Int64 { throw Failure() }
     func nextChunk() throws -> [Float]? { throw Failure() }
-    func interrupt() {}
+    func begin(epoch: UInt64) {}
+    func interrupt(through epoch: UInt64) {}
 }
 
 private extension Sequencer {
